@@ -1,0 +1,794 @@
+/*
+* DO NOT ADD THINGS TO THIS
+* EVERYTHING HERE IS MEANT TO BE A STARTING POINT, EVERYTHING ELSE SHOULD
+* BE DONE INLINE
+*/
+
+:root {
+	--border: 0.1em solid var(--color_font_primary);
+	--border_interactive: 0.1em solid var(--color_secondary);
+
+	--color_background_primary: #111;
+	--color_background_secondary: #000;
+
+	--color_primary: #bb0051;
+	--color_secondary: #66f;
+	--color_interactable: var(--color_secondary);
+	--color_tertiary: #ffff00;
+
+	--color_error_primary: #909;
+	--color_error_secondary: #222;
+	--pattern_error_image:
+		linear-gradient(45deg, var(--color_error_primary) 25%, transparent 25%),
+		linear-gradient(-45deg, var(--color_error_primary) 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, var(--color_error_primary) 75%),
+		linear-gradient(-45deg, transparent 75%, var(--color_error_primary) 75%);
+	--pattern_error_background_size: 20px 20px;
+	--pattern_error_background_position: 0 0, 0 10px, 10px -10px, -10px 0px;
+
+	--color_font_primary: #ffffff;
+	--color_font_secondary: color-mix(in oklab,
+			var(--color_secondary),
+			var(--color_font_primary));
+	--color_font_interactable: var(--color_font_secondary);
+	--color_font_hover: color-mix(in oklab, var(--color_font_primary), var(--color_primary));
+	--color_font_tertiary: color-mix(in oklab,
+			var(--color_tertiary),
+			var(--color_font_primary));
+	--color_keys: #131516;
+	--padding: 1em;
+	--margin: 0px;
+	--h_size: function([argument]);
+}
+
+* {
+	/*background-color: var(--color_background_primary);*/
+	border-radius: 1em;
+	color: var(--color_font_primary);
+	font-family: 'new font';
+	padding: 0;
+	margin: 0;
+	max-width: 100%;
+	transition-duration: 120ms;
+	transition-timing-function: ease-in-out;
+	margin-bottom: 1em;
+}
+
+a {
+	color: var(--color_font_primary);
+	/*cursor: pointer;*/
+	text-decoration: underline;
+	text-decoration-color: var(--color_font_interactable);
+	text-decoration-style: wavy;
+	text-decoration-skip-ink: none;
+	text-shadow:
+		1px 1px 0px var(--color_background_primary),
+		1px -1px 0px var(--color_background_primary),
+		-1px 1px 0px var(--color_background_primary),
+		-1px -1px 0px var(--color_background_primary);
+}
+
+a:hover {
+	color: var(--color_font_interactable);
+}
+
+a>*:hover {
+	color: var(--color_font_interactable);
+}
+
+abbr {
+	color: var(--color_font_tertiary);
+}
+
+acronym {
+	/*DEPRECIATED*/
+}
+
+
+
+address {
+	color: var(--color_font_interactable);
+}
+
+applet {
+	/*DEPRECIATED*/
+}
+
+area {}
+
+article {
+	color: var(--color_font_primary);
+}
+
+
+aside {
+	color: var(--color_font_primary);
+}
+
+audio {}
+
+b {
+	color: var(--color_font_tertiary);
+}
+
+base {}
+
+basefont {
+	/*DEPRECIATED*/
+}
+
+
+
+
+
+bdi {}
+
+bdo {}
+
+big {
+	/*DEPRECIATED*/
+}
+
+blockquote {
+	border: var(--border);
+	color: var(--color_font_secondary);
+	padding: var(--padding);
+}
+
+body {
+	background-image: linear-gradient(0deg, var(--color_background_primary), var(--color_background_secondary));
+	margin: auto;
+	/*max-width: 80rem;*/
+	/*padding: 100%;*/
+	overflow-x: hidden;
+	overflow-y: scroll;
+	width: min(calc(100vw - (100vw - 100%)), 60em);
+}
+
+br {}
+
+button {
+	/*background-color: color-mix(in oklab, var(--color_primary), #fff);*/
+	background-color: var(--color_secondary);
+	border: none;
+	color: black;
+	padding-top: var(--padding);
+	padding-bottom: var(--padding);
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+}
+
+/* TODO: add glow around mouse cursor on button*/
+button:hover {}
+
+button:active {
+	background-color: color-mix(in oklab, var(--color_secondary), #000);
+	padding-left: 0.9rem;
+	padding-right: 0.9rem;
+	/*margin-left: 0.1rem;*/
+	/*margin-right: 0.1rem;*/
+}
+
+canvas {
+	border: var(--border);
+}
+
+/* BUG: this isn't working for some reason*/
+caption {
+	color: green !important;
+}
+
+center {
+	/*DEPRECIATED*/
+}
+
+cite {
+	color: var(--color_font_tertiary);
+	display: block;
+	font-size: 80%;
+}
+
+/* TODO: add auto generated copy button on all code blocks*/
+code {
+	background-color: var(--color_keys);
+	border: var(--border);
+	color: var(--color_font);
+	display: block;
+	font-family: 'Courier New', Courier, monospace;
+	justify-content: space-between;
+	margin: auto;
+	text-overflow: ellipsis;
+	padding: var(--padding);
+	position: relative;
+	/*word-break: break-all;
+	word-wrap: break-word;*/
+}
+
+code>*.copy_button {
+	/*width: 3rem;*/
+	text-shadow:
+		2px 2px 0px var(--color_background_primary),
+		2px -2px 0px var(--color_background_primary),
+		-2px 2px 0px var(--color_background_primary),
+		-2px -2px 0px var(--color_background_primary);
+	;
+	position: absolute;
+	right: calc(0px + calc(var(--padding) / 2));
+	top: calc(0px + calc(var(--padding) / 2));
+}
+
+/* TODO: add line numbers if you're feeling spicy */
+/*pre.code code::before {
+	content: counter(listing) ". ";
+	display: inline-block;
+	width: 8em;
+	padding-left: auto;
+	margin-left: auto;
+	text-align: right;
+}*/
+
+col {}
+
+colgroup {}
+
+/*TODO: return to this and redo*/
+command {
+	/*background-color: color-mix(in oklab, var(--color_primary), #fff);*/
+	background-color: var(--color_primary);
+	border: none;
+	padding-top: var(--padding);
+	padding-bottom: var(--padding);
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+}
+
+data {
+	color: var(--color_font_primary);
+}
+
+datalist {}
+
+.DEPRECIATED {
+	background-image: var(--pattern_error_image);
+	background-size: var(--pattern_error_background_size);
+	background-position: var(--pattern_error_background_position);
+	display: inline-block;
+	padding: var(--padding);
+	text-shadow:
+		1px 1px 0px var(--color_background_primary),
+		1px -1px 0px var(--color_background_primary),
+		-1px 1px 0px var(--color_background_primary),
+		-1px -1px 0px var(--color_background_primary);
+	;
+}
+
+dialog {}
+
+dd {
+	border: var(--border);
+	color: var(--color_font_secondary);
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+	max-width: 60rem;
+}
+
+dfn {
+	border: var(--border);
+	color: var(--color_font_tertiary);
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+}
+
+dialog {
+	color: var(--color_font_secondary);
+}
+
+dir {}
+
+/*DON'T STYLIZE THIS OUTSIDE BASIC/MINOR CHANGES*/
+div {
+	padding-bottom: var(--padding);
+}
+
+dl {}
+
+dt {}
+
+del {
+	color: var(--color_font_tertiary);
+}
+
+details {
+	border: var(--border);
+	color: var(--color_font_secondary);
+	padding: var(--padding);
+	margin-bottom: 1em;
+}
+
+em {
+	color: var(--color_font_tertiary);
+}
+
+
+embed {}
+
+fieldset {
+	border: var(--border_interactive);
+	margin: auto;
+	max-width: 100%;
+	min-width: 1em;
+	padding: var(--padding);
+	width: 80%;
+}
+
+figcaption {}
+
+figure {}
+
+font {}
+
+/*DEPRECIATED*/
+
+
+/* TODO: implement this*/
+footer {
+	background-color: black;
+	border-radius: 0px;
+	bottom: 0;
+	text-align: center;
+	min-height: 3rem;
+	width: 100%;
+	position: relative;
+}
+
+form {
+	border: var(--border_interactive);
+	padding: var(--padding);
+	max-width: 60rem;
+}
+
+frame {
+	/*DEPRECIATED*/
+}
+
+frameset {
+	/*DEPRECIATED*/
+}
+
+head {}
+
+header {}
+
+
+header>a {
+	align-items: stretch;
+	background-color: var(--color_background_primary);
+	display: flex;
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+	width: 40%;
+}
+
+header>a:hover {
+	background-color: color-mix(in oklab, var(--color_background_primary), var(--color_primary));
+}
+
+header>a>p {
+	padding: var(--padding);
+	margin: auto;
+	text-align: center;
+	width: 100%;
+}
+
+header>*>img {
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+}
+
+h1 {
+	font-size: 2.5rem;
+}
+
+h2 {
+	font-size: 2.0rem;
+}
+
+h3 {
+	font-size: 1.75rem;
+}
+
+h4 {
+	font-size: 1.5rem;
+}
+
+h5 {
+	font-size: 1.25rem;
+}
+
+h6 {
+	font-size: 1.1rem;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	background-color: var(--color_font_primary);
+	color: var(--color_primary);
+	display: block;
+	margin-bottom: var(--padding);
+	padding: var(--padding);
+	text-transform: uppercase;
+}
+
+hgroup {
+	background-color: var(--color_primary);
+	padding-bottom: var(--padding);
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+	padding: var(--padding);
+	margin-bottom: var(--padding);
+}
+
+hgroup>h1,
+hgroup>h2,
+hgroup>h3,
+hgroup>h4,
+hgroup>h5,
+hgroup>h6 {
+	background-color: transparent;
+	color: var(--color_background_primary);
+	padding: 0;
+}
+
+
+hgroup>:first-child {
+	color: var(--color_font_primary);
+	display: block;
+	text-shadow:
+		0.1em 0.1em 0px var(--color_background_primary);
+}
+
+/* BUG: this isn't working */
+hgroup:not(:first-child) {
+	color: var(--color_font_primary) !important;
+}
+
+hr {
+	/*these are largely default dettings*/
+	display: block;
+	height: 1px;
+	border: 0;
+	border-top: 1px solid var(--color_primary);
+	margin: 1em 0;
+	padding: 0;
+}
+
+html {
+	background-color: var(--color_background_secondary);
+	background-size: 100%;
+	/*min-height: 100%;
+	min-width: 100%;*/
+}
+
+html>* {
+
+	max-width: min(calc(100vw - (100vw - 100%)), 60em);
+}
+
+i {
+	color: var(--color_font_tertiary);
+}
+
+iframe {
+	border: var(--border);
+}
+
+img {
+	height: 25em;
+	margin: auto;
+	width: 25em;
+}
+
+input {
+	border: var(--border_interactive);
+	padding: var(--padding);
+	background-color: var(--color_background_primary);
+}
+
+input[type='submit'] {
+	color: var(--color_font_interactable);
+}
+
+input:hover {
+	background-color: color-mix(in oklab, var(--color_interactable), #000);
+}
+
+input:active {
+	background-color: color-mix(in oklab, var(--color_interactable), #000, #000);
+}
+
+::placeholder {
+	color: var(--color_font_interactable);
+}
+
+ins {
+	color: var(--color_font_tertiary);
+}
+
+kbd {
+	align-content: center;
+	background-color: var(--color_keys);
+	border: var(--border);
+	border-radius: 0.4rem;
+	box-shadow: inset 0px 2px 0.1em color-mix(in oklab, var(--color_font_primary), var(--color_primary)),
+		inset 0px -2px 0.2em var(--color_primary);
+	display: inline-block;
+	font-family: 'Courier New', Courier, monospace;
+	height: 2rem;
+	margin: auto;
+	/*TODO: test this scaled*/
+	min-width: 1.4rem;
+	padding-left: 0.3rem;
+	padding-right: 0.3rem;
+	text-align: center;
+	text-transform: lowercase;
+
+}
+
+keygen {}
+
+label {}
+
+legend {}
+
+li {
+	/*list-style-type: disc;
+	list-style-position: inside;*/
+}
+
+
+li::marker {
+	color: var(--color_primary);
+}
+
+
+link {
+	color: var(--color_font_secondary);
+}
+
+main {}
+
+map {}
+
+mark {
+	background-color: var(--color_font_tertiary);
+	color: black;
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+}
+
+menu {}
+
+menuitem {}
+
+meta {}
+
+meter {
+	/*background-color: var(--color_primary);*/
+	/*padding: var(--padding);*/
+	margin: auto;
+	width: 80vw;
+}
+
+nav {}
+
+.navbar {
+	background-color: var(--color_primary);
+	border-radius: 0px;
+	box-shadow: 0px 0.5em 1.0em 0.3em color-mix(in oklab, var(--color_background_primary), transparent);
+	display: flex;
+	justify-content: space-around;
+	left: 0;
+	padding-top: 0.5rem;
+	padding-bottom: 0.5rem;
+	position: fixed;
+	top: 0px;
+	width: 100vw;
+	z-index: 9999;
+}
+
+noframes {
+	/*DEPRECIATED*/
+}
+
+noscript {}
+
+object {}
+
+ol {
+	margin: auto;
+	list-style-type: decimal !important;
+	list-style-position: inside !important;
+}
+
+ol>li:nth-child(even)::marker {
+	color: color-mix(in oklab, var(--color_primary), #fff);
+}
+
+option {
+	color: var(--color_font_interactable);
+}
+
+optgroup {
+	color: var(--color_font_interactable);
+}
+
+
+output {
+	border: var(--border);
+	margin: 1em;
+	padding: 1em;
+	min-height: 3em;
+	min-width: 10em;
+}
+
+p {
+	padding: var(--padding);
+}
+
+p:hover {
+	color: var(--color_font_hover);
+}
+
+p>*:hover {
+	color: var(--color_font_hover);
+}
+
+param {
+	color: var(--color_font_interactable);
+}
+
+picture {}
+
+pre {
+	max-width: 80%;
+	overflow: hidden;
+}
+
+progress {}
+
+q {
+	color: var(--color_font_tertiary);
+}
+
+rp {}
+
+rt {}
+
+ruby {}
+
+s {}
+
+samp {}
+
+script {}
+
+section {}
+
+select {
+	color: #000;
+	min-width: 10em;
+	text-align-last: center;
+}
+
+small {}
+
+source {}
+
+slot {}
+
+/*span should be styled at all*/
+span {}
+
+strike {
+	/*DEPRECIATED*/
+}
+
+strong {
+	color: var(--color_font_tertiary);
+}
+
+sub {
+	color: var(--color_font_tertiary);
+}
+
+summary {
+	/*border: var(--border);*/
+	color: var(--color_secondary);
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+	margin-bottom: 0;
+}
+
+sup {
+	color: var(--color_font_tertiary);
+}
+
+svg {}
+
+/* TODO: make me beautiful*/
+table {
+	border: var(--border);
+}
+
+table>* {
+	border: var(--border);
+}
+
+tbody {}
+
+td {}
+
+template {}
+
+textarea {
+	background-color: var(--color_background_primary);
+	border: var(--border_interactive);
+	color: var(--color_font_interactable);
+	height: 3rem;
+	/*width: 40rem;*/
+	min-width: 0px;
+	max-width: 100%;
+	padding: var(--padding);
+}
+
+tfoot {}
+
+th {}
+
+thead {}
+
+time {
+	background-color: var(--color_keys);
+	border: var(--border);
+	color: var(--color_font_tertiary);
+	display: inline-block;
+	/*TIME SHOULD BE USED INLINE, SO PADDING top/bottom MAKES THINGS WEIRD*/
+	/*padding: var(--padding);*/
+	/*padding-bottom: calc(var(--padding) /2);
+	padding-top: calc(var(--padding) /2);*/
+	padding-left: var(--padding);
+	padding-right: var(--padding);
+	font-family: 'Courier New', Courier, monospace;
+}
+
+title {}
+
+tr {}
+
+track {}
+
+tt {
+	/*DEPRECIATED*/
+}
+
+u {
+	color: var(--color_font_tertiary);
+}
+
+ul {
+	list-style: disc;
+	list-style-position: inside;
+}
+
+ul>li:nth-child(even)::marker {
+	color: color-mix(in oklab, var(--color_primary), #fff);
+
+	var {}
+
+	video {}
+
+	wbr {}

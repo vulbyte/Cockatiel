@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8">
+	<!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+	<!--<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'">-->
+	<title>cockatiel | by vulbyte</title>
+	<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';"> >
+	<link rel="stylesheet" href="./global.css">
+	</link>
+</head>
+
+<body>
+	<hgroup style="height:3em !important; border-radius: 0px;">
+		<h1>blerp</h1>
+	</hgroup>
+
+	<body>
+		<details>
+			<!-- {{{2 livestream link -->
+
+			<summary>livestream link: </summary>
+			<br>
+			<div style="display:flex; flex-direction: column;">
+				<input text="text" placeholder="your public ip HERE" id="public_ip" style="
+						border:var(--border); 
+						width:81%; 
+						margin:auto; 
+						padding: var(--padding); 
+						border-bottom-right-radius:0px; 
+						border-bottom-left-radius:0px;
+						">
+				</input>
+				<input text="text" placeholder="link to stream HERE" id="source_link" style="
+						border:var(--border); 
+						width:81%; 
+						margin:auto; 
+						padding: var(--padding); 
+						border-bottom-right-radius:0px; 
+						border-bottom-left-radius:0px;
+						">
+				</input>
+				<iframe id="chat_iframe" style="
+						background-color:red; 
+						height:30em;
+						width:80%;
+						margin:auto;
+						padding:var(--padding);
+						padding-bottom:0px;
+						border-radius:0px;
+					"></iframe>
+				<div style="
+						padding:var(--padding);
+						width: 80%;
+						display:flex;
+						justify-content: space-around;
+						border:var(--border); 
+						margin:auto;
+						border-top-left-radius: 0px; 
+						border-top-right-radius:0px;
+					">
+					<span style="padding:var(--padding);">chat_context: </span>
+					<output id="chat_iframe_info"
+						style="border:none; color:green; background-color:#222; margin:0; width:100%;"></output>
+				</div>
+				<script src="./lib/link_listener.js"></script>
+			</div>
+			<!-- }}}2 -->
+		</details>
+		<details>
+			<!-- {{{2 hotkey details -->
+			<summary>hotkey settings</summary>
+			<!-- }}}2 -->
+		</details>
+		<details>
+			<!-- {{{2 notification settings -->
+			<summary>notification settings</summary>
+			<!-- }}}2 -->
+		</details>
+		<details>
+			<!-- {{{2 tts settings -->
+			<summary>tts settings</summary>
+			<!-- }}}2 -->
+		</details>
+		<br>
+	</body>
+
+	<footer style="
+			background-color: #ffffff;
+			bottom: 0px;
+			color: #000000;
+			max-height: 3em;
+			position: sticky;
+	">
+		We are using Node.js <span id="node-version"></span>,
+		Chromium <span id="chrome-version"></span>,
+		and Electron <span id="electron-version"></span>.
+	</footer>
+</body>
+
+</html>
