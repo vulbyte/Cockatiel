@@ -1,4 +1,5 @@
 GLOBAL_CONFIG.json
+BAD_WORDS.json
 
 node_modules
 

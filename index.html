@@ -23,14 +23,13 @@
 			<summary>livestream link: </summary>
 			<br>
 			<div style="display:flex; flex-direction: column;">
-				<input text="text" placeholder="your public ip HERE" id="public_ip" style="
+				<!--<input text="text" placeholder="your public ip HERE" id="public_ip" style="
 						border:var(--border); 
 						width:81%; 
 						margin:auto; 
 						padding: var(--padding); 
 						border-bottom-right-radius:0px; 
-						border-bottom-left-radius:0px;
-						">
+						border-bottom-left-radius:0px;">-->
 				</input>
 				<input text="text" placeholder="link to stream HERE" id="source_link" style="
 						border:var(--border); 
@@ -43,13 +42,21 @@
 				</input>
 				<iframe id="chat_iframe" style="
 						background-color:red; 
-						height:30em;
+						height:1em;
 						width:80%;
 						margin:auto;
 						padding:var(--padding);
 						padding-bottom:0px;
 						border-radius:0px;
 					"></iframe>
+				<output id="chat_map">
+					<table>
+						<tr>
+							<th>user</th>
+							<th>message</th>
+						</tr>
+					</table>
+				</output>
 				<div style="
 						padding:var(--padding);
 						width: 80%;
@@ -64,7 +71,7 @@
 					<output id="chat_iframe_info"
 						style="border:none; color:green; background-color:#222; margin:0; width:100%;"></output>
 				</div>
-				<script src="./lib/link_listener.js"></script>
+				<script type='module' src="./lib/link_listener.js"></script>
 			</div>
 			<!-- }}}2 -->
 		</details>
@@ -93,9 +100,14 @@
 			max-height: 3em;
 			position: sticky;
 	">
-		We are using Node.js <span id="node-version"></span>,
-		Chromium <span id="chrome-version"></span>,
-		and Electron <span id="electron-version"></span>.
+		<div>
+			<button id="play_tts">play next tts</button>
+		</div>
+		<div>
+			We are using Node.js <span id="node-version"></span>,
+			Chromium <span id="chrome-version"></span>,
+			and Electron <span id="electron-version"></span>.
+		</div>
 	</footer>
 </body>
 
