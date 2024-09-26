@@ -17,6 +17,29 @@ everything here will be written from the perspective of macOS, at the moment if 
 ## todo:
 
 lots and lots of things
-# cockatiel
-# cockatiel
-# cockatiel
+
+- [x] basic ui
+- [x] add links to header
+- [x] stream parser for youtube
+- [ ] load config from files
+- [x] test tts window
+
+- [ ] get youtube api messages 
+- [ ] stop current message
+- [ ] skip next message
+
+
+### stretch goals:
+- [ ] get twitch api messages 
+
+- [ ] play next message in queue
+- [ ] preview queue
+- [ ] set message index
+- [ ] play button per message
+
+- [ ] message history
+- [ ] message removal
+
+- [ ] click and drag sorting
+
+###### project by vulbyte

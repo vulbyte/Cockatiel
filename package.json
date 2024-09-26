@@ -25,6 +25,7 @@
 	"homepage": "https://github.com/vulbyte/cockatiel#readme",
 	"dependencies": {
 		"electron": "^32.1.1",
+		"fs": "^0.0.1-security",
 		"node-fetch": "^3.3.2",
 		"speak-tts": "^2.0.8"
 	}

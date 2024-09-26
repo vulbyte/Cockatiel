@@ -6,109 +6,67 @@
 	<!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
 	<!--<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'">-->
 	<title>cockatiel | by vulbyte</title>
-	<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';"> >
+	<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';">
 	<link rel="stylesheet" href="./global.css">
 	</link>
 </head>
 
 <body>
-	<hgroup style="height:3em !important; border-radius: 0px;">
-		<h1>blerp</h1>
+	<hgroup style="display:flex; justify-content:space-around; height:3em !important; border-radius: 0px;">
+		<img style="max-height:100%; width:3em;" src="./non-code_assets/cockatiel_logo.png">
+		<h1>cockatiel</h1>
+		<h6>by vulbyte</h6>
+		<img style="max-height:100%; width:3em;" src='./non-code_assets/vulbyte_icon.svg'>
 	</hgroup>
 
-	<body>
-		<details>
-			<!-- {{{2 livestream link -->
+	<div>
+		stream link: <input type="text" id="stream_link">
+		formatted: <output id="formatted_stream_link"></output>
+		<script type="module">
 
-			<summary>livestream link: </summary>
-			<br>
-			<div style="display:flex; flex-direction: column;">
-				<!--<input text="text" placeholder="your public ip HERE" id="public_ip" style="
-						border:var(--border); 
-						width:81%; 
-						margin:auto; 
-						padding: var(--padding); 
-						border-bottom-right-radius:0px; 
-						border-bottom-left-radius:0px;">-->
-				</input>
-				<input text="text" placeholder="link to stream HERE" id="source_link" style="
-						border:var(--border); 
-						width:81%; 
-						margin:auto; 
-						padding: var(--padding); 
-						border-bottom-right-radius:0px; 
-						border-bottom-left-radius:0px;
-						">
-				</input>
-				<iframe id="chat_iframe" style="
-						background-color:red; 
-						height:1em;
-						width:80%;
-						margin:auto;
-						padding:var(--padding);
-						padding-bottom:0px;
-						border-radius:0px;
-					"></iframe>
-				<output id="chat_map">
-					<table>
-						<tr>
-							<th>user</th>
-							<th>message</th>
-						</tr>
-					</table>
-				</output>
-				<div style="
-						padding:var(--padding);
-						width: 80%;
-						display:flex;
-						justify-content: space-around;
-						border:var(--border); 
-						margin:auto;
-						border-top-left-radius: 0px; 
-						border-top-right-radius:0px;
-					">
-					<span style="padding:var(--padding);">chat_context: </span>
-					<output id="chat_iframe_info"
-						style="border:none; color:green; background-color:#222; margin:0; width:100%;"></output>
-				</div>
-				<script type='module' src="./lib/link_listener.js"></script>
-			</div>
-			<!-- }}}2 -->
-		</details>
-		<details>
-			<!-- {{{2 hotkey details -->
-			<summary>hotkey settings</summary>
-			<!-- }}}2 -->
-		</details>
-		<details>
-			<!-- {{{2 notification settings -->
-			<summary>notification settings</summary>
-			<!-- }}}2 -->
-		</details>
-		<details>
-			<!-- {{{2 tts settings -->
-			<summary>tts settings</summary>
-			<!-- }}}2 -->
-		</details>
-		<br>
-	</body>
+			import {UpdateStreamLink} from './lib/parse_stream_link.js';
+			document.getElementById("stream_link").addEventListener("change", (e) => {
+				console.log("parsing stream link");
+				document.getElementById("formatted_stream_link").formatted_stream_link = UpdateStreamLink();
+			});
 
-	<footer style="
+		</script>
+	</div>
+
+	<!-- {{{2 test_tts -->
+	<summary>test tts</summary>
+	<input type="text" id="test_input">
+	<button id="test_tts_button">></button>
+	<script type="module">
+
+		import {CallTTS} from './lib/call_tts.js'
+		document.getElementById("test_tts_button").addEventListener("click", (e) => {
+			console.log("attempting to speak");
+			let tts_message = document.getElementById("test_input").value;
+			CallTTS(tts_message);
+		});
+
+	</script>
+	<!-- }}}2 -->
+	<br>
+</body>
+
+<footer style="
 			background-color: #ffffff;
 			bottom: 0px;
 			color: #000000;
 			max-height: 3em;
 			position: sticky;
 	">
-		<div>
-			<button id="play_tts">play next tts</button>
-		</div>
-		<div>
-			We are using Node.js <span id="node-version"></span>,
-			Chromium <span id="chrome-version"></span>,
-			and Electron <span id="electron-version"></span>.
-		</div>
-	</footer>
-</body>
+	<div>
+		<button id="play_tts">play next tts</button>
+		<!--<script type="module" src="./lib/read_message.js"></script>-->
+	</div>
+	<div>
+		We are using Node.js <span id="node-version"></span>,
+		Chromium <span id="chrome-version"></span>,
+		and Electron <span id="electron-version"></span>.
+	</div>
+</footer>
 
 </html>

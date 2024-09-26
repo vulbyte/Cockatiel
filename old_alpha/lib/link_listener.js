@@ -1,6 +1,8 @@
 // {{{3 script stuff
 console.log("change made to livestream link, updating");
 
+import { client_session } from '../index.js';
+
 let source_link = document.getElementById("source_link")
 source_link.onchange = function() {
 	console.log("binding change_source_link to function;")
@@ -96,4 +98,81 @@ function change_source_link(value = null) {
 	//}}}4
 }
 //}}}3
+
+////////////////////////////////////////////////////////////// 
+// PLEASE WORK
+////////////////////////////////////////////////////////////// 
+
+const { app, BrowserWindow } = require('electron');
+const path = require('path');
+
+let mainWindow;
+
+app.on('ready', () => {
+	mainWindow = new BrowserWindow({
+		webPreferences: {
+			preload: path.join(__dirname, 'preload.js'),  // Load preload script
+			nodeIntegration: false,  // Disable Node.js integration for security
+			contextIsolation: true   // Enable context isolation
+		}
+	});
+
+	mainWindow.loadURL('path/to/index.html');  // Your HTML file
+});
+
+
+
+// Read the file synchronously
+const config_file = fs.readFileSync('../GLOBAL_CONFIG.json', 'utf8');
+
+// Parse the JSON string
+const config = JSON.parse(config_file);
+
+const API_KEY = config.APIs.gcloud_key;  // Replace with your YouTube API key
+const videoId = 'yj60Oo576So';  // Video ID of the livestream
+
+
+// Step 1: Get the live chat ID from the video
+async function getLiveChatId(videoId) {
+	const url = `https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${videoId}&key=${API_KEY}`;
+
+	const response = await fetch(url);
+	const data = await response.json();
+
+	if (data.items && data.items.length > 0) {
+		liveChatId = data.items[0].liveStreamingDetails.activeLiveChatId;
+		return liveChatId;
+	} else {
+		throw new Error('Live chat not found or stream is not active.');
+	}
+}
+
+// Step 2: Fetch live chat messages using the liveChatId
+async function getLiveChatMessages(liveChatId, nextPageToken = '') {
+	const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${liveChatId}&part=snippet,authorDetails&key=${API_KEY}&pageToken=${nextPageToken}`;
+
+	const response = await fetch(url);
+	const data = await response.json();
+
+	if (data.items) {
+		data.items.forEach((item) => {
+			const author = item.authorDetails.displayName;
+			const message = item.snippet.displayMessage;
+			console.log(`${author}: ${message}`);
+		});
+
+		// Recursively fetch next set of messages using the nextPageToken
+		if (data.nextPageToken) {
+			setTimeout(() => getLiveChatMessages(liveChatId, data.nextPageToken), 5000);  // Fetch every 5 seconds
+		}
+	}
+}
+
+// Step 3: Call the functions to start fetching messages
+getLiveChatId(videoId)
+	.then((liveChatId) => {
+		console.log('Live Chat ID:', liveChatId);
+		getLiveChatMessages(liveChatId);
+	})
+	.catch((error) => console.error('Error fetching live chat:', error));
 
