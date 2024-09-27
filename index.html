@@ -9,6 +9,7 @@
 	<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';">
 	<link rel="stylesheet" href="./global.css">
 	</link>
+	<script type="module" src="./configs/load_user_config.js"></script>
 </head>
 
 <body>
@@ -20,7 +21,8 @@
 	</hgroup>
 
 	<div>
-		stream link: <input type="text" id="stream_link">
+		<h2>📺 stream stuff 📺</h2>
+		stream link: <input type="text" id="stream_link"><br><br>
 		formatted: <output id="formatted_stream_link"></output>
 		<script type="module">
 
@@ -33,22 +35,109 @@
 		</script>
 	</div>
 
+	<hr>
+
+	<div id="api_stuff">
+		<h2>🛜 api stuff 🛜</h2>
+		<u><em>DONT SHARE THIS WITH ANYONE, DO NOT VIEW ON STREAM</em> </u> <br>
+		api key: <input type="password" id="api_key">
+		<button id="password_visibility_toggle" placeholder="">👁️</button>
+		<button id="load_api_key" placeholder="">↺</button>
+		<button id="save_api_key" placeholder="">💾</button> <br>
+		<output id="api_info"></output>
+		<script type="module">
+			import {config} from "./configs/load_user_config.js";
+			console.log(config);
+
+			//{{{4 save to config
+			document.getElementById("save_api_key").addEventListener("mousedown", (e) => {
+				console.log("prompting");
+
+				let promt_container = document.createElement("div")
+
+				document.getElementbyId("save_stuff").addChild();
+
+				if (saveVal == 1) {
+					SaveConfig("global");
+				}
+			})
+			//}}}4
+
+			//{{{4 load prev api key
+			document.getElementById("load_api_key").addEventListener("mousedown", (e) => {
+				console.log("loading prev api key");
+
+				try {
+					console.log(config.global_config.APIs);
+					document.getElementById("api_key").value = config.global_config.APIs.gcloud_key;
+					document.getElementById("api_info").innerText = "loaded previously saved api key";
+				}
+				catch (err) {
+					console.warn(err);
+					document.getElementById("api_info").innerText = "failed to laod api, did you save one before?";
+				}
+
+			});
+			//}}}4 load prev api key
+
+			//{{{4 set api key on change
+			const api_key_val = document.getElementById('api_key')
+
+			api_key_val.addEventListener("change", async (e) => {
+				console.log("attempting to update api key");
+
+				if (api_key_val.value.length < 8) {
+					document.getElementById("api_info").innerText = "key seems a bit small";
+				}
+				else if (api_key_val.value.length > 32) {
+					document.getElementById("api_info").innerText = "key seems a bit large";
+				}
+				else {
+					document.getElementById("api_info").innerText = "key seems good at a glance";
+				}
+			});
+			//}}}4 set api key on change
+
+			//{{{4 show on mouse down
+			document.getElementById("password_visibility_toggle").addEventListener("mousedown", (e) => {
+				console.log("showing password")
+				if (document.getElementById("api_key").type == "password") {
+					document.getElementById("api_key").type = "text";
+				}
+			})
+			//}}}4 show on mouse down
+
+			//{{{4 hide on mouse up
+			document.getElementById("password_visibility_toggle").addEventListener("mouseup", (e) => {
+				console.log("hiding password");
+				document.getElementById("api_key").type = "password";
+			})
+			//}}}4 hide on mouse up
+
+		</script>
+	</div>
+
+	<hr>
+
 	<!-- {{{2 test_tts -->
-	<summary>test tts</summary>
-	<input type="text" id="test_input">
-	<button id="test_tts_button">></button>
-	<script type="module">
+	<div>
+		<h2> 🛝 testing playground 🛝</h2>
+		<summary>test tts</summary>
+		<input type="text" id="test_input">
+		<button id="test_tts_button">></button>
+		<script type="module">
 
-		import {CallTTS} from './lib/call_tts.js'
-		document.getElementById("test_tts_button").addEventListener("click", (e) => {
-			console.log("attempting to speak");
-			let tts_message = document.getElementById("test_input").value;
-			CallTTS(tts_message);
-		});
+			import {CallTTS} from './lib/call_tts.js'
+			document.getElementById("test_tts_button").addEventListener("click", (e) => {
+				console.log("attempting to speak");
+				let tts_message = document.getElementById("test_input").value;
+				CallTTS(tts_message);
+			});
 
-	</script>
-	<!-- }}}2 -->
-	<br>
+		</script>
+		<!-- }}}2 -->
+		<br>
+	</div>
 </body>
 
 <footer style="
@@ -59,6 +148,7 @@
 			position: sticky;
 	">
 	<div>
+		<button id="play_tts">start monitoring messages</button>
 		<button id="play_tts">play next tts</button>
 		<!--<script type="module" src="./lib/read_message.js"></script>-->
 	</div>

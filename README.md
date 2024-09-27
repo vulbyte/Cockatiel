@@ -21,7 +21,7 @@ lots and lots of things
 - [x] basic ui
 - [x] add links to header
 - [x] stream parser for youtube
-- [ ] load config from files
+- [x] load config from files
 - [x] test tts window
 
 - [ ] get youtube api messages 
@@ -41,5 +41,7 @@ lots and lots of things
 - [ ] message removal
 
 - [ ] click and drag sorting
+
+- [ ] save list of urls with index number so on reload you can snap back to where was
 
 ###### project by vulbyte

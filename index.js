@@ -14,7 +14,17 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-	createWindow();
+	try {
+		LoadConfig();
+		//console.log(config);
+	}
+	catch (err) {
+		console.log("error loading initial config");
+
+	}
+	finally {
+		createWindow();
+	}
 });
 
 app.on('window-all-closed', () => {
