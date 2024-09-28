@@ -46,22 +46,19 @@
 		<button id="save_api_key" placeholder="">💾</button> <br>
 		<output id="api_info"></output>
 		<script type="module">
-			import {config} from "./configs/load_user_config.js";
+			import {config, SaveConfig} from "./configs/load_user_config.js";
 			console.log(config);
 
 			//{{{4 save to config
 			document.getElementById("save_api_key").addEventListener("mousedown", (e) => {
-				console.log("prompting");
-
-				let promt_container = document.createElement("div")
-
-				document.getElementbyId("save_stuff").addChild();
-
-				if (saveVal == 1) {
-					SaveConfig("global");
-				}
+				console.log("saving api to file");
+				config.global_config.APIs.gcloud_key = document.getElementById("api_key").value;
+				console.log(config.global_config.APIs.gcloud_key);
+				SaveConfig("global");
 			})
 			//}}}4
+
+
 
 			//{{{4 load prev api key
 			document.getElementById("load_api_key").addEventListener("mousedown", (e) => {
@@ -79,6 +76,8 @@
 
 			});
 			//}}}4 load prev api key
+
+
 
 			//{{{4 set api key on change
 			const api_key_val = document.getElementById('api_key')
@@ -98,6 +97,8 @@
 			});
 			//}}}4 set api key on change
 
+
+
 			//{{{4 show on mouse down
 			document.getElementById("password_visibility_toggle").addEventListener("mousedown", (e) => {
 				console.log("showing password")
@@ -107,13 +108,14 @@
 			})
 			//}}}4 show on mouse down
 
+
+
 			//{{{4 hide on mouse up
 			document.getElementById("password_visibility_toggle").addEventListener("mouseup", (e) => {
 				console.log("hiding password");
 				document.getElementById("api_key").type = "password";
 			})
 			//}}}4 hide on mouse up
-
 		</script>
 	</div>
 

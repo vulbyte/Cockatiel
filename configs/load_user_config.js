@@ -89,6 +89,7 @@ export async function LoadConfig(branch) {
 
 // {{{3 save things
 export async function SaveConfig(branch) {
+	console.log("saving begun");
 	if (branch == "" || branch == undefined || branch == "*") {
 		console.log("no branch given for reload, reloading all");
 
@@ -99,98 +100,107 @@ export async function SaveConfig(branch) {
 		console.log(config);
 	}
 	else {
+		console.log("branch is not null, attempting to save unique");
+		let save_triggered = false;
 		if (
 			branch.toLowerCase().includes("bad") ||
 			branch.toLowerCase().includes("words") ||
 			branch.toLowerCase().includes("bad_words") ||
 			branch.toLowerCase().includes("badwords")
 		) {
+			console.log("branch matches bad_words, saving");
 			SaveBadWords();
+			save_triggered = true;
 		}
 		if (
 			branch.toLowerCase().includes("global") ||
 			branch.toLowerCase().includes("global_config") ||
 			branch.toLowerCase().includes("globalconfig")
 		) {
+			console.log("branch matches global_config, saving");
 			SaveGlobalConfig();
+			save_triggered = true;
 		}
 		if (
 			branch.toLowerCase().includes("user") ||
 			branch.toLowerCase().includes("user_config") ||
 			branch.toLowerCase().includes("userconfig")
 		) {
+			console.log("branch matches user_config, saving");
+			SaveUserConfig();
+			save_triggered = true;
+		}
+
+		if (save_triggered == false) {
+			console.warn("ERROR, no save made when called! attempting to save all");
+			SaveBadWords();
+			SaveGlobalConfig();
 			SaveUserConfig();
 		}
 	}
 
 	///{{{3 load things
-	async function SaveBadWords() {
+	function SaveBadWords() {
+		console.log("begin saving bad words");
 		try {
-			return (
-				config.bad_words = fs.writeFileSync(
-					config.bad_words,
-					"./configs/BAD_WORDS.json",
-					// data ,
-					(err) => {
-						if (err) {
-							console.warn(err);
-						}
-						else {
-							console.log("updated badwords successfully");
-						}
-					}
-				)
+			fs.writeFileSync(
+				"./configs/BAD_WORDS.json",
+				JSON.stringify(config.bad_words, null, 2),
+				{ encoding: 'utf8' }
+				// data ,
 			)
 		}
 		catch (err) {
-			console.warn("ERROR LOADING BAD_WORDS", err);
+			console.warn("ERROR SAVING BAD_WORDS", err);
 		}
+
+		console.log("saved bad_words");
+		LoadConfig("words");
 	}
 
-	async function SaveGlobalConfig() {
+	function SaveGlobalConfig() {
+		console.log("begin saving global_config", config.global_config);
 		try {
-			return (
-				config.global_config = fs.readFileSync(
-					"./configs/GLOBAL_CONFI:.json",
-					config.global_config,
-					(err) => {
-						if (err) {
-							console.warn(err);
-						}
-						else {
-							console.log("updated global config successfully");
-						}
-					}
-				)
+			fs.writeFileSync(
+				"./configs/GLOBAL_CONFIG.json",
+				JSON.stringify(config.global_config, null, 2),
+				{ encoding: 'utf8' }
 			)
 		}
 		catch (err) {
-			console.warn("ERROR LOADING GLOBAL_CONFIG", err);
+			console.warn("ERROR SAVING GLOBAL_CONFIG", err);
 		}
+
+		console.log("saved global stuff");
+		LoadConfig("global")
 	}
 
-	async function SaveUserConfig() {
+	function SaveUserConfig() {
+		console.log("begun saving user_config");
 		try {
-			return (
-				fs.writeFileSync(
-					'./configs/USER_CONFIG.json',
-					config.user_config,
-					(err) => {
-						if (err) {
-							console.warn(err);
-						}
-						else {
-							console.log("updated user_config successfully");
-						}
+			fs.writeFileSync(
+				'./configs/USER_CONFIG.json',
+				config.user_config,
+				(err) => {
+					if (err) {
+						console.warn(err);
 					}
-				)
+					else {
+						console.log("updated user_config successfully");
+					}
+				}
 			)
 		}
 		catch (err) {
 			console.warn("ERROR LOADING USER_CONFIG", err);
 		}
+
+		console.log("saved user stuff");
+		LoadConfig("user");
 	}
 	///}}}3 save things
+
+	console.log("saving complete");
 }
 
 // }}}3 save things
