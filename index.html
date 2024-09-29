@@ -4,9 +4,9 @@
 <head>
 	<meta charset="UTF-8">
 	<!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
-	<!--<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'">-->
+	<!--<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self';">-->
 	<title>cockatiel | by vulbyte</title>
-	<meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';">
+	<meta http-equiv="Content-Security-Policy" content="script-src: 'self' 'unsafe-inline';">
 	<link rel="stylesheet" href="./global.css">
 	</link>
 	<script type="module" src="./configs/load_user_config.js"></script>
@@ -140,21 +140,85 @@
 		<!-- }}}2 -->
 		<br>
 	</div>
+
+	<div>
+		<h2>💬 messages: 💬</h2>
+		<details>
+			<summary>all messages contained here</summary>
+			<ul id="messages_list"></ul>
+		</details>
+	</div>
 </body>
 
 <footer style="
 			background-color: #ffffff;
 			bottom: 0px;
 			color: #000000;
-			max-height: 3em;
+			max-height: auto;
 			position: sticky;
 	">
-	<div>
-		<button id="play_tts">start monitoring messages</button>
-		<button id="play_tts">play next tts</button>
+	<div style="display:flex; flex-direction:row;">
+		<div style="display:flex; flex-direction:column; width:20em;">
+			<div>
+				<!-- TODO: fix this vvvvvv -->
+				<span style="color:black;">message check freq in seconds (min 0.5, max 60):</span>
+				<input id="update_freq" type="value" min="0.5" max="60" placeholder="10"></input>
+				<button id="play_tts" style="background-color:limegreen;">start monitoring messages</button>
+				<script type="module">
+					import {config} from "./configs/load_user_config.js";
+					import {GetLivestreamMessages} from './lib/get_livestream_messages.js';
+
+					document.getElementById("play_tts").addEventListener("click", (e) => {
+						config.user_config.stream_url = document.getElementById("formatted_stream_link").innerText;
+						GetLivestreamMessages(
+							document.getElementById("update_freq").value,
+							false
+						)
+					});
+				</script>
+				<button id="stop_tts" style="background-color:coral;">stop monitoring messages</button>
+				<script type="module">
+					import {GetLivestreamMessages} from "./lib/get_livestream_messages.js";
+
+					document.getElementById("stop_tts").addEventListener("click", (e) => {
+						console.log("stopping message listener");
+						GetLivestreamMessages(69, true); //true cancels reload
+					})
+				</script>
+			</div>
+		</div>
+
+		<div>
+			<input id="message_index" type="value" placeholder="no index... yet..."></input>
+			<br>
+			<button id="play_tts">play next tts</button>
+			<script type="module">
+				document.getElementbyId("play_tts").addEventListener("click", (e) => {
+					import {message_index, ReadNextMessage} from './lib/get_livestream_messages.js';
+
+					//ReadNextMessage();
+
+					if (document.getElementById("message_index").value == undefined) {
+						document.getElementById("message_index").value = message_index;
+					}
+					else {
+						message_index = document.getElementById("message_index").value;
+					}
+				});
+			</script>
+			<br>
+			<output id="next_tts_message" style="background-color: black;">no message queue'd</output>
+			<br>
+			<br>
+			<button id="skip_next_tts_message">skip next message</button>
+		</div>
+
+		<div style="color:black;">
+			tts_queue_length: <div style="background-color:black; color:white;" id="tts_queue_indicator">err</div>
+		</div>
 		<!--<script type="module" src="./lib/read_message.js"></script>-->
 	</div>
-	<div>
+	<div style="color:black;">
 		We are using Node.js <span id="node-version"></span>,
 		Chromium <span id="chrome-version"></span>,
 		and Electron <span id="electron-version"></span>.

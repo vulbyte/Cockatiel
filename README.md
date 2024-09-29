@@ -24,9 +24,11 @@ lots and lots of things
 - [x] load config from files
 - [x] test tts window
 
-- [ ] get youtube api messages 
+- [x] get youtube api messages 
 - [ ] stop current message
 - [ ] skip next message
+
+- [ ] create db/backup for all messages / stream history
 
 
 ### stretch goals:
