@@ -15,9 +15,9 @@ everything here will be written from the perspective of macOS, at the moment if 
 - gcloud sdk ```brew install --cask google-cloud-sdk```
 
 ## todo:
+(lots and lots of things)
 
-lots and lots of things
-
+### core:
 - [x] basic ui
 - [x] add links to header
 - [x] stream parser for youtube
@@ -28,22 +28,29 @@ lots and lots of things
 - [ ] stop current message
 - [ ] skip next message
 
+### quality of life:
 - [ ] create db/backup for all messages / stream history
+- [ ] add reminder: if api key isn't blank, add reminder to save
+- [ ] add info: about networking
 
 
 ### stretch goals:
 - [ ] get twitch api messages 
 
 - [ ] play next message in queue
-- [ ] preview queue
+- [x] preview queue
 - [ ] set message index
 - [ ] play button per message
 
-- [ ] message history
+- [x] message history
 - [ ] message removal
 
-- [ ] click and drag sorting
+- [ ] click and drag sorting [reconsidering this]
 
 - [ ] save list of urls with index number so on reload you can snap back to where was
+
+## weird things to look into / of note:
+- at time of writing, youtubes api seems to block mild bad words such as "fugg", so if some messages are appearing but others are not, that is a likely reason why
+
 
 ###### project by vulbyte

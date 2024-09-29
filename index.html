@@ -143,17 +143,33 @@
 
 	<div>
 		<h2>💬 messages: 💬</h2>
-		<details>
+		<details style="
+				max-height: 30em;
+				overflow-x:scroll;
+				overflow-y: scroll;
+				scroll-snap-align:end;
+			">
 			<summary>all messages contained here</summary>
-			<ul id="messages_list"></ul>
+			<ol id="messages_list" style="
+					display:flex;
+					flex-direction: column-reverse;
+					"></ol>
 		</details>
 	</div>
 </body>
+
+<div style="background-color:var(--color_primary); color: white;">
+	We are using Node.js <span id="node-version"></span>,
+	Chromium <span id="chrome-version"></span>,
+	and Electron <span id="electron-version"></span>.
+</div>
 
 <footer style="
 			background-color: #ffffff;
 			bottom: 0px;
 			color: #000000;
+			display:flex;
+			justify-content: space-between;
 			max-height: auto;
 			position: sticky;
 	">
@@ -166,45 +182,46 @@
 				<button id="play_tts" style="background-color:limegreen;">start monitoring messages</button>
 				<script type="module">
 					import {config} from "./configs/load_user_config.js";
-					import {GetLivestreamMessages} from './lib/get_livestream_messages.js';
+					import {StartGettingMessages} from './lib/get_livestream_messages.js';
 
 					document.getElementById("play_tts").addEventListener("click", (e) => {
 						config.user_config.stream_url = document.getElementById("formatted_stream_link").innerText;
-						GetLivestreamMessages(
-							document.getElementById("update_freq").value,
-							false
-						)
+						StartGettingMessages({oneshot: false});
 					});
 				</script>
 				<button id="stop_tts" style="background-color:coral;">stop monitoring messages</button>
 				<script type="module">
-					import {GetLivestreamMessages} from "./lib/get_livestream_messages.js";
+					import {StopGettingMessages} from "./lib/get_livestream_messages.js";
 
 					document.getElementById("stop_tts").addEventListener("click", (e) => {
 						console.log("stopping message listener");
-						GetLivestreamMessages(69, true); //true cancels reload
+						StopGettingMessages();
 					})
 				</script>
 			</div>
 		</div>
 
+
+		<!--
 		<div>
 			<input id="message_index" type="value" placeholder="no index... yet..."></input>
 			<br>
 			<button id="play_tts">play next tts</button>
 			<script type="module">
-				document.getElementbyId("play_tts").addEventListener("click", (e) => {
-					import {message_index, ReadNextMessage} from './lib/get_livestream_messages.js';
 
-					//ReadNextMessage();
+				document.getElementById("play_tts").addEventListener(
+					"click", (e) => {
+						import {message_index, ReadNextMessage} from './lib/get_livestream_messages.js';
 
-					if (document.getElementById("message_index").value == undefined) {
-						document.getElementById("message_index").value = message_index;
+						if (document.getElementById("message_index").value == undefined) {
+							document.getElementById("message_index").value = message_index;
+						}
+						else {
+							message_index = document.getElementById("message_index").value;
+						}
 					}
-					else {
-						message_index = document.getElementById("message_index").value;
-					}
-				});
+				);
+
 			</script>
 			<br>
 			<output id="next_tts_message" style="background-color: black;">no message queue'd</output>
@@ -212,16 +229,12 @@
 			<br>
 			<button id="skip_next_tts_message">skip next message</button>
 		</div>
+	-->
 
-		<div style="color:black;">
-			tts_queue_length: <div style="background-color:black; color:white;" id="tts_queue_indicator">err</div>
-		</div>
 		<!--<script type="module" src="./lib/read_message.js"></script>-->
 	</div>
-	<div style="color:black;">
-		We are using Node.js <span id="node-version"></span>,
-		Chromium <span id="chrome-version"></span>,
-		and Electron <span id="electron-version"></span>.
+	<div style="color:black; padding: 1em">
+		tts_queue_length: <div style="background-color:black; color:white;" id="tts_queue_indicator">err</div>
 	</div>
 </footer>
 
