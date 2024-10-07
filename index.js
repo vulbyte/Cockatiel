@@ -9,6 +9,7 @@ function createWindow() {
 			enableRemoteModulke: true,
 			nodeIntegration: true,
 		},
+		icon: './non-code_assets/cockatiel_logo.icns'
 	});
 	win.loadFile('index.html');
 }

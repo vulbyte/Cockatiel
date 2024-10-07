@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="margin-bottom:0;">
 
 <head>
 	<meta charset="UTF-8">
@@ -12,7 +12,7 @@
 	<script type="module" src="./configs/load_user_config.js"></script>
 </head>
 
-<body>
+<body style="">
 	<hgroup style="display:flex; justify-content:space-around; height:3em !important; border-radius: 0px;">
 		<img style="max-height:100%; width:3em;" src="./non-code_assets/cockatiel_logo.png">
 		<h1>cockatiel</h1>
@@ -22,17 +22,68 @@
 
 	<div>
 		<h2>📺 stream stuff 📺</h2>
-		stream link: <input type="text" id="stream_link"><br><br>
-		formatted: <output id="formatted_stream_link"></output>
-		<script type="module">
+		<div>
+			stream link: <input type="text" id="stream_link"><br><br>
+			formatted: <output id="formatted_stream_link"></output>
+			<script type="module">
+				import {UpdateStreamLink} from './lib/parse_stream_link.js';
+				document.getElementById("stream_link").addEventListener("change", (e) => {
+					console.log("parsing stream link");
+					document.getElementById("formatted_stream_link").formatted_stream_link = UpdateStreamLink();
+				});
+			</script>
+		</div>
 
-			import {UpdateStreamLink} from './lib/parse_stream_link.js';
-			document.getElementById("stream_link").addEventListener("change", (e) => {
-				console.log("parsing stream link");
-				document.getElementById("formatted_stream_link").formatted_stream_link = UpdateStreamLink();
-			});
+		<div>
+			update time:
+			<div style="display:flex; flex-direction: row;">
+				<input id="timer_freq" type="range" min="1" max="120" value="29" style="width: 50%;"></input>
+				<output id="timer_freq_value"></output><!--<span>45</span>-->
+			</div>
+			<p id="est_operational_time"></p>
+			<sub>it is recommended you make the above comfortably over what is expected, as if you go over you can't get more
+				without paying, but if you're under you can stream longer with no worries</sub>
 
-		</script>
+			<script type="module">
+				let timer_freq_input = document.getElementById("timer_freq");
+				let timer_freq_output = document.getElementById("timer_freq_value");
+				let est_op_time = document.getElementById("est_operational_time");
+
+				document.addEventListener("DOMContentLoaded", (e) => {
+					//timer_freq_input.stepUp(0.1);
+					timer_freq_output.innerText = timer_freq_input.value + " seconds between updates";
+					est_op_time.innerText = EstStreamingTime(timer_freq_input.value);
+				});
+
+				timer_freq_input.addEventListener("input", (e) => {
+					timer_freq_output.innerText = timer_freq_input.value + " seconds between updates";
+					est_op_time.innerText = EstStreamingTime(timer_freq_input.value);
+				});
+
+				function EstStreamingTime(freq_in_secs) {
+
+					if (freq_in_secs == undefined || freq_in_secs <= 0 || freq_in_secs === null || isNaN(freq_in_secs)) {
+						throw new Error("Invalid input: freq_in_secs must be a non - negative number");
+					}
+					let freq = 60 / 60 / freq_in_secs;
+					const total_requests = 10000;
+					const cost_per_request = 1000;
+					let daily_limit = (total_requests / cost_per_request);
+					let hours_per_day = 24;
+
+					//if (freq < 1) { // Handle the case where frequency is 0 or very low 
+					//	return "You can stream for unlimited hours on the free tier.";
+					//}
+
+					let est_stream_hours = daily_limit / (hours_per_day * (freq * 2));
+					//const minutes_per_hour = 60;
+					//est_stream_hours *= minutes_per_hour;
+
+					return (`you can stream for ${est_stream_hours.toFixed(2)} hour(s) every day on the free teir with
+				before running out of requests` );
+				} 
+			</script>
+		</div>
 	</div>
 
 	<hr>
@@ -149,6 +200,7 @@
 				overflow-y: scroll;
 				scroll-snap-align:end;
 			">
+			<!-- BUG: ONLY 75 MESSAGES EVER LOADED -->
 			<summary>all messages contained here</summary>
 			<ol id="messages_list" style="
 					display:flex;
@@ -158,7 +210,7 @@
 	</div>
 </body>
 
-<div style="background-color:var(--color_primary); color: white;">
+<div style="background-color:var(--color_primary); color: white; padding: var(--padding)">
 	We are using Node.js <span id="node-version"></span>,
 	Chromium <span id="chrome-version"></span>,
 	and Electron <span id="electron-version"></span>.
@@ -170,71 +222,167 @@
 			color: #000000;
 			display:flex;
 			justify-content: space-between;
+			margin:0;
 			max-height: auto;
+			padding:0;
 			position: sticky;
+
 	">
-	<div style="display:flex; flex-direction:row;">
-		<div style="display:flex; flex-direction:column; width:20em;">
-			<div>
-				<!-- TODO: fix this vvvvvv -->
-				<span style="color:black;">message check freq in seconds (min 0.5, max 60):</span>
-				<input id="update_freq" type="value" min="0.5" max="60" placeholder="10"></input>
-				<button id="play_tts" style="background-color:limegreen;">start monitoring messages</button>
+	<!-- {{{4 showhide footer -->
+	<div ishidden="false" id="showhide_footer" style="
+			aspect-ratio:1/1; 
+			background-image: linear-gradient(10deg, var(--color_primary), var(--color_secondary)); 
+			border-radius:1em; 
+			height:1.6rem;
+			margin: 0.2em;
+			overflow:hidden;
+			padding:var(--padding); 
+			position:absolute; 
+			transform:translateY(-4em); 
+			width:1.6rem; 
+			">
+		<div id='showhide_icon' style="
+				text-wrap:nowrap
+				/*text-shadow: 
+					2px 2px 0px #000, 
+					2px -2px 0px #000, 
+					-2px 2px 0px #000, 
+					-2px -2px 0px #000;*/
+				">
+			<div id="showhide_footer_arrow" style="padding:0.3em; padding-top:0; display:inline-block;">🔽</div>
+			<span id="showhide_info" style="padding-left:2em;">hide footer</span>
+		</div>
+		<script type="module">
+			let toggle = document.getElementById("showhide_footer");
+			let icon = document.getElementById("showhide_icon");
+			let footer = document.getElementsByTagName("footer")[0];
+			let arrow = document.getElementById("showhide_footer_arrow");
+			let info = document.getElementById("showhide_info");
+
+			toggle.addEventListener("mouseover", (e) => {
+				toggle.style.width = "10em";
+			});
+
+			toggle.addEventListener("mouseout", (e) => {
+				toggle.style.width = "1.6em";
+			});
+
+			toggle.addEventListener("mousedown", (e) => {
+				console.log("footer height toggle clicked");
+				if (toggle.getAttribute("ishidden") == "false") {
+					toggle.setAttribute("ishidden", "true");
+					footer.style.transform = "translateY(140px)";
+					arrow.style.transform = "rotateX(180deg) translateY(0em)"; //upside down
+					info.innerText = "show footer";
+
+				}
+				else if (toggle.getAttribute("ishidden") == "true") {
+					toggle.setAttribute("ishidden", "false");
+					footer.style.transform = "translateY(0px)";
+					arrow.style.transform = "rotateX(0deg) translateY(0)";
+					info.innerText = "hide footer";
+				}
+				else {
+					console.warn("error, unexpected value for 'ishidden' in 'showhide_footer'");
+					info.innerText = "there's an error here";
+				}
+			});
+		</script>
+	</div>
+	<!-- }}}4 showhide footer -->
+
+	<div style="display:flex; flex-direction:row; padding:0;margin:0;">
+		<div style="display:flex; flex-direction:column; width:20em; padding:0; margin:0;">
+			<div style="padding:0; margin:0;">
+				<button is-active="false" id="get_livestream_messages" style="background-color:limegreen; margin-top:1em;">
+					start monitoring messages
+				</button>
 				<script type="module">
 					import {config} from "./configs/load_user_config.js";
 					import {StartGettingMessages} from './lib/get_livestream_messages.js';
 
-					document.getElementById("play_tts").addEventListener("click", (e) => {
+					document.getElementById("get_livestream_messages").addEventListener("click", (e) => {
+						let get_messages = document.getElementById("get_livestream_messages");
+						let stop_get = document.getElementById("stop_get_livestream_messages");
+
+						get_messages.setAttribute("is-active", "true");
+						stop_get.setAttribute("is-active", "true");
+						get_messages.style.backgroundColor = "darkgreen";
+						stop_get.style.backgroundColor = "coral";
+
 						config.user_config.stream_url = document.getElementById("formatted_stream_link").innerText;
 						StartGettingMessages({oneshot: false});
 					});
 				</script>
-				<button id="stop_tts" style="background-color:coral;">stop monitoring messages</button>
+				<button is-active="false" id="stop_get_livestream_messages" style="background-color:darkred;">stop monitoring
+					messages</button>
 				<script type="module">
 					import {StopGettingMessages} from "./lib/get_livestream_messages.js";
 
-					document.getElementById("stop_tts").addEventListener("click", (e) => {
+					document.getElementById("stop_get_livestream_messages").addEventListener("click", (e) => {
 						console.log("stopping message listener");
 						StopGettingMessages();
+
+						let get_messages = document.getElementById("get_livestream_messages");
+						let stop_get = document.getElementById("stop_get_livestream_messages");
+
+						get_messages.setAttribute("is-active", "true");
+						stop_get.setAttribute("is-active", "true");
+						get_messages.style.backgroundColor = "limegreen";
+						stop_get.style.backgroundColor = "darkred";
 					})
 				</script>
 			</div>
 		</div>
 
+		<div style="display:flex; flex-direction:column; width:20em; padding:0; margin:0;">
+			<div style="padding:0; margin:0;">
+				<button is-active="false" id="start_tts_manager" style="background-color:cyan; margin-top:1em;">
+					start tts manager
+				</button>
+				<button is-active="false" id="stop_tts_manager" style="background-color:maroon;">
+					stop tts manager
+				</button>
+				<script type="module">
+					import {TTS_Manager} from './lib/TTS_manager.js'
 
-		<!--
-		<div>
-			<input id="message_index" type="value" placeholder="no index... yet..."></input>
-			<br>
-			<button id="play_tts">play next tts</button>
-			<script type="module">
+					let tts_manager;
 
-				document.getElementById("play_tts").addEventListener(
-					"click", (e) => {
-						import {message_index, ReadNextMessage} from './lib/get_livestream_messages.js';
+					// {{{5
+					document.getElementById("start_tts_manager").addEventListener("click", (e) => {
+						let start_mgmt = document.getElementById("start_tts_manager");
+						let stop_mgmt = document.getElementById("stop_tts_manager");
 
-						if (document.getElementById("message_index").value == undefined) {
-							document.getElementById("message_index").value = message_index;
-						}
-						else {
-							message_index = document.getElementById("message_index").value;
-						}
-					}
-				);
+						start_mgmt.style.backgroundColor = "darkgreen";
+						stop_mgmt.style.backgroundColor = "magenta";
 
-			</script>
-			<br>
-			<output id="next_tts_message" style="background-color: black;">no message queue'd</output>
-			<br>
-			<br>
-			<button id="skip_next_tts_message">skip next message</button>
+						tts_manager = new TTS_Manager({
+							tts_gap: 3,
+						});
+					});
+					// }}}5
+
+					// {{{5
+					document.getElementById("stop_tts_manager").addEventListener("click", (e) => {
+						console.log("stopping message listener");
+
+						let get_messages = document.getElementById("start_tts_manager");
+						let stop_get = document.getElementById("stop_tts_manager");
+
+						get_messages.setAttribute("is-active", "true");
+						stop_get.setAttribute("is-active", "true");
+						get_messages.style.backgroundColor = "cyan";
+						stop_get.style.backgroundColor = "darkred";
+
+						tts_manager.Kill();
+					});
+					// }}}5
+				</script>
+			</div>
 		</div>
-	-->
-
-		<!--<script type="module" src="./lib/read_message.js"></script>-->
 	</div>
-	<div style="color:black; padding: 1em">
-		tts_queue_length: <div style="background-color:black; color:white;" id="tts_queue_indicator">err</div>
+	<div style="color:black; padding: var(--padding)">
+		tts queue length: <div style="background-color:black; color:white;" id="tts_queue_indicator">err</div>
 	</div>
 </footer>
 

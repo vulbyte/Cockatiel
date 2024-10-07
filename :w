@@ -41,10 +41,6 @@ export async function StartGettingMessages(args = { oneshot: true }) {
 	FetchTimer.Connect(looper);
 }
 
-export async function StopGettingMessages() { //called in index.html
-	FetchTimer.Kill();
-}
-
 
 
 // all this does is get the liveChat id
@@ -64,21 +60,69 @@ async function ConfigApiCalls() {
 
 			console.log("Live Chat ID:", stream_data.liveChatId, "\n", "api:", stream_data.apiKey);
 
-			await GetAndUpdateMessages({ "apiKey": stream_data.apiKey, "liveChatId": stream_data.liveChatId, });
-		}
-		catch (err) {
+			GetAndFilterMessages({ "apiKey": stream_data.apiKey, "liveChatId": stream_data.liveChatId });
+		} catch (err) {
 			console.error(err);
 			FetchTimer.Kill(); // no need to run further
 		}
 	}
 	else {
-		await GetAndUpdateMessages({ "apiKey": stream_data.apiKey, "liveChatId": stream_data.liveChatId, });
+		GetAndFilterMessages({ "apiKey": stream_data.apiKey, "liveChatId": stream_data.liveChatId });
 	}
 
 	return;
 }
 
-async function GetAndUpdateMessages(args = { "apiKey": undefined, "liveChatId": undefined, }) {
+
+
+// this gets sorts and updates messages
+async function GetAndFilterMessages(args = { "apiKey": undefined, "liveChatId": undefined, }) {
+	console.log("GetAndFilterMessages()");
+	console.log("api:", args.apiKey, "\n", "Live Chat ID:", args.liveChatId, "\n");
+
+	new_messages = UpdateMessages({ "apiKey": args.apiKey, "liveChatId": args.liveChatId, });
+
+	FilterOldMessages(messages, new_messages);
+
+	await AddMessagesToMessageList(new_messages);
+}
+
+
+
+function FilterOldMessages(messages, new_messages) {
+	console.log("FilterOldMessages()");
+	//filter old from new messages
+	let is_existing;
+	let new_messages_count = 0;
+
+	if (messages == undefined) { //if undefined, just add all messages
+		messages = new_messages
+		new_messages_count = new_messages.length;
+	}
+	else {
+		for (let i = 0; i < new_messages.length; ++i) {
+			is_existing = true;
+
+			for (let j = 0; j < messages.length; ++j) {
+				if (new_messages[i] != messages[j]) {
+					is_existing = false;
+					break;
+				}
+
+			}
+
+			if (is_existing == false) {
+				messages.push(new_messages[i]);
+			}
+		}
+	}
+
+	console.log("ADDING NEW MESSAGES:", new_messages, '\n', "total new messages:", new_messages_count);
+}
+
+
+
+async function UpdateMessages(args = { "apiKey": undefined, "liveChatId": undefined, }) {
 	console.log("UpdateMessages()");
 	console.log("api:", args.apiKey, "\n", "Live Chat ID:", args.liveChatId, "\n");
 
@@ -89,10 +133,10 @@ async function GetAndUpdateMessages(args = { "apiKey": undefined, "liveChatId": 
 		return;
 	}
 
-	await fetch(`https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${args.liveChatId}&part=snippet,authorDetails&key=${args.apiKey}`)
+	fetch(`https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${args.liveChatId}&part=snippet,authorDetails&key=${args.apiKey}`)
 		.then(response => response.json())
 		.then(data => {
-			console.log("DATA FROM FETCH: ", data);
+			console.log(data);
 			new_messages = data.items.map(item => ({
 				author: item.authorDetails.displayName,
 				message: item.snippet.displayMessage,
@@ -100,69 +144,23 @@ async function GetAndUpdateMessages(args = { "apiKey": undefined, "liveChatId": 
 			}));
 		})
 		.catch(err => console.error(err));
-
-	//return (new_messages);
-	console.log("messages", messages, "\n", "new_messages", new_messages);
-
-	await FilterOldMessages();
-
-}
-
-async function FilterOldMessages() {
-	console.log("FilterOldMessages()");
-
-	messages = new_messages
-	// //filter old from new messages
-	// let is_existing;
-	// let new_messages_count = 0;
-
-	// messages = undefined;
-
-	// if (messages == undefined) { //if undefined, just add all messages
-	// 	console.log("messages undefined, adding all new messages");
-	// 	messages = new_messages
-	// 	new_messages_count = new_messages.length;
-	// }
-	// else {
-	// 	for (let i = 0; i < new_messages.length; ++i) {
-	// 		is_existing = true;
-	// 		for (let j = 0; j < messages.length; ++j) {
-	// 			if (new_messages[i] != messages[j]) {
-	// 				is_existing = false;
-	// 				break;
-	// 			}
-	// 			continue;
-	// 		}
-	// 		if (is_existing == true) {
-	// 			console.log("old message found, skipping", new_messages[i]);
-	// 		}
-	// 		else {
-	// 			console.log("new message found, adding:", new_messages[i]);
-	// 			messages.push(new_messages[i]);
-	// 		}
-	// 		continue;
-	// 	}
-	// }
-
-	// console.log("ADDING NEW MESSAGES:", new_messages, '\n', "total new messages:", new_messages_count);
-
-	await AddMessagesToMessageList(new_messages);
-	return;
+	return (messages);
 }
 
 
-
-async function AddMessagesToMessageList() {
+async function AddMessagesToMessageList(new_messages) {
 	console.log('AddMessagesToMessageList()');
-	console.log("NEW MESSAGES:", new_messages, '\n', "messages:", messages);
+	console.log(new_messages, messages);
+
+	let new_message_count = 0;
 
 	try {
 		let newElem, playElem, textElem, skipElem;
 
 		console.log("child_count = ", document.getElementById("messages_list").childElementCount);
-		document.getElementById("messages_list").innerHTML = "";
 
-		for (let i = 0; i < messages.length; i++) {
+		for (let i = 0; i < new_messages.length; i++) {
+			document.getElementById("messages_list").innerHTML = "";
 
 			//skip existing
 			if (document.getElementById(`ml_li${i}`)) {
@@ -187,36 +185,17 @@ async function AddMessagesToMessageList() {
 				) {
 					if (document.getElementById(`ml_li${i}`).style.backgroundColor != "#222") {
 						document.getElementById(`ml_li${i}`).style.backgroundColor = "#222";
-						if (tts_queue > 0) {
-							tts_queue -= 1;
-						}
+						tts_queue -= 1;
 					}
 				}
 
 			});
-			newElem.appendChild(playElem);
 
 			skipElem = document.createElement("button");
 			skipElem.innerText = "❌";
-			skipElem.addEventListener("mousedown", (e) => {
-				let skipTTS = document.getElementById(`ml_li${i}`).getAttribute("isTTS");
-
-				if (skipTTS == false) {
-					document.getElementById(`ml_li${i}`).setAttribute("skiptts", "true");
-					document.getElementById(`ml_li${i}`).style.backgroundColor = "#000";
-					document.getElementById(`ml_li${i}`).style.color = "#666";
-				}
-				else {
-					document.getElementById(`ml_li${i}`).setAttribute("skiptts", "false");
-					document.getElementById(`ml_li${i}`).style.backgroundColor = "#028";
-					document.getElementById(`ml_li${i}`).style.color = "#fff";
-				}
-			});
-			newElem.appendChild(skipElem);
 
 			textElem = document.createElement("span");
 			textElem.id = `message${i}`
-			newElem.appendChild(textElem);
 
 			if (new_messages[i].message.slice(0, 4) == "!tts") {
 				newElem.setAttribute("isTTS", "true");
@@ -240,6 +219,8 @@ async function AddMessagesToMessageList() {
 			}
 
 
+			newElem.appendChild(playElem);
+			newElem.appendChild(textElem);
 
 			ml.appendChild(newElem);
 		}
@@ -249,4 +230,11 @@ async function AddMessagesToMessageList() {
 	}
 
 	document.getElementById("tts_queue_indicator").innerText = tts_queue;
+}
+
+
+// https://www.youtube.com/live/lD_6c4DZe-U
+export async function ReadNextMessage() {
+	CallTTS(`${new_messages[message_index].author} said: ${new_messages[message_index].message}`);
+	message_index += 1; // this is incremented for next call
 }

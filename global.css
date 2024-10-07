@@ -786,9 +786,10 @@ ul {
 
 ul>li:nth-child(even)::marker {
 	color: color-mix(in oklab, var(--color_primary), #fff);
+}
 
-	var {}
+var {}
 
-	video {}
+video {}
 
-	wbr {}
+wbr {}

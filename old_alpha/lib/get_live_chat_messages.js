@@ -44,7 +44,7 @@ export default async function getLiveChatMessages(liveChatId) {
 
 		nextPageToken = data.nextPageToken;
 
-		// Print the current state of the messages arrays
+		// Print the current state of themessages arrays
 		console.log("Current messages array:", messages);
 		console.log("Current TTS messages array:", tts_messages);
 

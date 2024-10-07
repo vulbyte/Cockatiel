@@ -17,22 +17,35 @@ everything here will be written from the perspective of macOS, at the moment if 
 ## todo:
 (lots and lots of things)
 
+### URGENT: 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+- [ ] update tts_queue_length manually
+- [x] fix interger underflow
+- [ ] add banner telling users they can use tts
+
+- [ ] get only latest message not whole f*ing chat you idiot
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 ### core:
 - [x] basic ui
 - [x] add links to header
 - [x] stream parser for youtube
 - [x] load config from files
 - [x] test tts window
-
 - [x] get youtube api messages 
+- [ ] get livestream url via api (so no more manual entry [but manual can still override])
 - [ ] stop current message
 - [ ] skip next message
+- [ ] on/off light for when message is playing or not (for chat pets)
+- [ ] add stream url to cache so that chatId can be cached
+- [ ] above but with messages
+- [ ] make text in message list wrap on overflow
 
 ### quality of life:
 - [ ] create db/backup for all messages / stream history
 - [ ] add reminder: if api key isn't blank, add reminder to save
 - [ ] add info: about networking
-
 
 ### stretch goals:
 - [ ] get twitch api messages 
@@ -44,8 +57,6 @@ everything here will be written from the perspective of macOS, at the moment if 
 
 - [x] message history
 - [ ] message removal
-
-- [ ] click and drag sorting [reconsidering this]
 
 - [ ] save list of urls with index number so on reload you can snap back to where was
 
