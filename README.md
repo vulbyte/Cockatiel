@@ -48,6 +48,8 @@ everything here will be written from the perspective of macOS, at the moment if 
 - [ ] add info: about networking
 
 ### stretch goals:
+- [ ] chat mascot a/b within cockatiel
+
 - [ ] get twitch api messages 
 
 - [ ] play next message in queue
