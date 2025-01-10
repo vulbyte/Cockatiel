@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en" style="margin-bottom:0;">
+
+<head>
+	<meta charset="UTF-8">
+	<!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+	<!--<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self';">-->
+	<title>cockatiel | by vulbyte</title>
+	<meta http-equiv="Content-Security-Policy" content="script-src:'self' 'unsafe-inline';">
+	<link rel="stylesheet" href="./global.css">
+	</link>
+	<script type="module" src="./configs/load_user_config.js"></script>
+</head>
+
+<body style="">
+	<hgroup style="display:flex; justify-content:space-around; height:3em !important; border-radius: 0px;">
+		<img style="max-height:100%; width:3em;" src="./non-code_assets/cockatiel_logo.png">
+		<h1>cockatiel</h1>
+		<h6>by vulbyte</h6>
+		<img style="max-height:100%; width:3em;" src='./non-code_assets/vulbyte_icon.svg'>
+	</hgroup>
+
+	<div>
+		<h2>testing ground</h2>
+
+		<button id='popup_test'>popup test</button>
+		<script type='module'>
+			import {PopUp} from './lib/popup.js';
+			document.getElementById('popup_test').addEventListener('click', (e) => {
+				PopUp({
+					'title': 'surprise!',
+					'message': 'message',
+					'details': 'details',
+					'prompt': 'show next example',
+					'onAccept': PopUp({'details': `console.log('what you lookin at?')`}),
+				});
+			});
+		</script>
+
+		<ul>
+			<li><label>api Key</label><input type="text" id="api_key"></li>
+			<li><label>live Chat Id</label><input type="text" id="live_chat_id"></li>
+			<li><label>max Results</label><input type="text" id="max_results"></li>
+			<li><label>video Id</label><input type="text" id="video_id"></li>
+			<br>
+			<li><button id="load_yt_config" text="sumbit">load</button><button id="test_submit" text="sumbit">submit</button>
+			</li>
+		</ul>
+
+		<script type="module">
+			import {YoutubeStuff} from './lib/youtubeStuff.js';
+
+			let yt;
+
+			document.getElementById('load_yt_config').addEventListener('click', () => {
+				if (localStorage.getItem('yt_save') != null) {
+					yt = localStorage.getItem('yt_save');
+
+					document.getElementById("api_key").value = yt.apiKey
+					document.getElementById("live_chat_id").value = yt.liveChatId
+					document.getElementById("max_results").value = yt.maxResults
+					document.getElementById("video_id").value = yt.VideoResults
+				}
+
+				else {
+
+				}
+			});
+
+			document.getElementById("test_submit").addEventListener('click', () => {
+				console.log('clickkkk')
+				let args = {
+					"apiKey": document.getElementById("api_key").value,
+					"liveChatId": document.getElementById("live_chat_id").value,
+					"maxResults": document.getElementById("max_results").value,
+					"videoId": document.getElementById("video_id").value,
+				}
+
+				for (let i = 0; i < Object.keys(args); i++) {
+					switch (Object.keys(args)[i]) {
+						case (""):
+						case (undefined):
+						case (null):
+							return (-1);
+							break;
+						default:
+							break;
+					}
+				}
+
+				yt = new YoutubeStuff(args);
+
+				console.log(yt.apiKey);
+				console.log(yt.liveChatId);
+				console.log(yt.maxResults);
+				console.log(yt.videoId);
+
+			});
+		</script>
+	</div>
+
+
+	<div>
+		<h2>📺 stream stuff 📺</h2>
+
+
+		<div>
+			stream link: <input type="text" id="stream_link"><br><br>
+			formatted: <output id="formatted_stream_link"></output>
+			<script type="module">
+				import {UpdateStreamLink} from './lib/parse_stream_link.js';
+				document.getElementById("stream_link").addEventListener("change", (e) => {
+					console.log("parsing stream link");
+					document.getElementById("formatted_stream_link").formatted_stream_link = UpdateStreamLink();
+				});
+			</script>
+		</div>
+
+		<div>
+			update time:
+			<div style="display:flex; flex-direction: row;">
+				<input id="timer_freq" type="range" min="1" max="120" value="29" style="width: 50%;"></input>
+				<output id="timer_freq_value"></output><!--<span>45</span>-->
+			</div>
+			<p id="est_operational_time"></p>
+			<sub>it is recommended you make the above comfortably over what is expected, as if you go over you can't get more
+				without paying, but if you're under you can stream longer with no worries</sub>
+
+			<script type="module">
+				let timer_freq_input = document.getElementById("timer_freq");
+				let timer_freq_output = document.getElementById("timer_freq_value");
+				let est_op_time = document.getElementById("est_operational_time");
+
+				document.addEventListener("DOMContentLoaded", (e) => {
+					//timer_freq_input.stepUp(0.1);
+					timer_freq_output.innerText = timer_freq_input.value + " seconds between updates";
+					est_op_time.innerText = EstStreamingTime(timer_freq_input.value);
+				});
+
+				timer_freq_input.addEventListener("input", (e) => {
+					timer_freq_output.innerText = timer_freq_input.value + " seconds between updates";
+					est_op_time.innerText = EstStreamingTime(timer_freq_input.value);
+				});
+
+				function EstStreamingTime(freq_in_secs) {
+
+					if (freq_in_secs == undefined || freq_in_secs <= 0 || freq_in_secs === null || isNaN(freq_in_secs)) {
+						throw new Error("Invalid input: freq_in_secs must be a non - negative number");
+					}
+					let freq = 60 / 60 / freq_in_secs;
+					const total_requests = 10000;
+					const cost_per_request = 1000;
+					let daily_limit = (total_requests / cost_per_request);
+					let hours_per_day = 24;
+
+					//if (freq < 1) { // Handle the case where frequency is 0 or very low 
+					//	return "You can stream for unlimited hours on the free tier.";
+					//}
+
+					let est_stream_hours = daily_limit / (hours_per_day * (freq * 2));
+					//const minutes_per_hour = 60;
+					//est_stream_hours *= minutes_per_hour;
+
+					return (`you can stream for ${est_stream_hours.toFixed(2)} hour(s) every day on the free teir with
+				before running out of requests` );
+				} 
+			</script>
+		</div>
+	</div>
+
+	<hr>
+
+	<div id="api_stuff">
+		<h2>🛜 api stuff 🛜</h2>
+		<u><em>DONT SHARE THIS WITH ANYONE, DO NOT VIEW ON STREAM</em> </u> <br>
+		api key: <input type="password" id="api_key">
+		<button id="password_visibility_toggle" placeholder="">👁️</button>
+		<button id="load_api_key" placeholder="">↺</button>
+		<button id="save_api_key" placeholder="">💾</button> <br>
+		<output id="api_info"></output>
+		<script type="module">
+			import {config, SaveConfig} from "./configs/load_user_config.js";
+			console.log(config);
+
+			//{{{4 save to config
+			document.getElementById("save_api_key").addEventListener("mousedown", (e) => {
+				console.log("saving api to file");
+				config.global_config.APIs.gcloud_key = document.getElementById("api_key").value;
+				console.log(config.global_config.APIs.gcloud_key);
+				SaveConfig("global");
+			})
+			//}}}4
+
+
+
+			//{{{4 load prev api key
+			document.getElementById("load_api_key").addEventListener("mousedown", (e) => {
+				console.log("loading prev api key");
+
+				try {
+					console.log(config.global_config.APIs);
+					document.getElementById("api_key").value = config.global_config.APIs.gcloud_key;
+					document.getElementById("api_info").innerText = "loaded previously saved api key";
+				}
+				catch (err) {
+					console.warn(err);
+					document.getElementById("api_info").innerText = "failed to laod api, did you save one before?";
+				}
+
+			});
+			//}}}4 load prev api key
+
+
+
+			//{{{4 set api key on change
+			const api_key_val = document.getElementById('api_key')
+
+			api_key_val.addEventListener("change", async (e) => {
+				console.log("attempting to update api key");
+
+				if (api_key_val.value.length < 8) {
+					document.getElementById("api_info").innerText = "key seems a bit small";
+				}
+				else if (api_key_val.value.length > 32) {
+					document.getElementById("api_info").innerText = "key seems a bit large";
+				}
+				else {
+					document.getElementById("api_info").innerText = "key seems good at a glance";
+				}
+			});
+			//}}}4 set api key on change
+
+
+
+			//{{{4 show on mouse down
+			document.getElementById("password_visibility_toggle").addEventListener("mousedown", (e) => {
+				console.log("showing password")
+				if (document.getElementById("api_key").type == "password") {
+					document.getElementById("api_key").type = "text";
+				}
+			})
+			//}}}4 show on mouse down
+
+
+
+			//{{{4 hide on mouse up
+			document.getElementById("password_visibility_toggle").addEventListener("mouseup", (e) => {
+				console.log("hiding password");
+				document.getElementById("api_key").type = "password";
+			})
+			//}}}4 hide on mouse up
+		</script>
+	</div>
+
+	<hr>
+
+	<!-- {{{2 test_tts -->
+	<div>
+		<h2> 🛝 testing playground 🛝</h2>
+		<summary>test tts</summary>
+		<input type="text" id="test_input">
+		<button id="test_tts_button">></button>
+		<script type="module">
+
+			import {CallTTS} from './lib/call_tts.js'
+			document.getElementById("test_tts_button").addEventListener("click", (e) => {
+				console.log("attempting to speak");
+				let tts_message = document.getElementById("test_input").value;
+				CallTTS(tts_message);
+			});
+
+		</script>
+		<!-- }}}2 -->
+		<br>
+	</div>
+
+	<div>
+		<h2>💬 messages: 💬</h2>
+		<details style="
+				max-height: 30em;
+				overflow-x:scroll;
+				overflow-y: scroll;
+				scroll-snap-align:end;
+			">
+			<!-- BUG: ONLY 75 MESSAGES EVER LOADED -->
+			<summary>all messages contained here</summary>
+			<ol id="messages_list" style="
+					display:flex;
+					flex-direction: column-reverse;
+					"></ol>
+		</details>
+	</div>
+</body>
+
+<div style="background-color:var(--color_primary); color: white; padding: var(--padding)">
+	We are using Node.js <span id="node-version"></span>,
+	Chromium <span id="chrome-version"></span>,
+	and Electron <span id="electron-version"></span>.
+</div>
+
+<footer style="
+			background-color: #ffffff;
+			bottom: 0px;
+			color: #000000;
+			display:flex;
+			justify-content: space-between;
+			margin:0;
+			max-height: auto;
+			padding:0;
+			position: sticky;
+
+	">
+	<!-- {{{4 showhide footer -->
+	<div ishidden="false" id="showhide_footer" style="
+			aspect-ratio:1/1; 
+			background-image: linear-gradient(10deg, var(--color_primary), var(--color_secondary)); 
+			border-radius:1em; 
+			height:1.6rem;
+			margin: 0.2em;
+			overflow:hidden;
+			padding:var(--padding); 
+			position:absolute; 
+			transform:translateY(-4em); 
+			width:1.6rem; 
+			">
+		<div id='showhide_icon' style="
+				text-wrap:nowrap
+				/*text-shadow: 
+					2px 2px 0px #000, 
+					2px -2px 0px #000, 
+					-2px 2px 0px #000, 
+					-2px -2px 0px #000;*/
+				">
+			<div id="showhide_footer_arrow" style="padding:0.3em; padding-top:0; display:inline-block;">🔽</div>
+			<span id="showhide_info" style="padding-left:2em;">hide footer</span>
+		</div>
+		<script type="module">
+			let toggle = document.getElementById("showhide_footer");
+			let icon = document.getElementById("showhide_icon");
+			let footer = document.getElementsByTagName("footer")[0];
+			let arrow = document.getElementById("showhide_footer_arrow");
+			let info = document.getElementById("showhide_info");
+
+			toggle.addEventListener("mouseover", (e) => {
+				toggle.style.width = "10em";
+			});
+
+			toggle.addEventListener("mouseout", (e) => {
+				toggle.style.width = "1.6em";
+			});
+
+			toggle.addEventListener("mousedown", (e) => {
+				console.log("footer height toggle clicked");
+				if (toggle.getAttribute("ishidden") == "false") {
+					toggle.setAttribute("ishidden", "true");
+					footer.style.transform = "translateY(140px)";
+					arrow.style.transform = "rotateX(180deg) translateY(0em)"; //upside down
+					info.innerText = "show footer";
+
+				}
+				else if (toggle.getAttribute("ishidden") == "true") {
+					toggle.setAttribute("ishidden", "false");
+					footer.style.transform = "translateY(0px)";
+					arrow.style.transform = "rotateX(0deg) translateY(0)";
+					info.innerText = "hide footer";
+				}
+				else {
+					console.warn("error, unexpected value for 'ishidden' in 'showhide_footer'");
+					info.innerText = "there's an error here";
+				}
+			});
+		</script>
+	</div>
+	<!-- }}}4 showhide footer -->
+
+	<div style="display:flex; flex-direction:row; padding:0;margin:0;">
+		<div style="display:flex; flex-direction:column; width:20em; padding:0; margin:0;">
+			<div style="padding:0; margin:0;">
+				<button is-active="false" id="get_livestream_messages" style="background-color:limegreen; margin-top:1em;">
+					start monitoring messages
+				</button>
+				<script type="module">
+					import {config} from "./configs/load_user_config.js";
+					import {StartGettingMessages} from './lib/get_livestream_messages.js';
+
+					document.getElementById("get_livestream_messages").addEventListener("click", (e) => {
+						let get_messages = document.getElementById("get_livestream_messages");
+						let stop_get = document.getElementById("stop_get_livestream_messages");
+
+						get_messages.setAttribute("is-active", "true");
+						stop_get.setAttribute("is-active", "true");
+						get_messages.style.backgroundColor = "darkgreen";
+						stop_get.style.backgroundColor = "coral";
+
+						config.user_config.stream_url = document.getElementById("formatted_stream_link").innerText;
+						StartGettingMessages({oneshot: false});
+					});
+				</script>
+				<button is-active="false" id="stop_get_livestream_messages" style="background-color:darkred;">stop monitoring
+					messages</button>
+				<script type="module">
+					import {StopGettingMessages} from "./lib/get_livestream_messages.js";
+
+					document.getElementById("stop_get_livestream_messages").addEventListener("click", (e) => {
+						console.log("stopping message listener");
+						StopGettingMessages();
+
+						let get_messages = document.getElementById("get_livestream_messages");
+						let stop_get = document.getElementById("stop_get_livestream_messages");
+
+						get_messages.setAttribute("is-active", "true");
+						stop_get.setAttribute("is-active", "true");
+						get_messages.style.backgroundColor = "limegreen";
+						stop_get.style.backgroundColor = "darkred";
+					})
+				</script>
+			</div>
+		</div>
+
+		<div style="display:flex; flex-direction:column; width:20em; padding:0; margin:0;">
+			<div style="padding:0; margin:0;">
+				<button is-active="false" id="start_tts_manager" style="background-color:cyan; margin-top:1em;">
+					start tts manager
+				</button>
+				<button is-active="false" id="stop_tts_manager" style="background-color:maroon;">
+					stop tts manager
+				</button>
+				<script type="module">
+					import {TTS_Manager} from './lib/TTS_manager.js'
+
+					let tts_manager;
+
+					// {{{5
+					document.getElementById("start_tts_manager").addEventListener("click", (e) => {
+						let start_mgmt = document.getElementById("start_tts_manager");
+						let stop_mgmt = document.getElementById("stop_tts_manager");
+
+						start_mgmt.style.backgroundColor = "darkgreen";
+						stop_mgmt.style.backgroundColor = "magenta";
+
+						tts_manager = new TTS_Manager({
+							tts_gap: 3,
+						});
+					});
+					// }}}5
+
+					// {{{5
+					document.getElementById("stop_tts_manager").addEventListener("click", (e) => {
+						console.log("stopping message listener");
+
+						let get_messages = document.getElementById("start_tts_manager");
+						let stop_get = document.getElementById("stop_tts_manager");
+
+						get_messages.setAttribute("is-active", "true");
+						stop_get.setAttribute("is-active", "true");
+						get_messages.style.backgroundColor = "cyan";
+						stop_get.style.backgroundColor = "darkred";
+
+						tts_manager.Kill();
+					});
+					// }}}5
+				</script>
+			</div>
+		</div>
+	</div>
+	<div style="color:black; padding: var(--padding)">
+		tts queue length: <div style="background-color:black; color:white;" id="tts_queue_indicator">err</div>
+	</div>
+</footer>
+
+</html>

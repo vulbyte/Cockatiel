@@ -5,12 +5,17 @@
 	<meta charset="UTF-8">
 	<!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
 	<!--<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self';">-->
-	<title>cockatiel | by vulbyte</title>
-	<meta http-equiv="Content-Security-Policy" content="script-src: 'self' 'unsafe-inline';">
+	<title>cockatiel | by @vulbyte</title>
 	<link rel="stylesheet" href="./global.css">
 	</link>
 	<script type="module" src="./configs/load_user_config.js"></script>
 </head>
+
+<script type='module'>
+	import {Monitor_Messages} from './lib/monitor_messages.js';
+
+	export var messageMonitor = new Monitor_Messages;
+</script>
 
 <body style="">
 	<hgroup style="display:flex; justify-content:space-around; height:3em !important; border-radius: 0px;">
@@ -19,6 +24,433 @@
 		<h6>by vulbyte</h6>
 		<img style="max-height:100%; width:3em;" src='./non-code_assets/vulbyte_icon.svg'>
 	</hgroup>
+
+	<div>
+		<h2>stream info</h2>
+		<style>
+			#enabled_streams {
+				display: flex;
+				justify-content: space-evenly;
+				width: 90%;
+			}
+
+			#enabled_streams>div {
+				border-radius: 1em;
+				background-color: var(--color_primary);
+				display: flex;
+				justify-content: center;
+				margin-bottom: 0.8em;
+				padding: 1em;
+				padding-bottom: 1em;
+			}
+
+			#enabled_streams>div>label {
+				margin: auto;
+				text-align: center;
+				width: 8em;
+			}
+		</style>
+		<div id='enabled_streams'>
+			<div style='background-color:#1877f2'><label>facebook: disabled</label></div>
+			<div style='background-color:#6441a5'><label>twitch: disabled</label> </div>
+			<div style='background-color:#1da1f2'><label>twitter: disabled</label> </div>
+			<div style='background-color:#ff0000'><label>youtube: disabled</label></div>
+		</div>
+		<script type='module'>
+			//import {messagesMonitor} from './index.html';
+			//window.addEventListener('load', (e) => {
+			console.log('making the buttons fancy')
+			let elem = document.getElementById('enabled_streams')
+			console.log(elem);
+
+			for (let i = elem.children.length - 1; i > -1; --i) {
+				let child = elem.children[i];
+				let default_color = child.style.backgroundColor;
+				child.id = child.children[0].innerText.slice(0, child.children[0].innerText.indexOf(':')) + '_button';
+				child.setAttribute('checked', false);
+				child.style.backgroundColor = '#555555' //`color-mix(in oklab, (${default_color}, rgb(0,0,0)))`
+
+				child.style.userSelect = 'none';
+				child.addEventListener('click', (e) => {
+					console.log('platform toggle clicked');
+					if (child.getAttribute('checked') == 'true') {
+						console.log('setting false');
+						child.setAttribute('checked', false);
+						child.style.backgroundColor = '#555555';
+						child.children[0].innerText = child.children[0].innerText.slice(0, child.children[0].innerText.indexOf(':') + 2) + 'disabled';
+						//messageMonitor.args.updateYoutube = false;
+					}
+					else {
+						console.log('setting true');
+						child.setAttribute('checked', true);
+						child.style.backgroundColor = default_color;
+						child.children[0].innerText = child.children[0].innerText.slice(0, child.children[0].innerText.indexOf(':') + 2) + 'enabled';
+						//messageMonitor.args.updateYoutube = true;
+					}
+				});
+			}
+			//});
+		</script>
+
+		<div style='margin:auto; width: 80%;'>
+
+			<style>
+				#new_list {
+					width: 80%;
+				}
+
+				#new_list>li {
+					display: flex;
+					justify-content: space-between;
+					margin: auto;
+					width: 89%;
+				}
+
+				#new_list>li>div {
+					padding-bottom: 0px;
+					margin-bottom: 0px;
+				}
+
+				#new_list>li>div>* {
+					margin-right: 0.5em;
+				}
+
+				#new_list>li>label {
+					padding-top: 0.7em;
+				}
+
+				#youtube_settings>li>div {
+					margin-bottom: 0px;
+					padding-bottom: 0px;
+				}
+			</style>
+			<details>
+				<summary>Youtube Stuff</summary>
+				<ol id='youtube_settings'>
+					<li><label>api Key</label>
+						<div>
+							<input type="password" id="youtube_apiKey" placeholder='eg: 1a2b3c4d5e6f7g'>
+							<button id='show_youtube_apiKey_button'>👁️show</button>
+							<script>
+								document.getElementById('show_youtube_apiKey_button').addEventListener('mousedown', (e) => {
+									document.getElementById('youtube_apiKey').type = 'text';
+									document.getElementById('show_youtube_apiKey_button').innerText = 'u show';
+								})
+								document.getElementById('show_youtube_apiKey_button').addEventListener('mouseleave', (e) => {
+									document.getElementById('youtube_apiKey').type = 'password';
+									document.getElementById('show_youtube_apiKey_button').innerText = '👁️show';
+									document.getElementById('toggle_youtube_apiKey_button').style.backgroundColor = 'var(--color_secondary)';
+								});
+							</script>
+							<button id='toggle_youtube_apiKey_button'>🔁 toggle <span id='yt_apiKey_timer_placement'></span></button>
+							<script type='module'>
+								import {IntTimer} from './lib/IntTimer.js';
+
+								function ShowYtApiKey() {
+									console.log('showing yt api');
+									document.getElementById('youtube_apiKey').type = 'text';
+									document.getElementById('toggle_youtube_apiKey_button').style.backgroundColor = '#ff0000';
+								}
+
+								function HideYtApiKey() {
+									console.log('hiding yt api');
+									document.getElementById('youtube_apiKey').type = 'password';
+									document.getElementById('toggle_youtube_apiKey_button').style.backgroundColor = 'var(--color_secondary)';
+								}
+
+								// {{{3 timers for hiding yt_apiKey
+								let timeoutDuration = 15;
+
+								let duration = new IntTimer({
+									'name': 'yt_apiKey_timer_placement',
+									'timeoutDuration': timeoutDuration,
+									'autostart': false,
+								});
+
+								let updateVisual = new IntTimer({
+									'name': 'yt_apiKey_timer_placement',
+									'timeoutDuration': 1,
+									'killOnTimeout': false,
+									'autostart': false,
+								});
+
+								updateVisual.Connect(() => {
+									console.log(timeoutDuration - duration.time);
+									document.getElementById('yt_apiKey_timer_placement').innerText = timeoutDuration - duration.time;
+
+									if (duration.time % timeoutDuration == 0) {
+										document.getElementById('yt_apiKey_timer_placement').innerText = '';
+										duration.Stop();
+										updateVisual.Stop();
+										HideYtApiKey();
+										return;
+									}
+								})
+								//}}}3
+
+								document.getElementById('toggle_youtube_apiKey_button').addEventListener('mousedown', (e) => {
+									if (document.getElementById('youtube_apiKey').type == 'password') {
+										ShowYtApiKey();
+										duration.Start();
+										updateVisual.Start();
+									}
+								});
+							</script>
+						</div>
+					</li>
+					<li><label>channel name</label>
+						<div>
+							<input type="text" id="youtube_channelName" placeholder='no "@"'>
+						</div>
+					</li>
+					<li><label>max Results per update </label>
+						<div>
+							<input id="youtube_maxResults" type="number" min='1' max='50' value='5'>
+						</div>
+					</li>
+					<li><label>update freq </label>
+						<div>
+							<input id="youtube_updateFreq" type="number" min='1' max='180' value='15'>
+						</div>
+					</li>
+				</ol>
+				<div>
+					<button id="load_youtube_config_button" text="sumbit" style='background-color:darkcyan;'>load config</button>
+					<button id="save_youtube_config_button" text="sumbit" style='background-color:darkseagreen;'>save
+						config</button>
+					<script type='module'>
+						import {assert} from './lib/assert.js';
+						import {PopUp} from './lib/popup.js';
+						import {YoutubeStuff} from './lib/youtubeStuff.js';
+						let yt = new YoutubeStuff;
+						//{{{3 load config
+						document.getElementById('load_youtube_config_button').addEventListener('click', () => {
+							try {
+								let yt_config = yt.GetConfig();
+								//console.log('loaded yt config: ', yt_config);
+
+								let anyNullValues = false;
+
+								let locations = document.getElementById('youtube_settings').getElementsByTagName('input');
+								console.log('locations=', locations);
+
+								for (let i = 0; i < locations.length; ++i) {
+									//console.log('loaded yt config: ', yt_config);
+									// get id && strip to _
+									let key = locations[i].id.slice(
+										locations[i].id.indexOf('_') + 1,
+										locations[i].id.length
+									);
+									key = key.trim()
+									console.log('key: ', key);
+									//if null set anyNullValues to true
+									let item = 'youtube_' + key;
+
+									if (document.getElementById(item).value != null) {
+										console.log('key', key, ' loaded yt config: ', yt_config);
+										console.log('value: ', yt_config[key]); // ???????
+										if (
+											document.getElementById(item).type == 'number' &&
+											typeof Number(yt_config[key]) === 'number'
+										) {
+											console.log('assigning key to num')
+											document.getElementById(item).value = Number(yt_config[key]);
+										}
+										else if (
+											typeof String(yt_config[key]) === 'string'
+										) {
+											document.getElementById(item).value = String(yt_config[key]);
+										}
+										else {
+											let msg = 'value was not inserted into table';
+											PopUp({
+												'title': 'value was not updated!',
+												'message': `value being;\n key: ${key} value:${yt_config[key]}`
+											})
+										}
+									}
+									else {
+										anyNullValues = true;
+									}
+									//else set ui
+									continue;
+								}
+
+
+								if (anyNullValues == true) {
+									PopUp({
+										'title': 'issue with loading youtube',
+										'message': `nothing is wrong, just some values aren't filled`,
+										'details': JSON.stringify(yt_config),
+									});
+								}
+
+
+								console.log(yt.args);
+							}
+							catch (err) {
+								PopUp({
+									'title': 'no existing config found!',
+									'message': 'no config found in memory,\ndid you rename it?',
+									'details': err,
+								})
+							}
+						});
+						//}}}3
+
+						//{{{3 save yt_config
+						document.getElementById("save_youtube_config_button").addEventListener('click', () => {
+							console.log('clickkkk')
+							let args = {
+								"apiKey": document.getElementById("youtube_apiKey").value,
+								"channelName": document.getElementById("youtube_channelName").value,
+								"maxResults": document.getElementById("youtube_maxResults").value,
+								"updateFreq": document.getElementById("youtube_updateFreq").value,
+							}
+
+							function puc() {document.getElementById('popup').remove();};
+							const googleCloudLink = 'https://cloud.google.com/docs/authentication/api-keys';
+
+							switch (args.apiKey) {
+								case (""):
+								case (undefined):
+								case (null):
+
+									PopUp({
+										'title': 'no youtube api key given!',
+										'message': `we need an api key to stream, you can get one here: ${googleCloudLink}`,
+										'prompt': 'click here to get api key',
+										'onAccept': () => {
+											try {
+												require('shell').openExternal(googleCloudLink);
+											}
+											catch (err) {
+												console.log(err);
+												puc();
+												PopUp({
+													'title': 'system error',
+													'message': 'cannot open with default system browser',
+													'prompt': 'click here to open in a new sub window',
+													'onAccept': () => {window.open(googleCloudLink, '_blank');},
+												});
+											}
+										}
+									});
+
+									return (-1);
+									break;
+								default:
+									break;
+							}
+
+							switch (args.channelName) {
+								case (""):
+								case (undefined):
+								case (null):
+									PopUp({
+										'title': 'no youtube channel name key given!',
+										'message': `your channel name is best is it's the name one in your @`,
+										'details': 'such as: "youtube.com/@<whatever is here>"',
+										'prompt': 'click here to get api key',
+										'onAccept': () => {
+											try {
+												require('shell').openExternal('youtube.com');
+											}
+											catch (err) {
+												console.log(err);
+												puc();
+												PopUp({
+													'title': 'system error',
+													'message': `cannot open with default system browser, you'll have to go their manually sorry: c`,
+												});
+											}
+										}
+									});
+									return (-1);
+									break;
+								default:
+									break;
+							}
+
+							console.log(args);
+
+							yt.SaveConfig(args);
+						});
+				//}}}3
+					</script>
+				</div>
+			</details>
+
+			<br>
+
+			<style>
+				#function_buttons {
+					margin: auto;
+					width: 80%;
+				}
+
+				#function_buttons>div {
+					display: flex;
+					justify-content: center;
+					margin: 0px;
+					padding: 0px;
+					padding-bottom: 0.5em;
+				}
+
+				#function_buttons>*>button {
+					margin: auto;
+					width: 40%
+				}
+			</style>
+			<div id='function_buttons'>
+				<div>
+					<button id='start_monitoring_button' style='background-color: darkgreen;'>start monitoring</button>
+					<button id='stop_monitoring_button' style='background-color: darkred;'>stop monitoring</button>
+				</div>
+			</div>
+			<script type='module'>
+				// {{{1 config things
+				//############################################################  
+				// imports
+				//############################################################  
+				console.log('starting imports');
+				import {PopUp} from './lib/popup.js';
+				import {Monitor_Messages} from './lib/monitor_messages.js';
+				import {YoutubeStuff} from './lib/youtubeStuff.js';
+				import {assert} from './lib/assert.js';
+				console.log('finished imports');
+
+				//############################################################  
+				// vars
+				//############################################################  
+				let mm = new Monitor_Messages;
+				let mmyt = Monitor_Messages.yt_config;
+				let yt = new YoutubeStuff;
+
+				//############################################################  
+				// event listeners
+				//############################################################  
+				//{{{3 start monitoring btn
+				document.getElementById('start_monitoring_button').addEventListener('click', () => {
+					mm.args['updateYoutube'] = () => {return (document.getElementById('youtube_button').checked)};
+					mm.Start_Monitor();
+				});
+				//}}}3
+
+				//{{{3 stop monitoring btn
+				document.getElementById('stop_monitoring_button').addEventListener('click', () => {
+					console.log('messages stop get');
+				})
+					//}}}3
+					//}}}1 new get messages loop
+					//############################################################
+					//runtime
+					//############################################################  
+			</script>
+		</div>
+
+	</div>
+	<hr>
 
 	<div>
 		<h2>📺 stream stuff 📺</h2>
