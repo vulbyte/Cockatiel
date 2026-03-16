@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>	
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Cockatiels local test/run</title>
+		<script type="module">
+			window.debug = true;
+			import Cockatiel from './Cockatiel.mjs';
+			window.Cockatiel = new Cockatiel();
+			document.addEventListener("DOMContentLoaded", (event) => {
+				console.log("initing Cockatiel");
+				try{
+					window.Cockatiel.Init();
+					console.log("init success");
+				}
+				catch(err){
+					console.error("init fail", err, err.stack);
+				}
+			});
+			console.log("Cockatiel added to window");
+			/*
+			window.tibSleepingAnimation = await fetch("./tib_stuff/tib_sleeping.gif");
+			console.log("added the eepy them");
+			*/
+	</script>
+</head>
+<body>
+	
+</body>
+</html>

@@ -1,7 +1,6 @@
-import {YoutubeV3} from "./imports/youtubeV3ApiAccessor/youtube_state.mjs"
-import TTSManager from "./imports/webTTSManager/TTSManager.mjs";
-import {IntTimer} from "../../../lib/imports/intTimer/intTimer.mjs";
-import {TrieTree} from "../../../lib/trie_tree.mjs";
+import {YoutubeV3} from "./youtube_state.mjs"
+import {IntTimer} from  "./intTimer.mjs";
+import {TrieTree} from  "./trie_tree.mjs";
 
 // magic values
 let trigrams; // = await fetch('/content/stream_utils/tib_stuff/trigrams.json').then((res) => {return res.json()});
