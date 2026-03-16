@@ -37,3 +37,17 @@ because i don't want this project to become some thing obfuscated/highjacked by 
 [cough](https://www.reddit.com/r/OutOfTheLoop/comments/qw5e2u/comment/hl0wsv6/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button),
 [cough](https://x.com/OBSProject/status/1460782968633499651),
 i
+
+---
+
+side research scratchpad because yurr:
+billi-billi: `scaping?` [scraping option](https://github.com/mistgc/bili-live-chat),
+facebook: curl [docs](https://developers.facebook.com/docs/live-video-api/),
+instagram: no idea [i think this is not it but worth a shot](https://developers.facebook.com/docs/messenger-platform/instagram/),
+kick: curl [docs](https://docs.kick.com/apis/livestreams),
+picarto: curl-http [docs](https://api.picarto.tv/),
+tiktok: `scraping?` [scraping option for now](https://github.com/jpw142/rscraperTikTokLive),
+twitch: curl-http [docs](https://dev.twitch.tv/docs/chat/send-receive-messages/),
+twitter: curl-http/webhook [docs i think](https://docs.x.com/x-api/introduction?search=livestream+messages),
+vimeo: no idea [i beleive these are the docs](https://help.vimeo.com/hc/en-us/articles/12427783601937-How-to-use-the-Vimeo-Live-API),
+youtube connection standard: [curl-http](https://developers.google.com/youtube/v3/live/docs/liveChatMessages)/[grpc](https://developers.google.com/youtube/v3/live/streaming-live-chat) ,
