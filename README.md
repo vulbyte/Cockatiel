@@ -1,4 +1,27 @@
 # Cockatiel
+
+## roadmap for v1:
+tests: 
+- [ ] - [private] universal test markup using an iml or something to generate tests for multiple languages
+- [ ] - [private] expanded atomic tests for JS
+- [ ] - [private] expanded macro tests for JS
+- [ ] - [private] expanded atomic tests for RUST
+- [ ] - [private] expanded macro tests for RUST
+events:
+- [ ] - stream state object for referencing (ie for the clip command)
+- [ ] - prediction command
+    - [ ] - vote command
+- [ ] - (n)x points multiplier event
+commands:
+- [ ] - clip command with relative positioning
+customization:
+- [ ] - global calling cards
+misc:
+- [ ] - proper import/exporting of state
+- [ ] - call local tts model [ie models from hugging face](https://huggingface.co/models?pipeline_tag=text-to-speech&sort=trending)
+
+## tldr:
+
 tts and chat management for streamers
 
 > why make this?
@@ -21,6 +44,13 @@ to keep it simple, here's the general loop:
 while the main loop is running, there is seperate loops for each process happening aswell, 
 
 ### FAQ:
+> why are you locking global syncing behind a paid cost?
+because servers cost money, and i'm barley able to sustain myself. if i had affluent amounts of welth maybe, but unless you want another platform like [discord and their palantir scandal](https://www.bbc.com/news/articles/cn4g8ynpwl8o), it's best to make sure the platform is sustainable but decoupled to ensure users rights aren't violated.
+
+> why is there no blacklist for bad works by default?
+1. i have no faith my account wont get instabanned for just having a bunch of bad words and slurs due to ai moderation,
+2. i'm not trying to tell you how to police your community or how it should be ran/managed. i'm not your mom and i don't know what your standards are, so i'll leave it upto you and your community to form and build how it wants.
+
 > why are the tests private?
 AI companies and what not training off the data, tests have been semi-consistently a major key point for AI companies, and although i'm not completely against AI [see my ethics on AI here](https://vulbyte.com/policies/AI), as outlined in the link, AI companies right now are what i consider to be largely immoral right now, and for that i refuse to support them as is.
 
