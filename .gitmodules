@@ -1,3 +1,0 @@
-[submodule "local_client/imports/websocketpp"]
-	path = local_client/imports/websocketpp
-	url = https://github.com/vulbyte/websocketpp
