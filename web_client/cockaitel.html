@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<script src="/client_management.js" type="module"></script>
+		<script type="module">
+			window.debug = true;
+			import Cockatiel from './tib_stuff/Cockatiel.mjs';
+			window.Cockatiel = new Cockatiel();
+			document.addEventListener("DOMContentLoaded", (event) => {
+				console.log("initing Cockatiel");
+				try{
+					window.Cockatiel.Init();
+					console.log("init success");
+				}
+				catch(err){
+					console.error("init fail", err, err.stack);
+				}
+			});
+			console.log("Cockatiel added to window");
+			/*
+			window.tibSleepingAnimation = await fetch("./tib_stuff/tib_sleeping.gif");
+			console.log("added the eepy them");
+			*/
+		</script>
+		<title>tib 4</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Geist+Mono:wght@100..900&family=Permanent+Marker&display=swap" rel="stylesheet">
+	</head>
+<body>
+	<style>	
+		.chatMessageContainer {
+			display:relative;
+			max-width:100%;
+			max-height: 100%;
+			overflow: hidden;
+			padding-bottom:2rem;
+
+			.chatUserBubble {	
+				display:flex;
+				flex-direction: row;
+				height:3.2em;
+
+				.chatBubbleTailContainer{
+					display:flex;
+					flex-direction:column-reverse;
+					height:100%;
+
+					.chatBubbleTailContainer {
+						position:relative;
+						bottom:0px;
+						width:1.3rem;
+						height:1.3rem;
+
+						.chatBubbleTail {
+
+						}
+					}
+				}
+				.chatUserInfo {
+					background-color: #ff8;
+					border-radius: 3rem;
+					border-bottom-left-radius: 0px;
+					color: black;
+					display:flex;
+					flex-direction: row;
+					font-family:system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+					padding:0.2rem;
+
+					.chatUserImageContainer{
+						background-color: #000;
+						border-radius:100%;
+						height:3rem;
+						width:3rem;
+						transform:translateY(-0.1rem);
+
+						.chatUserImage{
+							height:3.2rem;
+							width:3.2rem;
+							padding:0.2rem;
+						}
+					}
+					.chatUserStats{
+						.chatUsername{
+							width:18rem;
+							font-weight:bolder;
+							overflow:hidden;
+							text-overflow: ellipsis;
+						}
+						.chatUserCommendations{
+							font-size:0.7rem;
+						}
+					}
+				}
+			}
+			.chatMessageBubble {
+				background-color:#111;
+				border-radius:1.3rem;
+				border-top-left-radius: 0rem;
+				border-top-right-radius: 0rem;
+				color: white;
+				padding:1rem;
+				margin-left: 1.3rem;
+				width: 20rem;
+
+				.chatCommandContainer{
+					height:1rem;
+					padding-bottom:1rem;
+
+					.chatCommand	{
+						background-color: #222;
+						border-radius:1rem;
+						color: cyan;
+						font-size: 0.5rem;
+						padding:0.2rem;
+						padding-left: 0.7rem;
+						height:min-content;
+						width: auto;
+					}
+				}
+
+				.chatMessage {
+					padding-top:0.2rem;
+				}
+			}
+		}
+	</style>
+
+	<br>
+	<br>
+
+	<!-- DO NOT DELETE, is template for chat messages -->
+	<!--
+	<div style="width:400px; height:800px; background-color: #030;">
+		<div class="chatMessageContainer">
+			<div class="chatUserBubble">
+				<div class="chatBubbleTailContainer">
+					<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src="/content/stream_utils/tib_stuff/whispy_tail.png"></div>
+				</div>
+				<div class="chatUserInfo">
+					<div class="chatUserImageContainer"><img class="chatUserImage" alt="chatUserImage" src="/assets/headshot_doodle.png"></div>		
+					<div class="chatUserStats">
+						<div class="chatUsername">@usernameUSERNAMEusernameUSERNAME</div>		
+						<div class="chatUserCommendations">community: 1, engagement: 5, support: 2, rep: 8</div>
+					</div>
+				</div>
+			</div>
+			<div class="chatMessageBubble">
+				<div class="chatCommandContainer">
+					<div class="chatCommand">!tts -v 69 -p 1.9 -r 0.8 </div>
+				</div>
+				<div class="chatMessage">
+				Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Aenean commodo ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem. Nulla consequat massa quis enim. Donec pede justo, fringilla vel, aliquet nec, vulputate.
+				</div>
+			</div>
+		</div>
+
+		<div class="chatMessageContainer">
+			<div class="chatUserBubble">
+				<div class="chatBubbleTailContainer">
+					<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src="/content/stream_utils/tib_stuff/whispy_tail.png"></div>
+				</div>
+				<div class="chatUserInfo">
+					<div class="chatUserImageContainer"><img class="chatUserImage" alt="chatUserImage" src="/assets/headshot_doodle.png"></div>		
+					<div class="chatUserStats">
+						<div class="chatUsername">@usernameUSERNAMEusernameUSERNAME</div>		
+						<div class="chatUserCommendations">community: 1, engagement: 5, support: 2, rep: 8</div>
+					</div>
+				</div>
+			</div>
+			<div class="chatMessageBubble">
+				<div class="chatCommandContainer">
+					<div class="chatCommand">!tts -v 69 -p 1.9 -r 0.8 </div>
+				</div>
+				<div class="chatMessage">
+				Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Aenean commodo ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem. Nulla consequat massa quis enim. Donec pede justo, fringilla vel, aliquet nec, vulputate.
+				</div>
+			</div>
+		</div>
+	</div>
+	-->
+
+	<style>
+		#checklist>li>input {max-width:3rem !important;}
+		#checklist>li>ul>input {max-width:3rem !important;}
+		#checklist>li>ul>li>input {max-width:3rem !important;}
+	</style>
+	<!--
+	<ul id="checklist">
+		<li><input type="checkbox" value="false">decouple tts from getting messages</li>	
+		<li>
+			<ul><input type="checkbox" value="false"><span style="color:#555;">implement point spending (if not enough send message in chat)</span>
+			<li><input type="checkbox" value="false">add ui to edit points values of commands</li>	
+			<li style="color:#555"><input type="checkbox" value="false">if has points, add cmd, if not ignore</li>	
+			<li style="color:#555;"><input type="checkbox" value="false">remove points from user if add score</li>	
+		</ul>	
+		</li>
+		<li><input type="checkbox" value="false">give user points</li>	
+		<li><input type="checkbox" value="false">remove user points</li>	
+		<li><input type="checkbox" value="false">way to view users</li>	
+		<li><input type="checkbox" value="false">way to view banned words</li>	
+		<hr>
+		<li><input type="checkbox" value="false">!clip function</li>	
+		<li style="color:#555"><input type="checkbox" value="false">!help function</li>	
+		<li style="color:#555"><input type="checkbox" value="false">send messages in chat</li>	
+		<hr>
+		<li style="color:#555"><input type="checkbox" value="false">badge system</li>	
+		<hr>
+		<li>
+			<ul><input type="checkbox" value="false">!prediction function (limited to mods) (makes pool, distributes based on points put in)
+				<li><input type="checkbox" value="false">ui element for viewers</li>	
+				<li><input type="checkbox" value="false">!prediction -p (p for prompt)</li>	
+				<li><input type="checkbox" value="false">!vote -y/n (yes/no) -p (points to vote with) for user (limit max to points user has)</li>	
+				<li><input type="checkbox" value="false">!prediction -r (r for refund incase something happens)</li>	
+				<li><input type="checkbox" value="false">!prediction -dd ([double down], reserve the points winnings for the next prediction, for 3x or nothing)</li>	
+				<li><input type="checkbox" value="false">!prediction -o y/n (to cash out)</li>	
+			</ul>	
+		</li>
+		<hr>
+		<li><input type="checkbox" value="false">if someone in chat says frozen, restart obs capture automagically</li>	
+	</ul>
+	-->
+	<h1>TiB</h1>	
+	<div>
+		<label>systemMessageTest</label>
+		<input id="systemMessageTest" type="text">
+		<button type="button" onclick="((e)=>{
+			window.Cockatiel.PushSystemNotificaitonToChatWindow(document.getElementById('systemMessageTest').value);
+		})()">sent to chat window</button>
+	</div>
+			
+</body>
+</html>
