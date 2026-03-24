@@ -47,7 +47,10 @@ export class IntTimer {
 		}
 	}
 
-Start() {
+async Start() {
+	if(this.emitOnStart == true){
+		await this.Timeout();
+	}
         if (this.alive) return; 
         this.alive = true;
         this.time = 0; // Reset time on start

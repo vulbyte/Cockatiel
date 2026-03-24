@@ -70,7 +70,7 @@ export default class Cockatiel {
 			    })
 			}
 		},
-		errored_queue: {
+		errored_data: {
 		    version: 1,          	
 		    data: null,           	// raw data that errored
 		    hardware: null,       	// hardware info of the system that failed
@@ -94,6 +94,7 @@ export default class Cockatiel {
 		},
 		messages: {
 			//originalData: {},
+			type: "message",
 			version: 1,
 			username: null,
 			userUuid: null,
@@ -181,6 +182,7 @@ export default class Cockatiel {
 			isVerified: false, // if they have been verified by the platform
 			firstSeen: null, //Date.now()
 			points : 0,
+			totalPoints: 0,
 			styling: { // ONLY CUSTOMIZABLE PROPERTIES ARE HERE, styles are whiteliste'd
 				chatMessageContainer: {
 					styling: ``,
@@ -244,7 +246,6 @@ export default class Cockatiel {
 	#state = { // when saving and loading this is what will be saved/loaded
 		bannedWordsArray: [], //do not add manually, use the AddBannedWord/RemoveBannedWordFunctions
 		bannedWordsTrie: new TrieTree(), // tree that's good for strings, basically all you need to worry about is: add(), remove(), ContainsString()
-		clip_queue: [],
 		// NOTE: Assuming this function is part of a class/module where
 		config: {
 		  monitorMessages : {
@@ -360,26 +361,22 @@ export default class Cockatiel {
 			*/ 
 		},
 		debug: true,
-		doubleDownQueue: [],
-		errored_queue: [], //queue for any/all messages that have errored for ANY reason
-		events: [],
 		flaggedMessageQueue: [],
-		logs: new Array(), //history for all messages, stats, bans, etc
-		messages: [],
-		subWindows: {},
+		event_timeline: [], // everything that has happened, messages, tts, etc
 		timers: {/*declared at the start of the constructor*/},
-		unprocessed_queue: [], // messages returned from yt fetch
-		users: {},
 		windows: {
+			main: {
+				insertId: "cockatiel_settings_container",
+			},
 			chat: {
 				key: "chatDisplay",
 				height: 800,
 				width: 420,  // this was an accident lol
 				background: "#0f0",
-				color: undefined,
+				color: "#000",
 				messageDisplayDuration: 7,
 				displayRate: {min: 1.1, max: 5}, // min and max values for when to add the next message to chat display
-				defaultStylesheet: "http://127.0.0.1:8080/content/stream_utils/tib_stuff/stylesheets/chatMessage-modernMinimal.css", 
+				defaultStylesheet: "/stylesheets/chatMessage-modernMinimal.css", 
 				//"./stylesheets/chatMessage-modernMinimal.css",
 			},
 			events: {
@@ -390,9 +387,47 @@ export default class Cockatiel {
 				color: undefined,	
 				defaultStylesheet: "",
 			}
-		}
-	}
+		},
+		unprocessed_queue: [], // messages returned from yt fetch
+		users: {},
+	};
 
+	subWindows = {};
+	/**
+	 * Checks if an object is safe for structured cloning (postMessage, IndexedDB, etc.)
+	 * @returns {boolean} true if safe, false if it contains non-cloneable nodes.
+	 */
+	ProbeForBadNodes(obj = this.#state.event_timeline, path = 'root', visited = new WeakSet()) {
+	    // 1. Primitives and null are always cloneable
+	    if (obj === null || typeof obj !== 'object') return true;
+
+	    // 2. Handle circular references
+	    if (visited.has(obj)) return true;
+	    visited.add(obj);
+
+	    try {
+		// Test current level
+		structuredClone(obj);
+		return true; 
+	    } catch (e) {
+		// 3. If it fails, check if this specific leaf is a DOM node
+		if (obj instanceof Node) {
+		    console.warn(`🛑 Non-cloneable found at [${path}]`);
+		    console.warn(`Type: ${obj.constructor.name} | NodeName: ${obj.nodeName}`);
+		    return false;
+		}
+
+		// 4. Recurse through keys to find the specific culprit
+		let allClear = true;
+		for (const key in obj) {
+		    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+			const result = this.ProbeForBadNodes(obj[key], `${path}.${key}`, visited);
+			if (!result) allClear = false;
+		    }
+		}
+		return allClear;
+	    }
+	}
 	// for functions that listen for an event to trigger before executing.
 	eventListeners = {
 		unprocessedAdded: [],
@@ -403,7 +438,7 @@ export default class Cockatiel {
 	}
 
 	GetState(){
-		return (this.#state);
+		return /*structuredClone*/(this.#state);
 	}
 
 	CastValueToType(value, type){
@@ -432,11 +467,24 @@ export default class Cockatiel {
 		return value;
 	}
 	AddLogToLogs(logObj){
-		this.#state.logs.push(logObj);
+		this.#state.event_timeline.push(logObj);
 		return true;
 	}
 	GetLogs(){
-		return this.#state.logs;
+		let logsArr = [];
+		let timelineClone = structuredClone(this.#state.event_timeline);
+
+		for(let i = 0; i < timelineClone; ++i){
+			if(
+				timelineClone[i].type == "logs" 
+				|| timelineClone[i] == "log" 
+				|| timelineClone[i] == "l" 
+			){
+				logsArr.push(timelineClone[i]);
+			}
+		}
+
+		return msgArr;
 	}
 
 	DebugPrint(args = {}) {
@@ -538,92 +586,121 @@ export default class Cockatiel {
 	    return `${mins}:${secs.toString().padStart(2, '0')}`;
 	}
 
-	ExportState() {
-	    const seen = new WeakSet(); // Track visited objects
+	FindCyclicPaths(obj, path = "root", visited = new WeakSet()) {
+	    // 1. Only check objects (and not null)
+	    if (obj !== null && typeof obj === 'object') {
+		
+		// 2. If we've seen this exact object reference before, it's cyclic
+		if (visited.has(obj)) {
+		    console.warn(`cyclic value: ${path}`);
+		    return;
+		}
 
-	    const jsonString = JSON.stringify(this.#state, (key, value) => {
-		// 1. Handle Objects/Circular Refs
-		if (typeof value === "object" && value !== null) {
-		    if (seen.has(value)) {
-			return; // Discard circular reference
+		// 3. Add the current object to the visited set
+		visited.add(obj);
+
+		// 4. Recursively check all keys
+		for (const key in obj) {
+		    if(key == "subWindows"){continue;}
+		    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+			// Build the path string (e.g., "car.engine.piston")
+			const newPath = Array.isArray(obj) ? `${path}[${key}]` : `${path}.${key}`;
+			this.FindCyclicPaths(obj[key], newPath, visited);
 		    }
-		    seen.add(value);
 		}
+	    }
+	}
 
-		// 2. Convert Trie to Array
-		if (key === 'bannedWords' && value instanceof TrieTree) {
-		    return value.ToArray();
+	ExportState() {
+	    // 1. Create a deep clone so we don't break the live app
+	    // We use a custom cloner because structuredClone fails on DOM/Windows
+	    let stateCopy = JSON.parse(JSON.stringify(this.#state, (key, value) => {
+		// If we hit a window object or a circular-prone key, skip it
+		if (key === 'subWindows' || key === 'domElement' || key === 'window') {
+		    return undefined; 
 		}
-
-		// 3. Remove functions
-		if (typeof value === 'function') {
-		    return undefined;
-		}
-
 		return value;
-	    }, 4);
+	    }));
 
-	    return jsonString;
+	    // 2. Clear out the windows object specifically if it's still causing issues
+	    if (stateCopy.windows) {
+		delete stateCopy.windows;
+	    }
+
+	    // 3. Now it is safe to stringify
+	    return JSON.stringify(stateCopy, null, 4);
 	}
 
 	async ImportState(input) {
-	    this.DebugPrint({msg: "ImportState: Determining input type..."});
+	    this.DebugPrint({ msg: "ImportState: Determining input type..." });
 	    let data;
 
 	    try {
-		// 1. Handle Event (from onchange or drag-and-drop)
+		// 1-4: Standard data extraction (Parsing the input)
 		if (input?.target?.files) {
 		    const file = input.target.files[0];
 		    if (!file) return;
-		    const text = await file.text();
-		    data = JSON.parse(text);
-		} 
-		// 2. Handle direct File object
-		else if (input instanceof File) {
-		    const text = await input.text();
-		    data = JSON.parse(text);
-		}
-		// 3. Handle raw JSON String
-		else if (typeof input === 'string') {
+		    data = JSON.parse(await file.text());
+		} else if (input instanceof File) {
+		    data = JSON.parse(await input.text());
+		} else if (typeof input === 'string') {
 		    data = JSON.parse(input);
-		}
-		// 4. Handle already-parsed Object
-		else if (typeof input === 'object' && input !== null) {
+		} else if (typeof input === 'object' && input !== null) {
 		    data = input;
-		} 
-		else {
+		} else {
 		    throw new Error("Unsupported import type.");
 		}
 
 		// --- Re-hydration Logic ---
-		this.DebugPrint({msg: "Converting banned words to Trie structure"});
+
+		// 1. Re-hydrate the TrieTree (bannedWords)
+		this.DebugPrint({ msg: "Converting banned words to Trie structure" });
 		const newTrie = new TrieTree();
-		if (Array.isArray(data.bannedWords)) {
-		    data.bannedWords.forEach(word => newTrie.Add(word));
+		// Check both 'bannedWords' (the array) and 'bannedWordsTrie' (the key name)
+		const wordsSource = data.bannedWords || data.bannedWordsTrie;
+		if (Array.isArray(wordsSource)) {
+		    wordsSource.forEach(word => newTrie.Add(word));
 		}
 
-		this.DebugPrint({msg: "Assigning state to imported value"});
-		// We merge with existing state to ensure any internal-only values aren't lost
-		this.#state = {
-		    ...this.#state,
-		    ...data,
-		    bannedWordsTrie: newTrie,
-		    // Re-bind commands
-		    commands: data.commands.map(cmd => {
-			if (cmd.command === "tts") cmd.func = this.CallTts.bind(this);
-			return cmd;
-		    })
+		// 2. Handle Windows merge
+		// If the import file doesn't have windows (because we deleted them during export), 
+		// we keep our current live windows.
+		const mergedWindows = {
+		    ...this.#state.windows,
+		    ...(data.windows || {}) 
 		};
-		
-		this.DebugPrint({msg: "Import successful!"});
+
+		// 3. Assign to state
+		this.DebugPrint({ msg: "Assigning state to imported value" });
+		this.#state = {
+		    ...this.#state,   // Start with current defaults
+		    ...data,          // Overwrite with imported data
+		    windows: mergedWindows, // Use the carefully merged windows
+		    bannedWords: newTrie,   // Assign the actual Class instance back
+		};
+
+		// 4. Re-bind commands if they exist in the imported data
+		if (Array.isArray(this.#state.commands)) {
+		    this.#state.commands = this.#state.commands.map(cmd => {
+			if (cmd.command === "tts") {
+			    cmd.func = this.CallTts.bind(this);
+			}
+			// Add logic here for other command re-bindings if needed
+			return cmd;
+		    });
+		}
+
+		this.DebugPrint({ msg: "Import successful!" });
 
 	    } catch (err) {
 		console.error("ImportState failed:", err);
+		this.DebugPrint({ msg: "Import failed", type: "error", val: err });
 	    }
 
+	    // Refresh UI
 	    this.UpdateUserDisplay();
 	    this.UpdateBannedWordsList();
-	}	
+	}
 
 	ProcessVoteCommand(processedMsg) {
 		let ret = this.templates.messageCommand;	
@@ -814,7 +891,7 @@ export default class Cockatiel {
 				ret.isValid = false;
 		}
 
-		if(this.#state.events.length > 0){
+		if(this.GetEvents().length > 0){
 			if(HandleVoteStateUpdate(ret) == true){
 				ret.executedAt = Date.now();
 			}
@@ -844,12 +921,13 @@ export default class Cockatiel {
 	 * @param {string} userUuid - The UUID of the voter
 	 * @returns {boolean} - Success or failure
 	 */
-	HandleVoteStateUpdate(commandObj, userUuid) {
-	    // 1. Safety Check: Only process if the command itself is valid
+	async HandleVoteStateUpdate(commandObj, userUuid) { //TODO: rework this carp
+	    // 1. Safety Check: Only process if the command itself is valid 
 	    if (!commandObj || !commandObj.isValid) return false;
 
+	    let eventsArr = await this.GetEvents();
 	    // 2. Locate the active prediction event
-	    const activePrediction = this.#state.events.find(e => 
+	    const activePrediction = eventsArr(e => 
 		e.type === "prediction" && !e.completedAt
 	    );
 
@@ -898,7 +976,7 @@ export default class Cockatiel {
 	    return true;
 	}
 
-	ProcessPredictionCommand(messageObject) {
+	async ProcessPredictionCommand(messageObject) {
 	    this.DebugPrint({msg: "--- Function Entered ---"});
 	    
 	    // 1. Resolve the message content - Added rawMessage as a fallback
@@ -957,23 +1035,25 @@ export default class Cockatiel {
 	    else if (eFlag?.value !== undefined || rFlag?.value !== undefined) {
 		this.DebugPrint({msg: "Conditions met for Resolution."});
 
-		const activeEvent = this.#state.events.find(e => e.type === "prediction");
-		if (!activeEvent) {
-		    this.DebugPrint({msg: "Resolution failed: No active prediction found."});
-		    return commandObj;
-		}
+			let events = await this.GetEvents();
 
-		let winningSide = 'refund'; 
-		const val = eFlag?.value?.toLowerCase();
+			const activeEvent = events(e => e.type === "prediction");
+			if (!activeEvent) {
+			    this.DebugPrint({msg: "Resolution failed: No active prediction found."});
+			    return commandObj;
+			}
 
-		if (val === 'y' || val === 'yes') {
-		    winningSide = 'yes';
-		} else if (val === 'n' || val === 'no') {
-		    winningSide = 'no';
-		}
+			let winningSide = 'refund'; 
+			const val = eFlag?.value?.toLowerCase();
+
+			if (val === 'y' || val === 'yes') {
+			    winningSide = 'yes';
+			} else if (val === 'n' || val === 'no') {
+			    winningSide = 'no';
+			}
 
 		this.EndPrediction(activeEvent.id, winningSide);
-		this.#state.events = this.#state.events.filter(e => e.id !== activeEvent.id);
+		events(e => e.id !== activeEvent.id);
 		this.EventDisplayManager();
 		
 		this.DebugPrint({msg: `Prediction ${activeEvent.id} resolved as: ${winningSide}`});
@@ -1039,7 +1119,7 @@ export default class Cockatiel {
 
 	    // 3. Attach Listener (Keep your existing UI logic here)
 	    newPred.state.timeRemainingUntilLockout.AddTickListener(() => {
-		/* ... your UI code ... */
+		    // TODO: add stuff here
 	    });
 
 	    // 4. Finalize
@@ -1052,8 +1132,9 @@ export default class Cockatiel {
 
 	RenderPredictionHtml(event) {
 	    const { id, type, state } = event;
-	    const eventsWin = this.#state.subWindows["events"];
+	    let eventsWin;
 		try{
+			eventsWin = this.subWindows["events"];
 		    if (!eventsWin || !eventsWin.document) return "";
 
 		    const targetDoc = eventsWin.document;
@@ -1135,9 +1216,10 @@ export default class Cockatiel {
 		</div>`;
 	}
 
-	EndPrediction(eventId, winningSide) {
+	async EndPrediction(eventId, winningSide) {
 	    this.DebugPrint({msg: `Ending prediction: ${eventId} with outcome: ${winningSide}`});
-	    const event = this.#state.events.find(e => e.id === eventId);
+	    let events = await this.GetEvents();
+	    const event = events.find(e => e.id === eventId);
 	    if (!event) return { error: "Event not found" };
 
 	    const state = event.state;
@@ -1219,94 +1301,101 @@ export default class Cockatiel {
 		payouts: results
 	    };
 	}
-
-
-	AddEventToEventQueue(event){
-		this.#state.events.push(event);
+	
+	async GetStandbyEventHtml(){
+		const html = `
+			<div style="
+				width:400px; 
+				height:300px; 
+				background-color:pink;
+			">
+				<div style="
+					display:flex; 
+					flex-direction:column; 
+					justify-content:space-evenly; 
+					background-color:black; 
+					width:100%; 
+					height:100%;
+				">
+					<div style="
+						display:flex; 
+						flex-direction:row; 
+						justify-content:space-evenly; 
+						width:100%;
+					">
+						<p style="color:#ddd">No Events Happening Right Now!</p>
+					</div>
+					<div style="
+						display:flex; 
+						flex-direction:row; 
+						justify-content:space-evenly; 
+						width:100%;
+					">
+						<div>
+							<img style="color:#aaa" src="./assets/sleepi_tib.png" alt="new events probably happening soon!">
+						</div>
+					</div>
+				</div>
+			</div>
+		`;	
+		return html;
 	}
 
-EventDisplayManager() {
-	let silent;
-	try{
-		if(document){this.DebugPrint({msg: "document found, updating display"});}
+	async UpdateEventDisplayWindowWithNewHTML(html){ //returns 0 on success, other on fail
+		if(html == null || html == undefined){
+			//this.DebugPrint({msg: "cannot update event display, no html given"});
+			return 1;
+		}
+
+		//let w /*window*/ = this.subWindows[this.#state.windows.events.key];
+		
+		    const win = this.subWindows[this.#state.windows.events.key];
+		    if (!win || win.closed) {
+			//this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
+			return;
+		    }
+
+		    /*win.postMessage({ 
+			type: 'newHtml', 
+			payload: html,
+		    }, "*");*/
+		win.document.body.innerHTML = html;
+		return 0;
 	}
-	catch(err){
-	    this.DebugPrint({msg: "no document found, skipping update", error:err, silent: silent});		
+
+	async EventDisplayManager() {
+		console.log({msg: "eventDisplayManagerCalled"});
+		let events = await this.GetActiveEvents();
+		console.log({msg: "got events:", val: events});
+		let html;
+		if(events.length < 1 || events == null || events == undefined){
+			html = await this.GetStandbyEventHtml();
+			console.log({
+				msg: "no events, adding placeholder html", 
+				// val: JSON.stringify(html)
+			});
+			let result = await this.UpdateEventDisplayWindowWithNewHTML(html);	
+			switch(result){
+				case(0):
+					//this.DebugPrint({msg: "event display without error"});
+				default:
+					console.log({
+						msg: "event display errored with value:", 
+						val: result, 
+						type:"e"
+					});
+			}
+			return;
+		}
+
+		//logic for multiple events
+		console.log({
+			msg: "at least one active event found!", 
+			//val: JSON.stringify(html),
+		});
+
 		return;
 	}
-
-    	this.DebugPrint({msg: "Event Display Manager called", scilent: true});
-
-	let targetDoc; 
-    	const eventsWin = this.#state.subWindows["events"].key;
-	try{
-	    if (!eventsWin || !eventsWin.document) {
-		this.DebugPrint({msg: "Manager Error: Sub-window or document missing.", type: "err", silent: silent});
-		targetDoc = eventsWin.document;
-		return;
-	    }
-	}	
-	catch(err){
-		this.DebugPrint({msg: "document not found, skipping append", error: err, silent: silent})
-		return;
-	}
-
-    // 1. Identify what should be on screen
-    let targetHtml = "";
-    let targetId = "";
-
-    if (!this.#state.events || this.#state.events.length === 0) {
-        targetId = "standby-screen";
-        targetHtml = this.RenderStandbyHTML();
-    } else {
-        const currentEvent = this.#state.events[0];
-        targetId = String(currentEvent.id);
-
-        switch (currentEvent.type?.toLowerCase()) {
-            case "prediction":
-                targetHtml = this.RenderPredictionHtml(currentEvent);
-                break;
-            default:
-                targetId = "standby-screen";
-                targetHtml = this.RenderStandbyHTML();
-        }
-    }
-
-    // 2. THE GATE: Only update if the specific ID is missing
-
-    let existingElement;
-	try{
-		targetDoc.getElementById(targetId);
-	}
-	catch(err){
-		this.DebugPrint({msg: `targetDoc does not contain element with id ${targetId}`, type: "err", silent: silent});
-		return;
-	}
-
-    if (!existingElement) {
-        this.DebugPrint({msg: `Rendering New Content: [${targetId}]`, silent: silent});
-        
-        // We do not "Clear" separately. 
-        // We perform an "Atomic Write" to the body.
-        if (targetHtml && targetHtml.trim() !== "") {
-            targetDoc.body.innerHTML = targetHtml;
-        } else {
-            this.DebugPrint({msg: "Warning: targetHtml was empty. Rendering standby instead.", silent: silent});
-            targetDoc.body.innerHTML = this.RenderStandbyHTML();
-        }
-    } else {
-        // ID exists, so we do nothing and let the TickListeners handle updates
-        this.DebugPrint({msg: `ID [${targetId}] already exists. Skipping update.`, silent: silent});
-    }
-
-    // 3. Queue Rotation
-    if (this.#state.events && this.#state.events.length > 1) {
-        const finishedEvent = this.#state.events.shift();
-        this.#state.events.push(finishedEvent);
-    }
-
-    this.#state.timers.EventDisplayTimer.Restart();
-}
 
 	tib_sleeping = '';
 	RenderStandbyHTML() {
@@ -1591,22 +1680,88 @@ EventDisplayManager() {
 	GetUnprocessedQueue(){
 		return this.#state.unprocessed_queue;
 	}
-	GetMessages(){
-		return this.#state.messages;
+	async GetMessages(){
+		let msgArr = [];
+		if(!this.ProbeForBadNodes()){
+			//add logic here to trim nodes
+			//return null;
+		}
+		const timelineClone = [...this.#state.event_timeline];
+		if(
+			timelineClone == undefined 
+			|| timelineClone == null
+		){
+			return [];
+		}
+		for(let i = 0; i < timelineClone.length; ++i){
+			if(
+				timelineClone[i].type == undefined
+			){
+				continue;
+			}
+			if(
+				timelineClone[i].type.toLowerCase() == "message" 
+				|| timelineClone[i].type.toLowerCase() == "msg" 
+				|| timelineClone[i].type.toLowerCase() == "m"
+			){
+				msgArr.push(timelineClone[i]);
+			}
+		}
+		return msgArr;
 	}
-	GetErroredQueue(){
-		return this.#state.errored_queue;
+	async GetErroredQueue(){
+		let errArr = [];
+		let timelineClone = structuredClone(this.#state.event_timeline);
+
+		for(let i = 0; i < timelineClone; ++i){
+			if(
+				timelineClone[i].type == "error" 
+				|| timelineClone[i].type == "err" 
+				|| timelineClone[i].type == "e"
+			){
+				errArr.push(timelineClone[i]);
+			}
+		}
+
+		return errArr;
 	}
-	GetEvents(){
-		return this.#state.events;
+	async GetEvents(){
+		let eventsArr = [];
+		let timelineClone = structuredClone(this.#state.event_timeline);
+
+		for(let i = 0; i < timelineClone; ++i){
+			if(
+				timelineClone[i].type == "events" 
+				|| timelineClone[i].type == "event" 
+			){
+				eventsArr.push(timelineClone[i]);
+			}
+		}
+
+		return eventsArr;
 	}
+
+	async GetActiveEvents(){
+		let eventsArr = this.GetEvents();
+
+		// filter for events taht have yet to expire/completed
+		for(let i = 0; i < eventsArr; ++i){
+			if(
+				completedAt == null
+				&& expiresAt > Date.now()
+			){
+				eventsArr.push(timelineClone[i]);
+			}
+		}
+		return eventsArr;
+	}
+
 	GetSubWindows(){
-		return this.#state.subWindows;
+		return this.subWindows;
 	}
 
 	async MonitoringStart() {
 	    this.DebugPrint({msg: "running the loop once as a test"});
-	    this.#state.timers.ReadTtsTimer.Start();
 	    try{
 		await this.#DaLoop(); 
 	    }
@@ -1615,6 +1770,18 @@ EventDisplayManager() {
 	    }
 
 	    	this.DebugPrint({msg: "test loop ran successfully, starting real loop in 3 seconds"});	    
+	    /*
+	    let key;
+	    for(let i = 0; i < Object.keys(this.#state.timers).length; ++i){
+	    	try{
+	    		key = Object.keys(this.#state.timers)[i];
+	    		this.#state.timers[key].Start();
+	    	}
+	    	catch(err){
+	    		this.DebugPrint({msg: "error starting timer", val:key, err:err, type:'e'});
+	    	}
+	    }
+	    */
 
 		setTimeout(()=>{
 		    try {
@@ -1622,21 +1789,21 @@ EventDisplayManager() {
 			// Wrap it so 'this' remains correct when called by the timer
 			//this.#state.timers.GetMessagesTimer.Start();
 			
-			let key;
+			let key; 
 			for(let i = 0; i < Object.keys(this.#state.timers).length; ++i){
 				try{
 					key = Object.keys(this.#state.timers)[i];
-					this.#state.timers[key].Stop();
+					this.#state.timers[key].Start();
 				}
-				catch(err){		
-					this.DebugPrint({msg: "error stopping timer", val: key});
+				catch(err){
+					this.DebugPrint({msg: "error starting timer", val:key, err:err, type:'e'});
 				}
 			}
 		    }
 		    catch (err) {
 			this.DebugPrint({msg: "error properly starting the loop", err: err, type:'t'});
 		    }
-		}, 3000);
+		}, 30000);
 	}
 
 	CreateUserFromFlags(p_msg) { //returns user object on success
@@ -1838,6 +2005,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 
 			// 3. Add the new points
 			user.points += score;
+			user.totalPoints += score;
 
 			this.DebugPrint({msg: `Points updated for ${user.username}: +${score} (Total: ${user.points}})`});
 			return true;
@@ -1848,7 +2016,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	}	
 
 	AddUserToUsers(user) {
-	    this.DebugPrint({ msg: "attempting to add user to users", val: user });
+	    this.DebugPrint({ msg: "attempting to add user to users", val: JSON.stringify(user, null, 4) });
 
 	    // 1. Check if user already exists
 	    let userGet = this.GetUserFromUuid(user.uuid); // Pass the UUID property specifically
@@ -1866,7 +2034,10 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 
 	    // 3. Add to state 
 	    // If #state.users is an Object/Map:
-	    this.#state.users[targetId] = user;
+	    //this.#state.users[targetId] = user;
+		
+	    // remove cyclic reference 
+	    this.#state.users[targetId] = JSON.parse(JSON.stringify(user));
 	    
 	    // If #state.users is an Array, use this instead:
 	    // this.#state.users.push(user);
@@ -1952,60 +2123,30 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		}
 	}
 
+	async SafeAddToEventTimeline(p_msg) {
+		this.#state.event_timeline.push(p_msg);
+	}
 
-	/**
-	 * High-performance duplicate check and chronological insertion.
-	 * Optimized for tens of thousands of messages.
-	 * @param {Object} p_msg - Processed message (must contain .messageId and .receivedAt)
-	 */
-async SafeAddToMessagesQueue(p_msg) {
-	this.#state.messages.push(p_msg);
-	/*
-    // 1. Emergency Unwrap: If it's a promise, wait for it
-    const msg = p_msg instanceof Promise ? await p_msg : p_msg;
-
-    const queue = this.#state.messages; 
-    const len = queue.length;
-    const targetId = msg.messageId;
-    const targetTime = msg.receivedAt;
-
-    // Check for Duplicates
-    for (let i = len - 1; i >= 0; i--) {
-        // If the queue contains promises, this line will crash!
-        // We assume existing items in the queue are already resolved objects.
-        if (queue[i].messageId === targetId) {
-            this.DebugPrint({msg: "Duplicate message found, ignoring"});
-            return false;
-        }
-
-        if (queue[i].receivedAt < targetTime) break;
-    }
-
-    // ... [Binary Search Logic] ...
-
-    this.DebugPrint({msg: `Adding message at index ${low}`});
-
-    // Splice the resolved object, NOT the promise
-    queue.splice(low, 0, msg);
-
-    this.#state.messages = queue;
-    return true;
-    */
-}
+	DoTheStuffToAddMessageToQueue(p_msg){
+	    console.log("ADDING MESSAGE TO QUEUE");
+	    this.PushMessageToChatWindow(p_msg);
+	    p_msg.state.displayedAt = Date.now();
+	    this.DebugPrint({msg: "message does not exist, adding"});
+	    this.#state.users[p_msg.userUuid].totalMessages += 1;
+	    this.SafeAddToEventTimeline(p_msg)
+	}
 
 	async #DaLoop() {
-
-		let key;
-		for(let i = 0; i < Object.keys(this.#state.timers).length; ++i){
-			try{
-				key = Object.keys(this.#state.timers)[i];
-				this.#state.timers[key].Start();
-			}
-			catch(err){
-				this.DebugPrint({msg: "error starting timer", val:key, err:err, type:'e'});
-			}
-		}
-
+		// dLive 
+		// facebook here
+		// instagram
+		// kick here
+		// picarto here
+		// tiktok here
+		// trovo
+		// twitch here
+		// twitter here
+		// youtube
 		this.DebugPrint({msg: "Fetching messages from youtube"});
 		const data = await this.yt.getChatMessages();
 		
@@ -2018,53 +2159,48 @@ async SafeAddToMessagesQueue(p_msg) {
 		    this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(item);
 		}
 
-		// dLive 
-		// facebook here
-		// instagram
-		// kick here
-		// picarto here
-		// tiktok here
-		// trovo
-		// twitch here
-		// twitter here
-
+		let q = this.#state.unprocessed_queue.splice(
+			0, 
+			this.#state.unprocessed_queue.length
+		);
 		this.DebugPrint({msg: "processing unprocecssed_queue"});
-	    	let i = 0
-		while (this.#state.unprocessed_queue.length > 0) {
+		for(let i = 0; i < q.length; ++i){
 		    try {
-		    const raw = this.#state.unprocessed_queue.shift();
-		    const p_msg = await this.ProcessYoutubeV3Message_v1(raw);
+		        const raw = q[i];
+		        const p_msg = await this.ProcessYoutubeV3Message_v1(raw);
 
-		    this.DebugPrint({msg: "message finished processing", val: p_msg});
+		        this.DebugPrint({msg: "message finished processing", val: p_msg});
 
-		    const exists = this.#state.messages.some(m => 
-			m.receivedAt === p_msg.receivedAt && m.authorId === p_msg.authorId
-		    );
-
-			let dR = this.#state.windows.chat.displayRate;
-			let displayDelay = 1; //(Math.random()*(dR.max - dR.min))+dR.min;
-
-			/*setTimeout(async ()=>{*/
-				console.log("small delay to make messages more natural");
-			    //push message to display
-			    if (!exists){ 
-				    this.PushMessageToChatWindow(p_msg);
-				    p_msg.state.displayedAt = Date.now();
-				    this.DebugPrint({msg: "message does not exist, adding"});
-				    this.#state.users[p_msg.userUuid].totalMessages += 1;
-				    this.SafeAddToMessagesQueue(p_msg)
+			let doesMessageAlreadyExist = false;
+			let messages = await this.GetMessages();
+		        if(messages.length > 0){
+				let m;
+				    for(let j = messages.length-1; j >= 0; --j){
+					    m = messages[j];
+					    if(
+						    m.receivedAt === p_msg.receivedAt 
+						    && m.authorId === p_msg.authorId
+					    ){
+						doesMessageAlreadyExist = true;
+						break;
+					    }
+				    }
+			
+				    if (!doesMessageAlreadyExist){ 
+					    this.DoTheStuffToAddMessageToQueue(p_msg);
+				    }
+				    else{
+					    this.DebugPrint({msg: "message already exists, skipping add"});
+				    }
 			    }
-			    else{
-				    this.DebugPrint({msg: "message already exists, skipping add"});
-				    this.#state.errored_queue.push(p_msg)
+			    else {
+				    this.DoTheStuffToAddMessageToQueue(p_msg);
 			    }
-			/*}, 1000*displayDelay);*/
-			i += 1;
-		    }
-		catch (err) {
-			this.DebugPrint({msg: "LOOP CRASHED: ", error: err});
-		}
-		this.DebugPrint({msg: ("Current messages: " + this.#state.messages)});
+			}
+			catch (err) {
+				this.DebugPrint({msg: "LOOP CRASHED: ", error: err, val: q[i]});
+			}
+			this.DebugPrint({msg: ("Current messages: " + await this.GetMessages())});
 		} 
 	}
 	
@@ -2072,17 +2208,17 @@ async SafeAddToMessagesQueue(p_msg) {
 
 	async MonitoringStop() {
 		this.DebugPrint({msg: "stopping timers"});
-		let key;
+		let key; 
 		for(let i = 0; i < Object.keys(this.#state.timers).length; ++i){
 			try{
-				key = Object.keys(this.#state.timers)[i];
-				this.#state.timers[key].Stop();
+					key = Object.keys(this.#state.timers)[i];
+					this.#state.timers[key].Stop();
 			}
-			catch(err){		
-				this.DebugPrint({msg: "error stopping timer", val: key});
+			catch(err){
+				this.DebugPrint({msg: "error starting timer", val:key, err:err, type:'e'});
 			}
 		}
-	}
+	}	
 
 async ProcessYoutubeV3Message_v1(unprocessedMsg) {
     try {
@@ -2093,6 +2229,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
         // 1. Initialize message from template
         let newMessage = { ...this.templates.messages };
         newMessage.version = 1;
+	newMessage.type = "message";
         newMessage.platform = "youtube";
         newMessage.rawMessage = rmo.snippet.textMessageDetails.messageText;
         newMessage.messageId = rmo.id;
@@ -2166,15 +2303,17 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 	async ProcessPendingTts() {
 	    this.DebugPrint({msg: "Scanning for pending TTS commands..."});
 
-	    for (let i = 0; i < this.#state.messages.length; i++) {
-		const msg = this.#state.messages[i];
+	    let messages = await this.GetMessages();
+
+	    for (let i = 0; i < messages.length; i++) {
+		const msg = messages[i];
 
 		// 1. Corrected Check: Search the commands array for 'tts'
 		// We use .some() because it returns true as soon as it finds a match
 		const hasTtsCommand = Array.isArray(msg.commands) && 
 				      msg.commands.some(cmd => cmd.command === "tts");
 
-		const alreadyRead = msg.state?.ttsHasRead === true;
+		const alreadyRead = msg.state.ttsHasRead === true;
 
 		if (hasTtsCommand && !alreadyRead) {
 		    this.DebugPrint({msg: `Found unread TTS: "${msg.rawMessage}"`});
@@ -2197,81 +2336,76 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 	    }
 	}
 
-	GetOldestUnreadTtsAndMarkRead() {
-	    // 1. Retrieve the messages array
-	let currentTime = Date.now();
-	    for (let i = 0; i < this.#state.messages.length; i++) {
-		    try{
-		    if(
-			    this.#state.messages[i].commands.tts.state.readAt == null
-		    ){
-			    this.DebugPrint({msg: "found tts with null readAt", val: this.#state.messages[i]});
-			    this.#state.messages[i].commands.tts.state.readAt = Date.now();
-			    this.DebugPrint({msg: "updated value so is now read", val: this.#state.messages[i]});
-			return {message: this.#state.messages[i], index: i}
+	async GetOldestUnreadTtsAndMarkRead() { // TODO:this needs to be redone so that way it can look up messages by messageId
+		let messages = await this.GetMessages();
+		let currentTime = Date.now();
+		    for (let i = 0; i < messages.length; i++) {
+			    try{
+			    if(
+				    messages[i].commands.tts.state.readAt == null
+			    ){
+				    this.DebugPrint({msg: "found tts with null readAt", val: messages[i]});
+				    messages[i].commands.tts.state.readAt = Date.now(); // ✅
+				    this.DebugPrint({msg: "updated value so is now read", val: messages[i]});
+				return {message: messages[i], index: i}
+			    }
+			    }
+			    catch(err){
+				this.DebugPrint({msg: `message at i(${i}) does not have a tts command`});
+			    }
 		    }
-		    }
-		    catch(err){
-			this.DebugPrint({msg: `message at i(${i}) does not have a tts command`});
-		    }
-	    }
 
-	    return null;
+		    return null;
+	}
+
+	GetEventTimelineIndexByMessageId(messageId) {
+	    for (let i = 0; i < this.#state.event_timeline.length; ++i) {
+		if (this.#state.event_timeline[i].messageId == messageId) {
+		    return i;
+		}
+	    }
+	    return -1;
 	}
 
 	async FindOldestUnreadTtsAndCall() {
 	    this.DebugPrint({ msg: "find and call tts called" });
 
-	    // 1. Grab the message
-	    let returnObj;
-	    returnObj = this.GetOldestUnreadTtsAndMarkRead();
+	    const returnObj = await this.GetOldestUnreadTtsAndMarkRead();
+	    this.DebugPrint({msg: "alleged oldest unread tts message:", val: returnObj});
 
-	    if(returnObj == null){
+	    if (returnObj == null) {
 		this.DebugPrint({msg: "no tts messages found, queue is empty"});
-		    return false;
+		return false;
 	    }
 
-	    let message = returnObj.message;
+	    const message = returnObj.message;
 
 	    if (!message) {
 		this.DebugPrint({ msg: "no tts message found, returning", val: message });
 		return false;
 	    }
 
-	    // 2. IMMEDIATE LOCK
-	    // We mark it as read NOW so the next timer tick (which might happen 
-	    // while this one is still speaking) doesn't find the same message.
-	
-		//find message and update object
-		let stateMessage;
-	    for(let i = 0; i < this.#state.messages.length; ++i){
-		stateMessage = this.#state.messages[i];	
-		if (this.#state.messages[i].messageId == message.messageId){
-			this.DebugPrint({msg: "FOUND MATCHING MESSAGE ID, MARKING ID", val: {stateMessage: stateMessage, message: message}});
-			this.#state.messages[returnObj.index].commands.tts.state.readAt = Date.now();
-			//this.#state.messages[i].
-			//this.#state.messages[i].commands.tts.state.readAt = Date.now();
-			//this.#state.messages[i].commands.tts.state.isRead = true;
-			this.#state.messages[returnObj.index].state.readAt = Date.now();
-		}
+	    // 2. IMMEDIATE LOCK — find the real index in event_timeline by messageId
+	    const timelineIndex = this.GetEventTimelineIndexByMessageId(message.messageId);
+
+	    if (timelineIndex == -1) {
+		this.DebugPrint({ msg: "could not find message in event_timeline by messageId", val: message.messageId, type: 'e' });
+	    } else {
+		this.DebugPrint({ msg: "FOUND MATCHING MESSAGE ID, MARKING READ", val: timelineIndex });
+		this.#state.event_timeline[timelineIndex].commands.tts.state.readAt = Date.now();
 	    }
 
 	    if (message.commands && message.commands.tts) {
 		message.commands.tts.readAt = Date.now();
-		if (message.state) message.state.isRead = true;
 	    }
 
 	    this.DebugPrint({ msg: "oldest message found, calling tts", val: message });
 
 	    try {
-		// 3. AWAIT the speech
-		// This ensures the function doesn't finish until the voice stops talking
 		await this.CallTts(message);
 		return true;
 	    } catch (err) {
 		this.DebugPrint({ msg: "TTS Call failed", error: err, type: 'e' });
-		// Optional: Reset readAt if you want to retry on failure
-		// message.commands.tts.readAt = null; 
 		return false;
 	    }
 	}
@@ -2302,7 +2436,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 	    }
 
 	    const textToSpeak = ttsCmd.message || "No text";
-	    const flags = ttsCmd.params || {};
+	    const flags = ttsCmd.flags || {};
 
 	    // 3. Voice Initialization
 	    const getVoices = () => new Promise((resolve) => {
@@ -2348,9 +2482,9 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 		};
 
 		// Standard cleanup: stop current audio and speak
-		window.speechSynthesis.cancel();
-		window.speechSynthesis.speak(utterance);
-	    });
+		    window.speechSynthesis.cancel();
+		    setTimeout(() => window.speechSynthesis.speak(utterance), 100); // ✅;
+	    })
 	}
 
 	/**
@@ -2429,7 +2563,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 			    if (message.length > 75) {
 			      if (!(message.includes(",") || message.includes(".") ||
 				    message.includes("?") || message.includes("!"))) {
-				score -= 150;
+				score += 150;
 			      }
 			    }
 
@@ -2470,7 +2604,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 					if (trigramList.includes(currentTrigram)) {
 					  score += 50;
 					} else {
-					  score -= 50;
+					  //score -= 50;
 					}
 				      }
 				    }
@@ -2489,7 +2623,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 			    for (let i = 0; i < message.length - 2; ++i) {
 			      let char = message[i];
 			      if (message[i + 1] == char &&message[i + 2] == char) {
-				score -= 50;
+				score += 50;
 			      }
 			    }
 			    this.DebugPrint({msg: `score CheckForRepeats() : ${score}`});
@@ -2501,7 +2635,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 			    if (message[0] == message.charAt(0).toUpperCase()) {
 			      score += 20;
 			    } else {
-			      score -= 10;
+			      //score -= 10;
 			    }
 			    //this.DebugPrint(`score CheckForCaps() : ${score}`);
 			    return score;
@@ -2521,7 +2655,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 			    // (though unlikely after cleaning)
 			    if (nonSpaceLength > 0 &&
 				(spaceCount * 100) / nonSpaceLength < 20) {
-			      score -= 20;
+			      //score -= 20;
 			    } else if (nonSpaceLength > 0) {
 			      score += 20;
 			    }
@@ -2535,7 +2669,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 			    for (let i = 0; i < message.length; i += 32) {
 			      let chunk = message.slice(i, i + 32);
 			      if (!chunk.includes(" ")) {
-				score -= 20;
+				//score -= 20;
 			      }
 			    }
 			    this.DebugPrint({msg: `score CheckForSpaceInChunk : ${score}`});
@@ -2585,7 +2719,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 	 * @param {number} itemsPerPage - Number of messages per page.
 	 * @returns {void}
 	 */
-	RenderMessagesTable(pageIndex = 0, itemsPerPage = 10) {
+	async RenderMessagesTable(pageIndex = 0, itemsPerPage = 10) {
 	    // Ensure DOM is ready (though typically this runs after page load)
 	    if(document == undefined){this.DebugPrint({msg:"cannot RenderMessageTable, no dom"}); return}
 	    if (document.readyState === 'loading') {
@@ -2673,7 +2807,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 	    const tbody = document.createElement('tbody');
 
 	    // 4. Calculate Pagination Data
-	    const sortedMessages = [...this.#state.messages].reverse(); 
+	    const sortedMessages = [...await this.GetMessages()].reverse(); 
 	    const totalPages = Math.ceil(sortedMessages.length / itemsPerPage);
 	    
 	    pageIndex = Math.max(0, Math.min(pageIndex, totalPages > 0 ? totalPages - 1 : 0));
@@ -3308,7 +3442,7 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 		if(cmd.isValid == null){
 			cmd.isValid = true;
 			cmd.executedAt = Date.now();
-			this.#state.clip_queue.push(cmd);
+			this.#state.event_timeline.push(cmd);
 		}
 		
 		return cmd;
@@ -3462,7 +3596,7 @@ ProcessHelpCommand(processedMsg){
 	
 ProcessTtsCommand(processedMsg) {
 	this.DebugPrint({msg: "processing tts command from message", val: processedMsg});
-	let cmd = this.templates.messageCommand;
+	let cmd = {...this.templates.messageCommand};
 	cmd.isValid = null;
 
 	let msg = processedMsg.rawMessage;
@@ -3555,7 +3689,7 @@ ProcessTtsCommand(processedMsg) {
 					err: `value '${cmd.flags[key]}' after casting ${newVal} does not match expected type '${newVal}'`,
 					erroredAt: Date.now(),
 				}
-				cmd.isValid;
+				cmd.isValid = false;
 			}		
 
 			this.DebugPrint({msg: `updating key '${key} to new value`, val: newVal})
@@ -3577,72 +3711,6 @@ ProcessTtsCommand(processedMsg) {
 
     return cmd;
 }
-
-	ExportState() {
-	// Track seen objects to detect cycles
-	    const seen = new WeakSet();
-
-	    const data = JSON.stringify(this.#state, (key, value) => {
-		// 1. Handle specialized class conversions
-		if (key === 'bannedWordsArray' && value && typeof value.ToArray === 'function') {
-		    return value.ToArray();
-		}
-
-		// 2. Handle Objects (where cycles live)
-		if (typeof value === "object" && value !== null) {
-		    // If we've seen this specific object instance before, kill the cycle
-		    if (seen.has(value)) {
-			return "[Circular]"; 
-		    }
-		    seen.add(value);
-
-		    // 3. Specific Logic for IntTimer (if instanceof fails)
-		    // We check for the 'timeoutListeners' property which is unique to your class
-		    if (value.timeoutListeners && Array.isArray(value.timeoutListeners)) {
-			return {
-			    name: value.name,
-			    time: value.time,
-			    timeoutDuration: value.timeoutDuration,
-			    isTimerStaticData: true
-			};
-		    }
-		}
-
-		// 4. Remove functions and internal timer handles
-		if (typeof value === 'function' || key === 'timer') {
-		    return undefined;
-		}
-
-		return value;
-	    }, 4);
-	    // 2. Set up the file metadata
-	    const filename = `bot_settings_${new Date().toISOString().slice(0, 10)}.json`;
-	    const type = "application/json";
-
-		try{
-		    // 3. Create the download trigger
-		    const blob = new Blob([data], { type: type });
-		    const url = window.URL.createObjectURL(blob);
-		    const link = document.createElement('a');
-		    
-		    link.href = url;
-		    link.download = filename;
-		    
-		    // Append to body is required for some browsers (like Firefox)
-		    document.body.appendChild(link);
-		    link.click();
-		    
-		    // Cleanup
-		    document.body.removeChild(link);
-		    window.URL.revokeObjectURL(url);
-		    
-		    this.DebugPrint("State exported successfully as: " + filename);
-		}
-		catch(err){
-		    	this.DebugPrint({msg: "likely no document", error: err});
-			return data;
-		}
-	}
 
 	GenerateBannedWordsConfig() {
 		this.DebugPrint({msg: "GENERATING BLACKLIST UI"});
@@ -3808,7 +3876,7 @@ ProcessTtsCommand(processedMsg) {
 		border-radius: var(--tib_border-radius); 
 		padding: 0.5rem;
 		margin-top: 10px;
-		color: var(--color-text);
+		color: #fff;
 	    `;
 
 	    const summary = document.createElement('summary');
@@ -4037,13 +4105,31 @@ ProcessTtsCommand(processedMsg) {
 	    // --- COLUMN 3: STATE (Export/Import) ---
 	    const col3 = createColumn();
 
-	    const exportBtn = createBtn("Export Settings", "#ff0", () => {
-		window.Cockatiel.ExportState();
-	    });
+	const exportBtn = createBtn("Export Settings", "#ff0", () => {
+	    // 1. Get the JSON string from your class
+	    const data = window.Cockatiel.ExportState();
+	    
+	    // 2. Create a Blob (Binary Large Object) with the data
+	    const blob = new Blob([data], { type: "application/json" });
+	    
+	    // 3. Create a temporary anchor (<a>) element
+	    const url = URL.createObjectURL(blob);
+	    const link = document.createElement("a");
+	    
+	    // 4. Set the filename and the target URL
+	    link.href = url;
+	    link.download = "cockatiel_settings.json";
+	    
+	    // 5. Trigger the download and clean up
+	    document.body.appendChild(link);
+	    link.click();
+	    document.body.removeChild(link);
+	    URL.revokeObjectURL(url); // Free up memory
+	});
 
 	    const col4 = createColumn();
 	    const callTtsBtn = createBtn("Call next TTs Message", "#88f", async () => {
-		    let messages = window.Cockatiel.GetChatMessages().GetMessages();
+		    let messages = window.Cockatiel.GetMessages();
 		    let msg;
 		    for(let k = 0; k < state.messages.length; ++k){
 			    msg = messages[k]; 
@@ -4075,27 +4161,35 @@ ProcessTtsCommand(processedMsg) {
 	}
 
 	ModifyUserPoints(targetUuid, amount) {
-	    // 1. Throw error if Uuid is missing/null
+	    // 1. Safety check for UUID
 	    if (!targetUuid) {
 		throw new Error("ModifyUserPoints failed: targetUuid is null or undefined");
 	    }
 
-	    // 2. Locate the specific user object by UUID
-	    let userFound = false;
-	    for (let user of this.#state.users) {
-		if (user.uuid === targetUuid) {
-		    // 3. Update the points (defaulting to 0 if the property is missing)
-		    user.points = (user.points || 0) + amount;
-		    
-		    this.DebugPrint(`Adjusted @${user.username} by ${amount}. New total: ${user.points}`);
-		    userFound = true;
-		    break; // Stop looping once found
-		}
-	    }
+	    // 2. Direct lookup using the UUID as the key
+	    // This replaces the 'for' loop entirely
+	    let user = this.#state.users[targetUuid];
 
-	    // 4. Optional: Warn if the UUID wasn't found in the current state
-	    if (!userFound) {
-		this.DebugPrint(`Warning: No user found with UUID ${targetUuid}`);
+	    if (user) {
+		// 3. Update the points
+		// We use || 0 to handle users who might not have a points property yet
+		user.points = (user.points || 0) + amount;
+		
+		this.DebugPrint({
+		    msg: `Adjusted @${user.username || 'Unknown'} by ${amount}. New total: ${user.points}`,
+		    val: user
+		});
+
+		// 4. Update UI to reflect the new points balance
+		this.UpdateUserDisplay();
+		return true;
+	    } else {
+		// 5. Handle user not found
+		this.DebugPrint({
+		    msg: `Warning: No user found with UUID ${targetUuid}`,
+		    type: "warn"
+		});
+		return false;
 	    }
 	}
 
@@ -4311,7 +4405,7 @@ const userIcon = isValidIcon
 		return;
 	    }
 
-	    const existingWin = this.#state.subWindows[args.key];
+	    const existingWin = this.subWindows[args.key];
 	    if (existingWin && !existingWin.closed) {
 		existingWin.focus();
 		return;
@@ -4319,7 +4413,7 @@ const userIcon = isValidIcon
 
 	    const features = `width=${args.width},height=${args.height},popup=yes`;
 	    const newWin = window.open("", `win_${args.key}`, features);
-	    this.#state.subWindows[args.key] = newWin;
+	    this.subWindows[args.key] = newWin;
 
 	    const doc = newWin.document;
 	    doc.title = `${args.key}`;
@@ -4419,7 +4513,7 @@ const userIcon = isValidIcon
 	    };
 
 	    // 3. Extract Command and Message
-	    let commandStr = "No Command";
+	    let commandStr = "";
 	    let displayMessage = p_msg.rawMessage || "";
 
 	    try {
@@ -4468,7 +4562,7 @@ const userIcon = isValidIcon
 	PushMessageToChatWindow(processedMsg) {
 	    if (!processedMsg) return;
 
-	    const win = this.#state.subWindows[this.#state.windows.chat.key];
+	    const win = this.subWindows[this.#state.windows.chat.key];
 	    if (!win || win.closed) {
 		this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
 		return;
@@ -4488,7 +4582,7 @@ const userIcon = isValidIcon
 		return false;
 	    }
 
-	    const win = this.#state.subWindows[this.#state.windows.chat.key];
+	    const win = /*structuredClone*/(this.subWindows[this.#state.windows.chat.key]);
 	    if (!win || win.closed) {
 		this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
 		return false;
@@ -4528,6 +4622,7 @@ const userIcon = isValidIcon
 				autoStart: true,
 				name: "EventDisplayTimer",
 				timeoutDuration: 7,
+				emitOnStart: false, // if true, will emit when started
 				debug: true,
 			}),
 		};
@@ -4538,8 +4633,9 @@ const userIcon = isValidIcon
 	GenerateUi(){
 		this.DebugPrint({msg: "generating ui for the first time"});
 		let settingsContainer;
+		let id_container = structuredClone(this.#state.windows.main.insertId);
 		try{
-			settingsContainer = document.getElementById("cockatiel_settings_container");
+			settingsContainer = document.getElementById(id_container);
 			if(
 				settingsContainer == null 
 				|| settingsContainer == undefined){
@@ -4547,6 +4643,11 @@ const userIcon = isValidIcon
 				settingsContainer = this.CHE({type: 'div', id: "cockatiel_settings_container"});
 			}
 			// else: container already got, no need to change anything
+			settingsContainer.style.backgroundColor = "#000000";
+			settingsContainer.style.color = "#000";
+			settingsContainer.style.padding = "1rem";
+			settingsContainer.style.border = "0.2rem solid white";
+			settingsContainer.style.borderRadius = "1rem";
 		}
 		catch(err){
 			this.DebugPrint({
@@ -4559,7 +4660,7 @@ const userIcon = isValidIcon
 
 		try{
 			let bannedWordsList = this.GenerateBannedWordsConfig();
-			this.DebugPrint({msg: "bannedWordsList:", val: bannedWordsList});
+			this.DebugPrint({msg: "bannedWordsList:", val: String(bannedWordsList)});
 			settingsContainer.appendChild(bannedWordsList);
 			this.UpdateBannedWordsList();
 		}
@@ -4613,12 +4714,12 @@ const userIcon = isValidIcon
 
 	GenerateChatWindow(){
 		try{
-			const chatSettings = this.#state.windows.chat;
+			const chatSettings = structuredClone(this.#state.windows.chat);
 			const chatStyle = ``;
 
 			this.CreateSubWindow({
 			    ...chatSettings,
-			    stylesheet: this.#state.windows.chat.defaultStylesheet, 
+			    stylesheet: structuredClone(this.#state.windows.chat.defaultStylesheet), 
 			    script: `
 			    window.addEventListener("message", (event) => {
 				const { type, payload } = event.data;
@@ -4685,11 +4786,20 @@ const userIcon = isValidIcon
 	GenerateEventsWindow(){
 		try{
 			//this.PushToSubWindow("chatMonitor", this.RenderStandbyHTML());
-			let eventWindowSettings = this.#state.windows.events;
+			let eventWindowSettings = structuredClone(this.#state.windows.events);
 			this.CreateSubWindow({
 				...eventWindowSettings,
 				script: `
-					console.log("print from events window");
+				    window.addEventListener("htmlUpdate", (event) => {
+				    	console.log("html update received!!!");
+					const { type, payload } = event.data;
+
+				    	if(event.type != htmlUpdate){
+						console.log({msg: "invalid event passed", val: event})console.log;
+						return;
+					}
+				    	document.innerHtml = event.payload;	
+				    });
 				`,
 			});
 
@@ -4746,7 +4856,7 @@ const userIcon = isValidIcon
 	    this.DebugPrint({ msg: "1. Entering RunSubWindowTest2", type: "l" });
 
 	    try {
-		const chatSettings = this.#state?.windows?.chat;
+		const chatSettings = this.#state.windows.chat;
 		this.DebugPrint({ msg: "2. Chat Settings Found", val: chatSettings });
 
 		if (!chatSettings) {
@@ -4754,7 +4864,7 @@ const userIcon = isValidIcon
 		    return;
 		}
 
-		const win = this.#state?.subWindows?.[chatSettings.key];
+		const win = this.subWindows[chatSettings.key];
 		this.DebugPrint({ msg: "3. Target Window Object", val: win ? "Window Found" : "Window Null" });
 
 		if (!win || win.closed) {
@@ -4830,13 +4940,13 @@ const userIcon = isValidIcon
 				</div>
 			</div>
 		`
-	    this.#state.subWindows[this.#state.windows.chat.key].postMessage({ 
+	    this.subWindows[this.#state.windows.chat.key].postMessage({ 
 		type: 'new_chat_msg', 
 		payload: { html: html } 
 	    }, "*");
 	}
 
-	RunSubWindowTest5(){
+	async RunSubWindowTest5(){
 		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest5");
 		this.DebugPrint({msg: "Running RunSubWindowTest5"});
 		this.DebugPrint({msg: "attempting to create user from unprocessedMsg"});
@@ -4860,10 +4970,10 @@ const userIcon = isValidIcon
 			    }
 			},
 			"authorDetails": {
-			    "channelId": "UCiYflTancqoI-CvKoixE2Fw",
-			    "channelUrl": "http://www.youtube.com/channel/UCiYflTancqoI-CvKoixE2Fw",
-			    "displayName": "NotBluWalled",
-			    "profileImageUrl": "https://yt3.ggpht.com/2Z--UpGm0bLVlXExSiev6a9J2c883R0jYx68fPwYAx6vmg1gIdzymYmnfiQ08-hfUgVqPOzIWlQ=s88-c-k-c0x00ffffff-no-rj",
+			    "channelId": "asdf1234asdf1234",
+			    "channelUrl": "http://www.youtube.com/channel/UCiYflTancqoI-CvKoixasdf",
+			    "displayName": "TestAccount2",
+			    "profileImageUrl": "",
 			    "isVerified": false,
 			    "isChatOwner": false,
 			    "isChatSponsor": false,
@@ -4872,8 +4982,8 @@ const userIcon = isValidIcon
 		    },
 		    "receivedAt": 1773288187947
 		} 
-		let msg = this.ProcessYoutubeV3Message_v1(val);
-		this.SafeAddToMessagesQueue(msg);
+		let msg = await this.ProcessYoutubeV3Message_v1(val);
+		this.SafeAddToEventTimeline(msg);
 
 
 	//	this.Process
@@ -4940,7 +5050,8 @@ const userIcon = isValidIcon
 				    "version": 1,
 			}
 			try{
-				this.ProcessYoutubeV3Message_v1(test_message);
+				//this.ProcessYoutubeV3Message_v1(test_message);
+				this.SafeAddToEventTimeline(test_message);
 			}
 			catch(error){
 				this.DebugPrint({
@@ -4961,8 +5072,8 @@ const userIcon = isValidIcon
 		try{
 			// Ensure all subwindows are closed if the main app is closed or refreshed
 			window.addEventListener('unload', () => {
-			    if (this.#state.subWindows) {
-				Object.values(this.#state.subWindows).forEach(win => {
+			    if (this.subWindows) {
+				Object.values(this.subWindows).forEach(win => {
 				    if (win && !win.closed) {
 					win.close();
 				    }
@@ -5012,7 +5123,7 @@ const userIcon = isValidIcon
 	});	
 	}
 
-	Init(){
+	async Init(){
 		this.InitTimers();
 		this.AddTtsTimeoutListeners();
 
@@ -5024,7 +5135,7 @@ const userIcon = isValidIcon
 		this.RunSubWindowTest2();
 		this.RunSubWindowTest3();
 		this.RunSubWindowTest4();
-		this.RunSubWindowTest5();
+		await this.RunSubWindowTest5();
 		this.RunSubWindowTest6();
 		this.RunSubWindowTest7();
 

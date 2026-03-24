@@ -3,12 +3,13 @@
 <head>	
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="icon" type="image/x-icon" href="/favicon_sketch.png">
 	<title>Cockatiels local test/run</title>
 		<script type="module">
 			window.debug = true;
 			import Cockatiel from './Cockatiel.mjs';
-			window.Cockatiel = new Cockatiel();
 			document.addEventListener("DOMContentLoaded", (event) => {
+			  window.Cockatiel = new Cockatiel();
 				console.log("initing Cockatiel");
 				try{
 					window.Cockatiel.Init();
@@ -26,6 +27,7 @@
 	</script>
 </head>
 <body>
-	
+	</div>
+	<div id="cockatiel_settings_container"></div>
 </body>
 </html>
