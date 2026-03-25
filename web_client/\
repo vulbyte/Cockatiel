@@ -1760,14 +1760,11 @@ export default class Cockatiel {
 		return this.subWindows;
 	}
 
-	async StartMonitoringMessages(){this.#state.timers.GetMessagesTimer.Start();}
-	async StopMonitoringMessages(){this.#state.timers.GetMessagesTimer.Stop();}
-
 	async StartTts(){this.#state.timers.ReadTtsTimer.Start();}
 	async StopTts(){this.#state.timers.ReadTtsTimer.Stop();}
 
-	async StartEventMonitor(){this.#state.timers.EventDisplayTimer.Start();}
-	async StopEventMonitor(){this.#state.timers.EventDisplayTimer.Stop();}
+	async StartEventMonitoring(){this.#state.timers.EventDisplayTimer.Start();}
+	async StopEventMonitoring(){this.#state.timers.EventDisplayTimer.Stop();}
 
 	async MonitoringStart() {
 	    this.DebugPrint({msg: "running the loop once as a test"});
@@ -1792,7 +1789,6 @@ export default class Cockatiel {
 	    }
 	    */
 
-		/*
 		setTimeout(()=>{
 		    try {
 			this.DebugPrint({msg: "starting timers"});
@@ -1814,7 +1810,6 @@ export default class Cockatiel {
 			this.DebugPrint({msg: "error properly starting the loop", err: err, type:'t'});
 		    }
 		}, 30000);
-		*/
 	}
 
 	CreateUserFromFlags(p_msg) { //returns user object on success
@@ -4057,7 +4052,7 @@ ProcessTtsCommand(processedMsg) {
 		const col = document.createElement('div');
 		col.style.cssText = `
 		    height: 100%; 
-		    /*width: 16rem; */
+		    width: 16rem; 
 		    padding: calc(var(--tib_padding) * 4); 
 		    display: flex; 
 		    flex-direction: column; 
@@ -4068,7 +4063,7 @@ ProcessTtsCommand(processedMsg) {
 
 	    // Helper to create buttons
 	    const createBtn = (imageLink, altText, bgColor, onClick) => {
-		const btn = document.createElement('button');
+		const btn = document.createElement('input');
 		if(imageLink == undefined){
 			btn.type = "button";
 			btn.value = altText;
@@ -4091,14 +4086,8 @@ ProcessTtsCommand(processedMsg) {
 		img.src = imageLink;
 		img.alt = altText;
 		img.style.userSelect = "none";
-		img.width = "256";
-		img.height= "256";
-		img.style.maxHeight = "100%";
-		img.style.maxWidth = "100%";
-		img.style.height = "3rem";
-		img.style.width = "3rem";
-		img.style.minHeight = "1rem";
-		img.style.minWidth = "1rem";
+		img.width = "256px";
+		img.height= "256px";
 		btn.style.cssText = `
 		    background-color: ${bgColor}; 
 		    color: black; 
@@ -4114,9 +4103,9 @@ ProcessTtsCommand(processedMsg) {
 		return btn;
 	    };
 
-		/*
 	    // --- COLUMN 1: LOCAL STORAGE (Save/Load) ---
-	    const saveLoadColumn = createColumn(); 
+	    const col1 = createColumn();
+	    
 	    const saveBtn = createBtn("./assets/save_inputs.png", "save all inputs", "#0f0", () => {
 		let inputs = document.getElementsByTagName('input');
 		for (let x of inputs) {
@@ -4127,7 +4116,7 @@ ProcessTtsCommand(processedMsg) {
 		console.log("All inputs saved to LocalStorage.");
 	    });
 
-	    const loadBtn = createBtn("./assets/load_inputs.png", "load all inputs", "#ff0", async () => {
+	    const loadBtn = createBtn(undefined, "load all inputs", "#ff0", async () => {
 		console.log("Loading values from LocalStorage...");
 		let inputs = document.getElementsByTagName("input");
 		for (let x of inputs) {
@@ -4143,50 +4132,50 @@ ProcessTtsCommand(processedMsg) {
 		}
 	    });
 
-	    saveLoadColumn.append(saveBtn, loadBtn);
+	    col1.append(saveBtn, loadBtn);
 
 	    // --- COLUMN 2: MONITORING (Start/Stop) ---
-	    const startStopColumn= createColumn();
+	    const col2 = createColumn();
 
-	    const startBtn = createBtn("./assets/start_cockatiel.png", "start Cockatiel", "#f0f", async () => {
+	    const startBtn = createBtn(undefined, "start Cockatiel", "#f0f", async () => {
 		console.log("Start monitoring clicked...");
 		await window.Cockatiel.MonitoringStart();
 	    });
 
-	    const stopBtn = createBtn("./assets/stop_cockatiel.png", "stop Cockatiel", "#f00", () => {
+	    const stopBtn = createBtn(undefined, "stop Cockatiel", "#f00", () => {
 		window.Cockatiel.MonitoringStop();
 	    });
 
-	    startStopColumn.append(startBtn, stopBtn);
+	    col2.append(startBtn, stopBtn);
 	
 	    // START / STOP TTS
-	    const startStopTtsColumn = createColumn();
-	    const startTtsButton = createBtn("./assets/start_tts.png", "Start Tts", "#0ff", () => {
+	    const col5 = createColumn();
+	    const startTtsButton = createBtn(undefined, "Start Tts", "#0ff", () => {
 		this.DebugPrint({msg:"starting tts", type:"warn"});
 		window.Cockatiel.StartTts();
 	    });
-	    const stopTtsButton = createBtn("./assets/start_tts.png", "Stop Tts", "#00f", () => {
+	    const stopTtsButton = createBtn(undefined, "Stop Tts", "#00f", () => {
 		this.DebugPrint({msg:"stopping tts", type:"warn"});
 		window.Cockatiel.StopTts();
 	    });
-	    startStopColumn.append(startTtsButton, stopTtsButton);
+	    col5.append(startTtsButton, stopTtsButton);
 
 	    // START / STOP EVENT DISPLAY 
-	    const startStopEventDisplay= createColumn();
-	    const startEventMonitoringButton = createBtn("./assets/stop_event_display.png", "Start Event Display", "#ff0", () => {
+	    const col6 = createColumn();
+	    const startEventMonitoringButton = createBtn(undefined, "Start Event Display", "#ff0", () => {
 		this.DebugPrint({msg:"starting Event Display", type:"warn"});
 		window.Cockatiel.StartEventMonitoring();
 	    });
-	    const stopEventMonitoringButton = createBtn("./assets/start_event_display.png", "Stop Event Display", "#f00", () => {
+	    const stopEventMonitoringButton = createBtn(undefined, "Stop Event Display", "#f00", () => {
 		this.DebugPrint({msg:"stopping Event Display", type:"warn"});
 		window.Cockatiel.StopEventMonitoring();
 	    });
-	    startStopEventDisplay.append(startEventMonitoringButton, stopEventMonitoringButton);
+	    col6.append(startEventMonitoringButton, stopEventMonitoringButton);
 
 	    // --- COLUMN 3: STATE (Export/Import) ---
-	    const exportInportColumn = createColumn();
+	    const col3 = createColumn();
 
-	const exportBtn = createBtn("./assets/export_settings.png", "Export Settings", "#ff0", () => {
+	const exportBtn = createBtn(undefined, "Export Settings", "#ff0", () => {
 	    // 1. Get the JSON string from your class
 	    const data = window.Cockatiel.ExportState();
 	    
@@ -4208,12 +4197,11 @@ ProcessTtsCommand(processedMsg) {
 	    URL.revokeObjectURL(url); // Free up memory
 	});
 
-	    //call next tts button
-	    const callTtsColumn = createColumn();
-	    const callTtsBtn = createBtn("./assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
+	    const col4 = createColumn();
+	    const callTtsBtn = createBtn(undefined, "Call next TTs Message", "#88f", async () => {
 		    this.FindOldestUnreadTtsAndCall();
 	    });
-	    callTtsColumn.append(callTtsBtn);
+	    col4.append(callTtsBtn);
 
 	    const importLabel = document.createElement('label');
 	    importLabel.innerText = "Import settings from file";
@@ -4230,412 +4218,10 @@ ProcessTtsCommand(processedMsg) {
 	    const spacer = createColumn(); // used to seperate values
 		spacer.append()
 
-	    exportInportColumn.append(exportBtn, importLabel, fileInput);
+	    col3.append(exportBtn, importLabel, fileInput);
 
 	    // Assemble and Append
-	    let StartContainer = document.createElement("div"); 
-	    let StartSubModules = document.createElement("div");
-	    StartSubModules.append()
-
-	    let StopContainer = document.createElement("div");
-	    let StopSubModules = document.createElement("div");
-	    StopSubModules.append()
-
-	    footer.append(
-		    startStopColumn, 
-		    spacer, 
-		    startStopColumn, 
-		    startStopTtsColumn, 
-		    startStopEventDisplay, 
-		    saveLoadColumn, 
-		    exportInportColumn,
-	    );
-	    */
-
-	    let buttonsContainer = document.createElement("div");
-		buttonsContainer.style = "width:100%;";
-		    let IDs = [
-			"startMonitorMessages",
-			"startTts",
-			"startEventMonitor",
-			"stopMonitorMessages",
-			"stopTts",
-			"stopEventMonitor",
-		    ];
-		    let startButtons = document.createElement("div");
-			startButtons.style = `
-				display:flex;
-				flex-direction:row;
-			`;
-			    let activeStartButtonStyle = `
-					background-color: #0f0;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			    let inactiveStartButtonStyle = `
-					background-color: #030;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			let subStartButtons = document.createElement("div");
-			subStartButtons.style = `
-				display: flex;
-				flex-direction: column;
-			`;
-				let startMonitorMessages = document.createElement("button");
-				startMonitorMessages.innerText = "startMonitorMessages";
-				startMonitorMessages.id = IDs[0];
-				startMonitorMessages.style = inactiveStartButtonStyle;
-				startMonitorMessages.onclick = () => {
-					let elem = document.getElementById(IDs[0]);
-					let counterElem = document.getElementById(IDs[0+3]);
-					elem.style = activeStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStartButton");
-					    mainStart.style = activeStartButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStopButton");
-					    mainStop.style = inactiveStopButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					counterElem.style = inactiveStopButtonStyle;
-					console.log("startMonitorMessages clicked");
-					window.Cockatiel.StartMonitoringMessages();
-				}
-				let startTts = document.createElement("button");
-				startTts.innerText = "startTts";
-				startTts.id = IDs[1];
-				startTts.style = inactiveStartButtonStyle;
-				startTts.onclick = () => {
-					let elem = document.getElementById(IDs[1]);
-					let counterElem = document.getElementById(IDs[1+3]);
-					elem.style = activeStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStartButton");
-					    mainStart.style = activeStartButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStopButton");
-					    mainStop.style = inactiveStopButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					counterElem.style = inactiveStopButtonStyle;
-					console.log("startTts clicked");
-					window.Cockatiel.StartTts();
-				}
-				let startEventMonitor = document.createElement("button");
-				startEventMonitor.innerText = "startEventMonitor";
-				startEventMonitor.id = IDs[2];
-				startEventMonitor.style = inactiveStartButtonStyle;
-				startEventMonitor.onclick = () => {
-					let elem = document.getElementById(IDs[2]);
-					let counterElem = document.getElementById(IDs[2+3]);
-					elem.style = activeStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStartButton");
-					    mainStart.style = activeStartButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStopButton");
-					    mainStop.style = inactiveStopButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					counterElem.style = inactiveStopButtonStyle;
-					console.log("startEventMonitor clicked");
-					window.Cockatiel.StartEventMonitor();
-				}
-			subStartButtons.append(startMonitorMessages, startTts, startEventMonitor);
-
-			let startButton = document.createElement("button");
-			startButton.style = inactiveStartButtonStyle; 
-			startButton.style.height = "4.5rem";
-			startButton.innerText = "start cockatiel";
-			startButton.id = "cockatielStartButton";
-			startButton.onclick = () => {
-				window.Cockatiel.StartMonitoringMessages();
-				window.Cockatiel.StartTts();
-				window.Cockatiel.StartEventMonitor();	
-
-				document.getElementById(IDs[0]).style = activeStartButtonStyle;
-				document.getElementById(IDs[0]).setAttribute("isActive", true);
-				document.getElementById(IDs[1]).style = activeStartButtonStyle;
-				document.getElementById(IDs[1]).setAttribute("isActive", true);
-				document.getElementById(IDs[2]).style = activeStartButtonStyle;
-				document.getElementById(IDs[2]).setAttribute("isActive", true);
-				document.getElementById(IDs[3]).style = inactiveStopButtonStyle;
-				document.getElementById(IDs[3]).setAttribute("isActive", false);
-				document.getElementById(IDs[4]).style = inactiveStopButtonStyle;
-				document.getElementById(IDs[4]).setAttribute("isActive", false);
-				document.getElementById(IDs[5]).style = inactiveStopButtonStyle;
-				document.getElementById(IDs[5]).setAttribute("isActive", false);
-			        document.getElementById("cockatielStartButton").style = activeStartButtonStyle + "; height:4.5rem;";
-			        document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem;";
-			};
-		    startButtons.append(subStartButtons, startButton);
-		    let stopButtons = document.createElement("div");
-			let activeStopButtonStyle = `
-					background-color: #f00;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			let inactiveStopButtonStyle = `
-					background-color: #600;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			stopButtons.style = `
-					display:flex;
-					flex-direction:row;
-				`;
-			let subStopButtons = document.createElement("div");
-			subStopButtons.style = `
-				display: flex;
-				flex-direction: column;
-			`;
-				let stopMonitorMessages = document.createElement("button");
-				stopMonitorMessages.innerText = "stopMonitorMessages";
-				stopMonitorMessages.id = IDs[3];
-				stopMonitorMessages.style = activeStopButtonStyle;
-				stopMonitorMessages.onclick = () => {
-					let elem = document.getElementById(IDs[3]);
-					let counterElem = document.getElementById(IDs[3-3]);
-					elem.style = activeStopButtonStyle;
-					counterElem.style = inactiveStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStopButton");
-					    mainStart.style = activeStopButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStartButton");
-					    mainStop.style = inactiveStartButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					console.log("stopMonitorMessages clicked");
-					window.Cockatiel.StopMonitoringMessages();
-				}
-				let stopTts = document.createElement("button");
-				stopTts.innerText = "stopTts";
-				stopTts.id = IDs[4];
-				stopTts.style = activeStopButtonStyle;
-				stopTts.onclick = () => {
-					let elem = document.getElementById(IDs[4]);
-					let counterElem = document.getElementById(IDs[4-3]);
-					elem.style = activeStopButtonStyle;
-					counterElem.style = inactiveStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStopButton");
-					    mainStart.style = activeStopButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStartButton");
-					    mainStop.style = inactiveStartButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					console.log("stopTts clicked");
-					window.Cockatiel.StopTts();
-				}
-				let stopEventMonitor = document.createElement("button");
-				stopEventMonitor.innerText = "stopEventMonitor";
-				stopEventMonitor.id = IDs[5];
-				stopEventMonitor.style = activeStopButtonStyle;
-				stopEventMonitor.onclick = () => {
-					let elem = document.getElementById(IDs[5]);
-					let counterElem = document.getElementById(IDs[5-3]);
-					elem.style = activeStopButtonStyle;
-					counterElem.style = inactiveStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStopButton");
-					    mainStart.style = activeStopButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStartButton");
-					    mainStop.style = inactiveStartButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					console.log("stopEventMonitor clicked");
-					window.Cockatiel.StopEventMonitor();
-				}
-			subStopButtons.append(stopMonitorMessages, stopTts, stopEventMonitor);
-			// main MonitoringStop()
-			let stopButton = document.createElement("button");
-			stopButton.id = "cockatielStopButton";
-			stopButton.innerText = "stop cockatiel";
-			stopButton.style = activeStopButtonStyle; 
-			stopButton.style.height = "4.5rem";
-			stopButton.onclick = () => {
-				window.Cockatiel.StopMonitoringMessages();
-				window.Cockatiel.StopTts();
-				window.Cockatiel.StopEventMonitor();
-				
-				
-				document.getElementById(IDs[0]).style = inactiveStartButtonStyle;
-				document.getElementById(IDs[0]).setAttribute("isActive", false);
-				document.getElementById(IDs[1]).style = inactiveStartButtonStyle;
-				document.getElementById(IDs[1]).setAttribute("isActive", false);
-				document.getElementById(IDs[2]).style = inactiveStartButtonStyle;
-				document.getElementById(IDs[2]).setAttribute("isActive", false);
-				document.getElementById(IDs[3]).style = activeStopButtonStyle;
-				document.getElementById(IDs[3]).setAttribute("isActive", true);
-				document.getElementById(IDs[4]).style = activeStopButtonStyle;
-				document.getElementById(IDs[4]).setAttribute("isActive", true);
-				document.getElementById(IDs[5]).style = activeStopButtonStyle;
-				document.getElementById(IDs[5]).setAttribute("isActive", true);
-			        document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-			        document.getElementById("cockatielStopButton").style = activeStopButtonStyle + "; height:4.5rem";
-			};
-		    stopButtons.append(subStopButtons, stopButton);
-		buttonsContainer.append(startButtons, stopButtons);
-
-	    //call next tts button
-	    const callTtsColumn = createColumn();
-	    const callTtsBtn = createBtn("./assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
-		    this.FindOldestUnreadTtsAndCall();
-	    });
-	    callTtsColumn.append(callTtsBtn);
-	    //footer.append();
-
-	    // --- COLUMN 3: STATE (Export/Import) ---
-	    const exportInportColumn = createColumn();
-
-
-	    const exportBtn = createBtn("./assets/export_settings.png", "Export Settings", "#ff0", () => {
-	    // 1. Get the JSON string from your class
-	    const data = window.Cockatiel.ExportState();
-	    
-	    // 2. Create a Blob (Binary Large Object) with the data
-	    const blob = new Blob([data], { type: "application/json" });
-	    
-	    // 3. Create a temporary anchor (<a>) element
-	    const url = URL.createObjectURL(blob);
-	    const link = document.createElement("a");
-	    
-	    // 4. Set the filename and the target URL
-	    link.href = url;
-	    link.download = "cockatiel_settings.json";
-	    
-	    // 5. Trigger the download and clean up
-	    document.body.appendChild(link);
-	    link.click();
-	    document.body.removeChild(link);
-	    URL.revokeObjectURL(url); // Free up memory
-	});
-
-
-
-	    const importLabel = document.createElement('label');
-	    importLabel.innerText = "Import settings from file";
-	    importLabel.style.cssText = "color: white; font-size: 0.8rem; margin-top: 5px;";
-
-	    const fileInput = document.createElement('input');
-	    fileInput.id = "state_input";
-	    fileInput.type = "file";
-	    fileInput.style.backgroundColor = "#f0f";
-	    fileInput.addEventListener('change', (event) => {
-	        this.ImportState(event);
-	    });
-
-	    footer.append(
-		    buttonsContainer,
-		    callTtsColumn,
-		    exportBtn,
-		    fileInput
-	    );
-
+	    footer.append(col2, spacer, col5, col4, col6, col1, col3);
 	    controlContainer.appendChild(footer);
 	    return controlContainer;
 	}
@@ -5152,8 +4738,7 @@ const userIcon = isValidIcon
 			if(!settingsContainer){
 				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
 			}
-			let controlBar = this.GenerateControlBarUI();
-			console.warn(controlBar);
+			let controlBar = this.GenerateControlBarUI()
 			settingsContainer.appendChild(controlBar);
 		}
 		catch(err){
