@@ -1,0 +1,145 @@
+<div class="chatMessageContainer donor-gold" id="${messageId}" style="
+            margin: 10px;
+            border: 2px solid #ffd700;
+            border-radius: 15px;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2c2400 100%);
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.4);
+            animation: goldGlow 3s infinite alternate;
+						max-width:60rem;
+        ">
+            <style>
+                @keyframes goldGlow {
+                    from { box-shadow: 0 0 10px rgba(255, 215, 0, 0.3); }
+                    to { box-shadow: 0 0 25px rgba(255, 215, 0, 0.7); }
+                }
+            </style>
+            
+            <div class="chatUserBubble" style="display:flex; padding: 10px; align-items: center; border-bottom: 1px solid rgba(255,215,0,0.2);">
+                <div class="chatUserImageContainer">
+                    <img class="chatUserImage" src="${icon}" style="width:50px; height:50px; border-radius:50%; border: 2px solid #ffd700;">
+                </div>
+                <div class="chatUserStats" style="margin-left: 15px;">
+                    <div class="chatUsername" style="color: #ffd700; font-weight: bold; font-size: 1.2rem; text-shadow: 1px 1px 2px black;">
+                        👑 Vulbyte                    
+										</div>
+                    <div style="color: #0f0; font-size: 0.9rem; font-weight: bold;">Donated $1.00</div>
+                </div>
+            </div>
+
+            <div class="chatMessageBubble" style="padding: 15px; color: #fff; font-size: 1.1rem; line-height: 1.4;">
+                <div class="chatMessage" style="text-shadow: 0px 0px 5px rgba(255,255,255,0.2);">SHOW US YOUR FEET</div>
+            </div>
+        </div>
+
+<div class="chatMessageContainer donor-neon" id="${messageId}" style="
+            position: relative;
+            padding: 3px;
+            background: linear-gradient(-45deg, #ffff00, #ff00ff, #00ffff, #ffff00);
+            background-size: 200% 200%;
+            animation: gradientMove 4s linear infinite;
+            border-radius: 12px;
+            margin: 15px 10px;
+						max-width:60rem;
+        ">
+            <style>
+                @keyframes gradientMove {
+                    0% { background-position: 0% 50%; }
+                    100% { background-position: 200% 50%; }
+                }
+            </style>
+            
+            <div style="background: #000; border-radius: 10px; padding: 10px;">
+                <div style="display:flex; align-items: center; margin-bottom: 8px;">
+                    <img src="${icon}" alt="" style="width:40px; height:40px; border-radius: 100%; box-shadow: 0 0 10px #00ffff;">
+                    <div style="margin-left: 12px;">
+                        <span style="color: #00ffff; font-weight: 900;">
+                            Vulbyte
+                        </span>
+												<span style="color: #ff00ff;">
+													donated
+												</span>
+												<span style="color: #ffff00;">
+													$1.00USD
+												</span>
+                    </div>
+                </div>
+                <div style="color: #fff; font-family: sans-serif; letter-spacing: 0.5px;">
+                    SHOW US YOUR FEET
+                </div>
+            </div>
+        </div>
+
+<div class="chatMessageContainer" id="${messageId}" style="
+            margin: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+            overflow: hidden;
+        ">
+            <div style="padding: 12px; display: flex; align-items: center; background: rgba(255, 255, 255, 0.05);">
+                <img src="${user?.icon}" style="width:45px; height:45px; border-radius: 50%; box-shadow: 0 0 10px rgba(255,255,255,0.5);">
+                <div style="margin-left: 15px;">
+                    <div style="color: white; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; font-size: 0.8rem;">✨ Crystal Supporter</div>
+                    <div style="color: #fff; font-size: 1.1rem; font-weight: 300;">${user?.username}</div>
+                </div>
+            </div>
+            <div style="padding: 15px; color: rgba(255,255,255,0.9); font-style: italic; line-height: 1.5;">
+                "${p_msg.rawMessage}"
+            </div>
+        </div>
+
+				<div class="chatMessageContainer" id="${messageId}" style="
+            margin: 20px 10px;
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: moveGradient 15s ease infinite;
+            border-radius: 5px;
+            padding: 4px;
+            transform: skewX(-5deg);
+        ">
+            <style>
+                @keyframes moveGradient {
+                    0% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                    100% { background-position: 0% 50%; }
+                }
+            </style>
+            <div style="background: #111; padding: 15px; transform: skewX(5deg);">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ee7752; padding-bottom: 5px; margin-bottom: 10px;">
+                    <span style="color: #ee7752; font-weight: 900; font-size: 1.3rem;">🔥 ULTIMATE DONOR</span>
+                    <span style="color: #fff; font-family: monospace;">${p_msg.userUuid.split('-')[0]}</span>
+                </div>
+                <div style="color: #fff; font-size: 1.2rem; font-weight: bold; text-shadow: 2px 2px #000;">
+                    ${p_msg.rawMessage}
+                </div>
+            </div>
+        </div>
+
+				<div class="chatMessageContainer" id="${messageId}" style="
+            margin: 15px;
+            background: #2b0057;
+            border-left: 8px solid #ff00ff;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 5px 5px 0px #00ffff;
+        ">
+            <div style="
+                position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+                background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                            linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+                background-size: 100% 4px, 3px 100%;
+                pointer-events: none;
+            "></div>
+            
+            <div style="padding: 15px; position: relative; z-index: 1;">
+                <div style="color: #00ffff; font-family: 'OCR A Std', monospace; text-shadow: 2px 2px #ff00ff;">
+                    >> USER: ${this.GetUserFromUuid(p_msg.userUuid)?.username}
+                </div>
+                <div style="color: #fff; font-family: 'Courier New', Courier, monospace; margin-top: 10px; font-size: 1.1rem; border: 1px solid #ff00ff; padding: 10px; background: rgba(0,0,0,0.4);">
+                    ${p_msg.rawMessage}
+                </div>
+            </div>
+        </div>

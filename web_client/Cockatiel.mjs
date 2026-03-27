@@ -94,20 +94,22 @@ export default class Cockatiel {
 		},
 		messages: {
 			//originalData: {},
-			type: "message",
-			version: 1,
-			username: null,
-			userUuid: null,
-			streamOrigin: null, //what streamid via the platform the message came from
-			channelOrigin: null,
-			receivedAt: null, 
 			commands: [],
+			version: 1,
+			channelOrigin: null,
+			donationAmount: 0,
+			donationCurrency: undefined,
+			messageId: null,
 			processedMessage: null,
 			platform: null,
-			messageId: null,
 			rawMessage: null,
+			receivedAt: null, 
 			score: null,
-			state: {}
+			state: {},
+			streamOrigin: null, //what streamid via the platform the message came from
+			type: "message",
+			username: null,
+			userUuid: null,
 		},
 		messageCommand: {
 			isValid: false, // if everything passes, then true, if not (ie not enough credits, not the right perms, etc, then false
@@ -297,10 +299,10 @@ export default class Cockatiel {
 				command: "tts",
 				description: "",
 				flags: {
-					p: {value: 1, type:"number", description: "modifys the pitch of the tts", range: { min: 0.5, max: 3 } },
+					p: {value: 0.3, type:"number", description: "modifys the pitch of the tts", range: { min: 0.5, max: 3 } },
 					/* below is an alias for speed*/
-					r: {value: 1, type:"number", description: "modifys the speed [rate] of the tts message", range: { min: 0.5, max: 3 } },
-					v: {value: 1, type:"number", description: "modifys the voice of the tts message", range: { min: 0, max: 180 } },
+					r: {value: 0.9, type:"number", description: "modifys the speed [rate] of the tts message", range: { min: 0.5, max: 3 } },
+					v: {value: 51, type:"number", description: "modifys the voice of the tts message", range: { min: 0, max: 180 } },
 				},
 				AuthNeeded: { owner: false, admin: false, mod: false, trused: false},
 				func: 'CallTts', //function to call when triggered
@@ -374,7 +376,7 @@ export default class Cockatiel {
 				width: 420,  // this was an accident lol
 				background: "#0f0",
 				color: "#000",
-				messageDisplayDuration: 7,
+				messageDisplayDuration: 30,
 				displayRate: {min: 1.1, max: 5}, // min and max values for when to add the next message to chat display
 				defaultStylesheet: "/stylesheets/chatMessage-modernMinimal.css", 
 				//"./stylesheets/chatMessage-modernMinimal.css",
@@ -386,6 +388,7 @@ export default class Cockatiel {
 				background: "#000",
 				color: undefined,	
 				defaultStylesheet: "",
+				updateDelay: 7, // the time it takaes for the update to change
 			}
 		},
 		unprocessed_queue: [], // messages returned from yt fetch
@@ -1302,43 +1305,89 @@ export default class Cockatiel {
 	    };
 	}
 	
-	async GetStandbyEventHtml(){
-		const html = `
-			<div style="
-				width:400px; 
-				height:300px; 
-				background-color:pink;
-			">
-				<div style="
-					display:flex; 
-					flex-direction:column; 
-					justify-content:space-evenly; 
-					background-color:black; 
-					width:100%; 
-					height:100%;
-				">
-					<div style="
-						display:flex; 
-						flex-direction:row; 
-						justify-content:space-evenly; 
-						width:100%;
-					">
-						<p style="color:#ddd">No Events Happening Right Now!</p>
-					</div>
-					<div style="
-						display:flex; 
-						flex-direction:row; 
-						justify-content:space-evenly; 
-						width:100%;
-					">
-						<div>
-							<img style="color:#aaa" src="./assets/sleepi_tib.png" alt="new events probably happening soon!">
-						</div>
-					</div>
-				</div>
+	async GetStandbyEventHtml() {
+	    let id = crypto.randomUUID();
+	    // Assuming updateDelay is your starting number (e.g., 10 seconds)
+	    const startCount = (this.#state.windows.events.updateDelay);
+
+	    const GetRandomColor = () => {
+		// Corrected: Math.random() is a function call
+		const colors = ["#f00", "#0f0", "#00f", "#f0f", "#0ff", "#ff0", /*"#000"*/, /*"#fff"*/];
+		const index = Math.floor(Math.random() * colors.length-1);
+		return colors[index];
+	    };
+
+	    const backgroundColor = GetRandomColor();
+	    
+	    const GetUniqueRandomColor = (existing) => {
+		let newColor = GetRandomColor();
+		// Keep picking until it's different
+		while (newColor === existing) {
+		    newColor = GetRandomColor();
+		}
+		return newColor;
+	    };
+
+	    //const color = GetUniqueRandomColor(backgroundColor);
+
+	    const html = `
+	    <div style="
+		background-color: ${backgroundColor}; 
+		border-radius: 2rem;
+		border: 0.1rem transparent #ccc; 
+		color: ${backgroundColor};
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		align-items: center;
+		font-size: 2rem;
+		/*font-family: sans-serif;*/
+		font-variant-numeric: tabular-nums;
+		padding: 0.5rem; 
+		margin: 1rem;
+		position: absolute; 
+		bottom: 10px; 
+		right: 10px; 
+		height: 3rem;
+		width: 3rem;
+		z-index: 1000;
+	    ">
+		<span id="${id}" style="mix-blend-mode:difference;">${startCount}</span>
+		
+		<img src="x" style="display:none;" onerror="(function(){
+		    const targetId = '${id}';
+		    const interval = setInterval(() => {
+			const elem = document.getElementById(targetId);
+			if (elem) {
+			    const current = parseInt(elem.innerText);
+			    if (current > 0) {
+				elem.innerText = current - 1;
+			    } else {
+				clearInterval(interval);
+				// Optional: Hide the timer when it hits 0
+				elem.parentElement.style.display = 'none';
+			    }
+			} else {
+			    clearInterval(interval); 
+			}
+		    }, 1000); // 1000ms = 1 second ticks
+		})()">
+	    </div>
+	    
+	    <div style="width:400px; height:300px; background-color:pink; position: relative;">
+		<div style="display:flex; flex-direction:column; justify-content:space-evenly; background-color:black; width:100%; height:100%;">
+		    <div style="display:flex; flex-direction:row; justify-content:space-evenly; width:100%;">
+			<p style="color:#ddd">No Events Happening Right Now!</p>
+		    </div>
+		    <div style="display:flex; flex-direction:row; justify-content:space-evenly; width:100%;">
+			<div>
+			    <img style="color:#aaa" src="./assets/sleepi_tib.png" alt="new events probably happening soon!">
 			</div>
-		`;	
-		return html;
+		    </div>
+		</div>
+	    </div>
+	    `;    
+	    return html;
 	}
 
 	async UpdateEventDisplayWindowWithNewHTML(html){ //returns 0 on success, other on fail
@@ -2140,7 +2189,6 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 
 	DoTheStuffToAddMessageToQueue(p_msg){
 	    console.log("ADDING MESSAGE TO QUEUE");
-	    this.PushMessageToChatWindow(p_msg);
 	    p_msg.state.displayedAt = Date.now();
 	    this.DebugPrint({msg: "message does not exist, adding"});
 	    this.#state.users[p_msg.userUuid].totalMessages += 1;
@@ -2178,7 +2226,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		for(let i = 0; i < q.length; ++i){
 		    try {
 		        const raw = q[i];
-		        const p_msg = await this.ProcessYoutubeV3Message_v1(raw);
+		        const p_msg = await this.ProcessYoutubeV3Data_v1(raw);
 
 		        this.DebugPrint({msg: "message finished processing", val: p_msg});
 
@@ -2231,11 +2279,11 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		}
 	}	
 
-async ProcessYoutubeV3Message_v1(unprocessedMsg) {
+async ProcessYoutubeV3Message(unprocessedMsg){
     try {
         const rmo = unprocessedMsg.data;
 	
-	this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Message_v1():", val: rmo});
+	this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
         
         // 1. Initialize message from template
         let newMessage = { ...this.templates.messages };
@@ -2303,13 +2351,162 @@ async ProcessYoutubeV3Message_v1(unprocessedMsg) {
 
     } catch (err) {
         this.DebugPrint({ 
-            msg: "CRITICAL ERROR in ProcessYoutubeV3Message_v1", 
+            msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
             type: "e", 
             err: err
         });
         return null;
     }
 }
+	async ProcessYoutubeV3SuperChatEvent(unprocessedMsg){
+		console.log({msg: "ProcessYoutubeV3SuperChatEvent received:", val: JSON.stringify(unprocessedMsg, null, 4)});
+	    try {
+		const rmo = unprocessedMsg.data;
+		
+		this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
+		
+		// 1. Initialize message from template
+		let newMessage = { ...this.templates.messages };
+		newMessage.version = 1;
+		newMessage.type = "message";
+		newMessage.platform = "youtube";
+		newMessage.rawMessage = rmo.snippet.displayMessage;
+		newMessage.messageId = rmo.id;
+		newMessage.channelOrigin = rmo.authorDetails.channelId;
+		newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
+		
+		// Handle @ in username
+		let name = rmo.authorDetails.displayName;
+		newMessage.username = name.startsWith("@") ? name.slice(1) : name;
+
+		// 2. SEARCH FOR EXISTING USER (CRITICAL STEP)
+		const inputChannelId = rmo.authorDetails.channelId;
+		let foundUuid = this.FindUserFromChannelIdAndReturnUuid(inputChannelId);
+		
+		let user;
+		if (!foundUuid) {
+		    this.DebugPrint({ msg: "NEW USER: Creating profile", val: name });
+		    // This function should return a brand new user object and add it to #state.users
+		    user = this.CreateUserFromFlags(newMessage); 
+		    newMessage.userUuid = user.uuid;
+		} else {
+		    this.DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
+		    user = this.#state.users[foundUuid];
+		    newMessage.userUuid = foundUuid;
+		}
+
+		// 3. Process Message Content (Sanitization & Commands)
+		if (this.CheckMessageForBannedWords(newMessage.rawMessage)) {
+		    // Logic for banned words here
+		}
+		newMessage.processedMessage = this.SanitizeString(newMessage.rawMessage);
+		try{
+			if(
+				newMessage.processedMessage.indexOf("\"")+1 != -1
+				&& newMessage.processedMessage.indexOf("\"", newMessage.processedMessage.indexOf("\"")+1) != -1
+			){
+				newMessage.processedMessage = newMessage.processedMessage.slice(
+					newMessage.processedMessage.indexOf("\"")+1,
+					newMessage.processedMessage.indexOf("\"", newMessage.processedMessage.indexOf("\"")+1)
+				);
+			}
+			else {
+				newMessage.processedMessage = "";
+			}
+		}
+		catch(err){
+
+		}
+
+		// 4. Handle Commands
+		const commandObject = this.ParseCommandFromMessage(newMessage);
+		newMessage.commands = commandObject || {};
+		
+		// If a command has a custom message (like TTS), use it for processedMessage
+		const firstCmdKey = Object.keys(newMessage.commands)[0];
+		if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
+		    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
+		}
+
+		// 5. Score and Update Points
+		newMessage.score = await this.ScoreMessage(newMessage.processedMessage);
+		this.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
+
+		// 6. Sync User Metadata (Updates icons/roles if they changed)
+		if (user) {
+		    user.icon = rmo.authorDetails.profileImageUrl;
+		    user.isVerified = rmo.authorDetails.isVerified;
+		    user.isChatOwner = rmo.authorDetails.isChatOwner;
+		    user.isChatSponsor = rmo.authorDetails.isChatSponsor;
+		    user.isChatModerator = rmo.authorDetails.isChatModerator;
+		}
+
+		newMessage.donationAmount = Number(rmo.snippet.superChatDetails.amountMicros)/10**6,
+		newMessage.donationCurrency = rmo.snippet.superChatDetails.currency,
+		    /*
+			let superChatEventMessage = {
+			    "kind": "youtube#liveChatMessage",
+			    "etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
+			    "id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
+			    "snippet": {
+				"type": "superChatEvent",
+				"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+				"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+				"publishedAt": "2026-03-26T21:07:12.021491+00:00",
+				"hasDisplayContent": true,
+				"displayMessage": "CA$1.00 from @vulbyte",
+				"superChatDetails": {
+				    "amountMicros": "1000000",
+				    "currency": "CAD",
+				    "amountDisplayString": "CA$1.00",
+				    "tier": 1
+				}
+			    },
+			    "authorDetails": {
+				"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+				"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+				"displayName": "@vulbyte",
+				"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+				"isVerified": false,
+				"isChatOwner": true,
+				"isChatSponsor": false,
+				"isChatModerator": false
+			    }
+			}	
+		*/
+
+		newMessage.state = {
+			displayedAt: false
+		};
+		return newMessage;
+
+	    } catch (err) {
+		this.DebugPrint({ 
+		    msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
+		    type: "e", 
+		    err: err
+		});
+		return null;
+	    }
+	}
+
+	async ProcessYoutubeV3Data_v1(unprocessedMsg) {
+		let type = String(unprocessedMsg.data.snippet.type).toLowerCase();
+		this.DebugPrint({msg: "type detected: ", val: type});
+		let msg;
+		switch(type){
+			case("textmessageevent"):
+				msg = await this.ProcessYoutubeV3Message(unprocessedMsg);
+				this.PushMessageToChatWindow(msg);
+				return msg;
+			case("superchatevent"):
+				msg = await this.ProcessYoutubeV3SuperChatEvent(unprocessedMsg);
+				this.PushDonationToChatWindow(msg);
+				return msg;
+			default:
+				this.DebugPrint({msg: "UNABLE TO FIND MATCHING 'msg.data.snippet.type'", val: unprocessedMsg, type:"t"});
+		}
+	}
 
 	async ProcessPendingTts() {
 	    this.DebugPrint({msg: "Scanning for pending TTS commands..."});
@@ -4111,6 +4308,7 @@ ProcessTtsCommand(processedMsg) {
 		`;
 		btn.onclick = onClick;
 		btn.append(img);
+
 		return btn;
 	    };
 
@@ -4629,14 +4827,155 @@ ProcessTtsCommand(processedMsg) {
 	        this.ImportState(event);
 	    });
 
+		//save/load inputs
+	    const saveLoadColumn = createColumn(); 
+	    const saveBtn = createBtn("./assets/save_inputs.png", "save all inputs", "#0f0", () => {
+		let inputs = document.getElementsByTagName('input');
+		for (let x of inputs) {
+		    if (x.id && x.type != 'button' && x.type != 'file') {
+			localStorage.setItem(x.id, x.value);
+		    }
+		}
+		console.log("All inputs saved to LocalStorage.");
+	    });
+	    saveBtn.innerText = "save inputs";
+
+	    const loadBtn = createBtn("./assets/load_inputs.png", "load all inputs", "#ff0", async () => {
+		console.log("Loading values from LocalStorage...");
+		let inputs = document.getElementsByTagName("input");
+		for (let x of inputs) {
+		    if (x.id && x.type !== "button" && x.type !== "file") {
+			let savedValue = localStorage.getItem(String(x.id));
+			if (savedValue !== null) {
+			    x.value = savedValue;
+			}
+		    }
+		}
+		if (window.Cockatiel && window.Cockatiel.yt) {
+		    await window.Cockatiel.yt.LoadValuesFromLocalStorage();
+		}
+	    });
+	    loadBtn.innerText = "load inputs";
+
+	    saveLoadColumn.append(saveBtn, loadBtn);
+
 	    footer.append(
 		    buttonsContainer,
 		    callTtsColumn,
 		    exportBtn,
-		    fileInput
+		    saveLoadColumn,
+		    fileInput,
 	    );
 
 	    controlContainer.appendChild(footer);
+
+	    //tests 	
+		let tests = document.createElement("details");
+		tests.style = "color:white;";
+		let summary = document.createElement("summary");
+		summary.innerText = "youtube test events";
+		tests.append(summary);
+
+		// superChatEvent - message
+		let superChatEventMessages = [
+			{
+				"version": 1,
+				"apiVersion": 3,
+				"platform": "YouTube",
+				"data": {
+					"kind": "youtube#liveChatMessage",
+					"etag": "cyISaLoRJzops1Dhjhwp5ineYeI",
+					"id": "LCC.EhwKGkNLanpxY2J1dnBNREZRbkN3Z1FkVGhZVVJB",
+					"snippet": {
+						"type": "superChatEvent",
+						"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+						"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+						"publishedAt": "2026-03-27T00:52:12.560546+00:00",
+						"hasDisplayContent": true,
+						"displayMessage": "CA$2.00 from @vulbyte: \"IS A TEST OF THE YOUTUBE API WITH A MESSAGE\"",
+						"superChatDetails": {
+							"amountMicros": "2000000",
+							"currency": "CAD",
+							"amountDisplayString": "CA$2.00",
+							"userComment": "HERE IS A TEST OF THE YOUTUBE API WITH A MESSAGE",
+							"tier": 2
+						}
+					},
+					"authorDetails": {
+						"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+						"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+						"displayName": "@vulbyte",
+						"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+						"isVerified": false,
+						"isChatOwner": true,
+						"isChatSponsor": false,
+						"isChatModerator": false
+					}
+				},
+				"receivedAt": 1774572732560
+			},
+			{ //donation with no message
+				    "version": 1,
+				    "apiVersion": 3,
+				    "platform": "YouTube",
+				    "data": {
+					"kind": "youtube#liveChatMessage",
+					"etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
+					"id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
+					"snippet": {
+					    "type": "superChatEvent",
+					    "liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+					    "authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+					    "publishedAt": "2026-03-26T21:07:12.021491+00:00",
+					    "hasDisplayContent": true,
+					    "displayMessage": "CA$1.00 from @vulbyte",
+					    "superChatDetails": {
+						"amountMicros": "1000000",
+						"currency": "CAD",
+						"amountDisplayString": "CA$1.00",
+						"tier": 1
+					    }
+					},
+					"authorDetails": {
+					    "channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+					    "channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+					    "displayName": "@vulbyte",
+					    "profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+					    "isVerified": false,
+					    "isChatOwner": true,
+					    "isChatSponsor": false,
+					    "isChatModerator": false
+					}
+				    },
+				    "receivedAt": 1774559232021
+				}
+			];
+		    /*
+		    --scoreColor1000plus: #E62117;
+		    --scoreColor500plus: #E91E63;
+		    --scoreColor100plus: #FFCA28;
+		    --scoreColor50plus: #1DE9B6;
+		    --scoreColor20plus: #00E5FF;
+		    --scoreColor0plus: #1E88E5;
+		    --scoreColorBelow0: #0000E5;
+		    */
+		let superChatTest = document.createElement("button");
+		superChatTest.innerText =  'test "superChatEvent" message';
+		superChatTest.style = `
+			background-color: "#1E88E5";
+			color: "#fff";
+		`
+		superChatTest.onclick = () => {
+			this.ProcessYoutubeV3Data_v1(superChatEventMessages[
+				Math.floor(Math.random()*superChatEventMessages.length)
+			]);
+		};
+
+		tests.append(superChatTest);	
+
+
+
+		controlContainer.append(tests);
 	    return controlContainer;
 	}
 
@@ -4930,7 +5269,11 @@ const userIcon = isValidIcon
 		}
 
 	// 2. Setup HTML Structure
-	doc.body.innerHTML = `
+	if(args.html != undefined){	
+		doc.body.innerHTML = args.html;
+	}
+	else{
+		doc.body.innerHTML = `
 	<div id="${args.key}-viewport" style="
 	    width: 100%; 
 	    height: 100vh; 
@@ -4945,21 +5288,22 @@ const userIcon = isValidIcon
 	    scroll-behavior: smooth; /* Makes the auto-scroll look nice */
 	"></div>
 	`;
-	    // 3. Inject the Script
-	    if (args.script) {
-		const scriptEl = doc.createElement("script");
-		scriptEl.type = "text/javascript";
-		
-		// We wrap the script to ensure it has access to the viewport immediately
-		scriptEl.textContent = `
+		// 3. Inject the Script
+		if (args.script) {
+			const scriptEl = doc.createElement("script");
+			scriptEl.type = "text/javascript";
+
+			// We wrap the script to ensure it has access to the viewport immediately
+			scriptEl.textContent = `
 		    (function() {
 			console.log("Sub-window '${args.key}' initialized.");
 			${args.script}
 		    })();
 		`;
-		
-		doc.body.appendChild(scriptEl);
-	    }
+
+			doc.body.appendChild(scriptEl);
+		}
+	}
 	}
 
 	async GetTrigramsFromFile() {
@@ -5039,6 +5383,69 @@ const userIcon = isValidIcon
 		`;
 	}
 
+	CreateDonationHtml(p_msg, messageId) {
+		console.warn(JSON.stringify(p_msg));
+	    // 1. Get User (Fixed property name to userUuid)
+	    let user = this.GetUserFromUuid(p_msg.userUuid || p_msg.uuid);
+
+	    // 2. Safely extract user info
+	    let icon = user?.icon || "/content/stream_utils/tib_stuff/default_icon.png";
+	    let username = user?.username || "Unknown User";
+
+	    let commendments = {
+		community: user?.stats?.community || 0,
+		engagement: user?.stats?.engagement || 0,
+		support: user?.stats?.support || 0,
+		rep: user?.stats?.rep || 0,
+	    };
+
+	    // 3. Extract Command and Message
+	    let commandStr = "";
+	    let displayMessage = p_msg.rawMessage || "";
+
+	    // 4. RETURN the template literal
+	    return `
+		<div class="chatMessageContainer donor-neon" id="${messageId}" style="
+			font-size: 1.6rem;
+		    position: relative;
+		    padding: 0.3rem;
+		    background: linear-gradient(-90deg, #ffff00, #ff00ff, #00ffff, #ffff00);
+		    background-size: 200% 200%;
+		    animation: gradientMove 4s linear infinite;
+		    border-radius: 0.7rem;
+		    margin: 0.3rem 0.15rem;
+		    max-width:60rem;
+		">
+		    <style>
+			@keyframes gradientMove {
+			    0% { background-position: 0% 50%; }
+			    100% { background-position: 200% 50%; }
+			}
+		    </style>
+		    
+		    <div style="background: #000; border-radius: 0.0rem; padding: 0.5rem;">
+			<div style="display:flex; align-items: center; margin: 0.5rem;">
+			    <img src="${icon}" alt="" style="width:3rem !important; height:3rem !important; border-radius: 100%; box-shadow: 0 0 0.7rem #00ffff;">
+			    <div style="margin-left: 0.6rem;">
+				<span style="color: #00ffff; font-weight: 900; display:block;">
+					${p_msg.username}
+				</span>
+				<span style="color: #ff00ff;">
+					donation amount:
+				</span>
+				<span style="color: #ffff00;">
+					$${p_msg.donationAmount}
+				</span>
+			    </div>
+			</div>
+			<div style="color: #fff; font-family: sans-serif; letter-spacing: 0.1rem;">
+			    ${p_msg.processedMessage}
+			</div>
+		    </div>
+		</div>
+		`;
+	}
+
 	PushMessageToChatWindow(processedMsg) {
 	    if (!processedMsg) return;
 
@@ -5049,6 +5456,24 @@ const userIcon = isValidIcon
 	    }
 
 	    const msgHTML = this.CreateMessageHtml(processedMsg, processedMsg.messageId);
+
+	    win.postMessage({ 
+		type: 'new_chat_msg', 
+		payload: { html: msgHTML } 
+	    }, "*");
+	}
+
+	PushDonationToChatWindow(processedMsg) {
+	    if (!processedMsg) return;
+
+
+	    const win = this.subWindows[this.#state.windows.chat.key];
+	    if (!win || win.closed) {
+		this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
+		return;
+	    }
+
+	let msgHTML = this.CreateDonationHtml(processedMsg);
 
 	    win.postMessage({ 
 		type: 'new_chat_msg', 
@@ -5101,7 +5526,7 @@ const userIcon = isValidIcon
 			EventDisplayTimer: new IntTimer({
 				autoStart: true,
 				name: "EventDisplayTimer",
-				timeoutDuration: 7,
+				timeoutDuration: this.#state.windows.events.updateDelay,
 				emitOnStart: false, // if true, will emit when started
 				debug: true,
 			}),
@@ -5109,6 +5534,135 @@ const userIcon = isValidIcon
 
 		this.#state.timers.GetMessagesTimer.AddTimeoutListener(() => this.#DaLoop()); 
 	}
+
+	/**
+	 * Generates a TTS Voice Tester UI that interfaces with window.Cockatiel.CallTts.
+	 * @returns {HTMLElement} The container element.
+	 */
+	CreateTtsVoiceTester() {
+	    const container = document.createElement("div");
+	    container.style = `
+		font-family: sans-serif; padding: 20px; background: #1a1a1a; 
+		color: #eee; border-radius: 12px; border: 1px solid #333; max-width: 850px;
+	    `;
+
+	    // --- 1. Top Controls (Text, Pitch, Rate) ---
+	    const controlsGrid = document.createElement("div");
+	    controlsGrid.style = "display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 15px; margin-bottom: 20px; align-items: end;";
+
+	    const textGroup = document.createElement("div");
+	    textGroup.innerHTML = `<label style="display:block; margin-bottom:5px; font-size:0.8rem; color:#888;">Test Message</label>`;
+	    const testInput = document.createElement("input");
+	    testInput.value = "Testing the Cockatiel TTS system.";
+	    testInput.style = "width:100%; padding:8px; background:#222; border:1px solid #444; color:#fff; border-radius:4px; box-sizing: border-box;";
+	    textGroup.appendChild(testInput);
+
+	    const pitchGroup = document.createElement("div");
+	    pitchGroup.innerHTML = `<label id="p-val" style="display:block; margin-bottom:5px; font-size:0.8rem; color:#888;">Pitch: ${this.#state.commands.tts.flags.p.value}</label>`;
+	    const pitchInput = document.createElement("input");
+	    pitchInput.type = "range"; pitchInput.min = "0"; pitchInput.max = "2"; pitchInput.step = "0.1"; 
+	    pitchInput.value = this.#state.commands.tts.flags.p.value;
+	    pitchInput.oninput = () => document.getElementById("p-val").innerText = `Pitch: ${pitchInput.value}`;
+	    pitchGroup.appendChild(pitchInput);
+
+	    const rateGroup = document.createElement("div");
+	    rateGroup.innerHTML = `<label id="r-val" style="display:block; margin-bottom:5px; font-size:0.8rem; color:#888;">Rate: ${this.#state.commands.tts.flags.r.value}</label>`;
+	    const rateInput = document.createElement("input");
+	    rateInput.type = "range"; rateInput.min = "0.1"; rateInput.max = "3"; rateInput.step = "0.1"; 
+	    rateInput.value = this.#state.commands.tts.flags.r.value;
+	    rateInput.oninput = () => document.getElementById("r-val").innerText = `Rate: ${rateInput.value}`;
+	    rateGroup.appendChild(rateInput);
+
+	    controlsGrid.append(textGroup, pitchGroup, rateGroup);
+	    container.appendChild(controlsGrid);
+
+	    // --- 2. Table Setup ---
+	    const tableContainer = document.createElement("div");
+	    tableContainer.style = "max-height: 400px; overflow-y: auto; border: 1px solid #333; border-radius: 6px;";
+	    const table = document.createElement("table");
+	    table.style = "width: 100%; border-collapse: collapse; background: #252525; font-size: 0.9rem;";
+	    
+	    const tbody = document.createElement("tbody");
+	    table.innerHTML = `<thead style="background:#333; position:sticky; top:0; z-index:1;">
+	    <tr><th style="padding:10px; text-align:left;">ID</th><th style="text-align:left;">Voice</th><th>Lang</th><th style="text-align:center;">Action</th></tr>
+	    </thead>`;
+
+	    // --- 3. Voice Loading Logic ---
+	    const refreshVoices = () => {
+		const voices = window.speechSynthesis.getVoices();
+		const currentDefaultIdx = this.#state.commands.tts.flags.v.value;
+		tbody.innerHTML = "";
+
+		voices.forEach((voice, index) => {
+		    const isDefault = index === currentDefaultIdx;
+		    const row = document.createElement("tr");
+		    row.style.borderBottom = "1px solid #333";
+		    
+		    // Highlight logic
+		    if (isDefault) {
+			row.style.backgroundColor = "rgba(255, 0, 100, 0.15)";
+		    }
+
+		    row.innerHTML = `
+			<td style="padding:10px; color:${isDefault ? '#ff0064' : '#666'}; font-weight:${isDefault ? 'bold' : 'normal'};">${index}</td>
+			<td style="color:${isDefault ? '#ff0064' : '#4db8ff'}; font-weight:bold;">${voice.name} ${isDefault ? '(DEFAULT)' : ''}</td>
+			<td style="color:#888;">${voice.lang}</td>
+			<td style="padding:10px; text-align:center; display:flex; gap:5px; justify-content:center;"></td>
+		    `;
+
+		    // Test Button
+		    const btnTest = document.createElement("button");
+		    btnTest.innerText = "▶ Test";
+		    btnTest.style = "cursor:pointer; background:#28a745; color:#fff; border:none; padding:5px 8px; border-radius:4px; font-weight:bold; font-size:0.75rem;";
+		    
+		    btnTest.onclick = async () => {
+			const mockMessage = {
+			    commands: {
+				tts: {
+				    isValid: true,
+				    message: testInput.value,
+				    flags: { v: index, p: pitchInput.value, r: rateInput.value }
+				}
+			    },
+			    state: { isRead: false }
+			};
+			if (window.Cockatiel?.CallTts) await window.Cockatiel.CallTts(mockMessage);
+		    };
+
+		    // Set Default Button
+		    const btnDefault = document.createElement("button");
+		    btnDefault.innerText = "Set Default";
+		    btnDefault.style = `cursor:pointer; background:${isDefault ? '#666' : '#ff0064'}; color:#fff; border:none; padding:5px 8px; border-radius:4px; font-weight:bold; font-size:0.75rem;`;
+		    btnDefault.disabled = isDefault;
+
+		    btnDefault.onclick = () => {
+			// Update your class state
+			this.#state.commands.tts.flags.v.value = index;
+			this.#state.commands.tts.flags.p.value = pitchInput.value;
+			this.#state.commands.tts.flags.r.value = rateInput.value;
+			
+			// Refresh table to move highlight
+			refreshVoices();
+			console.log(`Default set to: ${voice.name} (Index: ${index})`);
+		    };
+
+		    const actionCell = row.querySelector('td:last-child');
+		    actionCell.appendChild(btnTest);
+		    actionCell.appendChild(btnDefault);
+		    tbody.appendChild(row);
+		});
+	    };
+
+	    window.speechSynthesis.onvoiceschanged = refreshVoices;
+	    refreshVoices();
+
+	    table.appendChild(tbody);
+	    tableContainer.appendChild(table);
+	    container.appendChild(tableContainer);
+
+	    return container;
+	}
+
 
 	GenerateUi(){
 		this.DebugPrint({msg: "generating ui for the first time"});
@@ -5137,6 +5691,18 @@ const userIcon = isValidIcon
 			settingsContainer = this.CHE({type: 'div', id: "cockatiel_settings_container"});
 		}// Ensure all subwindows are closed if the main app is closed or refreshed
 
+		try{
+			let ttsSettingsContainer = document.createElement("details");
+				let ttsSettingsLabel = document.createElement("summary");
+					ttsSettingsLabel.innerText = "tts settings";
+				ttsSettingsContainer.append(ttsSettingsLabel);
+				let ttsPreview = this.CreateTtsVoiceTester();
+				ttsSettingsContainer.append(ttsPreview);
+			settingsContainer.append(ttsSettingsContainer);
+		}
+		catch(err){
+			this.DebugPrint({msg:"cannot generate Tts preview"});
+		}
 
 		try{
 			let bannedWordsList = this.GenerateBannedWordsConfig();
@@ -5281,6 +5847,12 @@ const userIcon = isValidIcon
 					}
 				    	document.innerHtml = event.payload;	
 				    });
+				`,
+				html: `
+					<div style="display: flex; justify-content:space-evenly; flex-direction:column; height: 100%; margin: auto;">
+						<div style="max-width:60rem; width:80%; color:white; padding: 2rem;">event monitor has yet to be started, do so to turn cockatiel on</div>
+						<img style="max-width:60%; margin:auto;" src="./assets/off_tib.png">
+					</div>
 				`,
 			});
 
@@ -5463,7 +6035,7 @@ const userIcon = isValidIcon
 		    },
 		    "receivedAt": 1773288187947
 		} 
-		let msg = await this.ProcessYoutubeV3Message_v1(val);
+		let msg = await this.ProcessYoutubeV3Data_v1(val);
 		this.SafeAddToEventTimeline(msg);
 
 
@@ -5506,7 +6078,7 @@ const userIcon = isValidIcon
 		    },
 		    "receivedAt": 1773288187947
 		} 
-		this.ProcessYoutubeV3Message_v1(val);
+		this.ProcessYoutubeV3Data_v1(val);
 	}
 	
 	RunSubWindowTest7(){
@@ -5531,7 +6103,7 @@ const userIcon = isValidIcon
 				    "version": 1,
 			}
 			try{
-				//this.ProcessYoutubeV3Message_v1(test_message);
+				//this.ProcessYoutubeV3Data_v1(test_message);
 				this.SafeAddToEventTimeline(test_message);
 			}
 			catch(error){

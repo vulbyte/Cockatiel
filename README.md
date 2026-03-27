@@ -19,6 +19,7 @@ customization:
 misc:
 - [ ] - proper import/exporting of state
 - [ ] - call local tts model [ie models from hugging face](https://huggingface.co/models?pipeline_tag=text-to-speech&sort=trending)
+- [ ] - impliment something where you can set your mic input, then if you stop talking for x amount of seconds, it'll play the next tts message instead of just going off on a timer
 
 ## tldr:
 

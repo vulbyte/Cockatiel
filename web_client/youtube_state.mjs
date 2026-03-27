@@ -212,7 +212,7 @@ export class YoutubeV3 {
 		DebugPrint("Updated Token to: " + data.nextPageToken);
 	    }
 
-	    DebugPrint("getChatMessages:", JSON.stringify(data, null, 4));
+	    DebugPrint("getChatMessages got:", JSON.stringify(data, null, 4));
 
 	    return data;
 	}
