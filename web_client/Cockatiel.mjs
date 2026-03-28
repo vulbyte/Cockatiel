@@ -124,7 +124,9 @@ export default class Cockatiel {
 				err: null,
 				erroredAt: null,
 			},
-			state: {},
+			state: {
+				readAt: null,
+			},
 		},
 		misconduct: {
 			version: 1,
@@ -261,8 +263,10 @@ export default class Cockatiel {
 			  censorWords: ["tacos"],
 		  },
 		  flag : {
+		    audio: null,
 		    description :
 			"used to define the token used to trigger the tts,",
+		    eventHtml: null,
 		    token : "!",
 		    positionOptions : [
 		      "start",
@@ -276,6 +280,8 @@ export default class Cockatiel {
 			clip: {
 				version: 1,
 				command: "clip",
+				audio: null,
+			        eventHtml: null,
 				flags: [
 					{ flag: ['l'], value: 1, description: "approximate duration of the clip in minutes", range: { min: 0.1, max: 10 } },
 				],
@@ -363,6 +369,103 @@ export default class Cockatiel {
 			*/ 
 		},
 		debug: true,
+		eventsConfig: {
+			chatDonation: {
+				audio: null,
+				eventHtml: null,
+				
+			},
+			chatMessage: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			eventClip: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			eventHelp: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			eventPredicitonStart: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			eventPredicitonEnd: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			eventTts: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			eventVote: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier1: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier2: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier3: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier4: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier5: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier6: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier7: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier8: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followTier9: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			followGift: {
+				audio: null,
+				eventHtml: null,
+
+			},
+			voteNew: {
+				audio: null,
+				eventHtml: null,
+
+			},
+		},
 		flaggedMessageQueue: [],
 		event_timeline: [], // everything that has happened, messages, tts, etc
 		timers: {/*declared at the start of the constructor*/},
@@ -1215,7 +1318,7 @@ export default class Cockatiel {
 			</div>
 		    </div>
 		    
-		    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" onload="(function(){ /* particle logic */ })();" style="display:none;">
+		    <img src="" onload="(function(){ /* particle logic */ })();" style="display:none;">
 		</div>`;
 	}
 
@@ -1354,7 +1457,7 @@ export default class Cockatiel {
 	    ">
 		<span id="${id}" style="mix-blend-mode:difference;">${startCount}</span>
 		
-		<img src="x" style="display:none;" onerror="(function(){
+		<img src="" style="display:none;" onerror="(function(){
 		    const targetId = '${id}';
 		    const interval = setInterval(() => {
 			const elem = document.getElementById(targetId);
@@ -2195,34 +2298,12 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	    this.SafeAddToEventTimeline(p_msg)
 	}
 
-	async #DaLoop() {
-		// dLive 
-		// facebook here
-		// instagram
-		// kick here
-		// picarto here
-		// tiktok here
-		// trovo
-		// twitch here
-		// twitter here
-		// youtube
-		this.DebugPrint({msg: "Fetching messages from youtube"});
-		const data = await this.yt.getChatMessages();
-		
-		this.DebugPrint({msg: `Received ${data.items?.length || 0} items`});
-
-		if (!data.items || data.items.length === 0) return;
-
-		this.DebugPrint({msg: "adding messages to unprocessed queue"});
-		for (const item of data.items) {
-		    this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(item);
-		}
-
+	async ProcessUnprocessedQueue(){
 		let q = this.#state.unprocessed_queue.splice(
 			0, 
 			this.#state.unprocessed_queue.length
 		);
-		this.DebugPrint({msg: "processing unprocecssed_queue"});
+
 		for(let i = 0; i < q.length; ++i){
 		    try {
 		        const raw = q[i];
@@ -2261,6 +2342,33 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 			}
 			this.DebugPrint({msg: ("Current messages: " + await this.GetMessages())});
 		} 
+	}
+
+	async #DaLoop() {
+		// dLive 
+		// facebook here
+		// instagram
+		// kick here
+		// picarto here
+		// tiktok here
+		// trovo
+		// twitch here
+		// twitter here
+		// youtube
+		this.DebugPrint({msg: "Fetching messages from youtube"});
+		const data = await this.yt.getChatMessages();
+		
+		this.DebugPrint({msg: `Received ${data.items?.length || 0} items`});
+
+		if (!data.items || data.items.length === 0) return;
+
+		this.DebugPrint({msg: "adding messages to unprocessed queue"});
+		for (const item of data.items) {
+		    this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(item);
+		}
+
+		this.DebugPrint({msg: "processing unprocecssed_queue"});
+		await this.ProcessUnprocessedQueue();
 	}
 	
 
@@ -2508,60 +2616,25 @@ async ProcessYoutubeV3Message(unprocessedMsg){
 		}
 	}
 
-	async ProcessPendingTts() {
-	    this.DebugPrint({msg: "Scanning for pending TTS commands..."});
-
-	    let messages = await this.GetMessages();
-
-	    for (let i = 0; i < messages.length; i++) {
-		const msg = messages[i];
-
-		// 1. Corrected Check: Search the commands array for 'tts'
-		// We use .some() because it returns true as soon as it finds a match
-		const hasTtsCommand = Array.isArray(msg.commands) && 
-				      msg.commands.some(cmd => cmd.command === "tts");
-
-		const alreadyRead = msg.state.ttsHasRead === true;
-
-		if (hasTtsCommand && !alreadyRead) {
-		    this.DebugPrint({msg: `Found unread TTS: "${msg.rawMessage}"`});
-
-		    try {
-			if (!msg.state) msg.state = {};
-			msg.state.ttsHasRead = true;
-
-			// Ensure we handle the text correctly
-			const textToSpeak = msg.processedMessage 
-			    ? msg.processedMessage.replace(/!tts/gi, "").trim() 
-			    : "No message text";
-
-			await this.CallTts(msg, i); 
-		    } catch (err) {
-			console.error("Failed to play TTS for message:", i, err);
-			if (msg.state) msg.state.ttsHasRead = "ERROR";
-		    }
-		}
-	    }
-	}
-
 	async GetOldestUnreadTtsAndMarkRead() { // TODO:this needs to be redone so that way it can look up messages by messageId
 		let messages = await this.GetMessages();
 		let currentTime = Date.now();
 		    for (let i = 0; i < messages.length; i++) {
-			    try{
 			    if(
-				    messages[i].commands.tts.state.readAt == null
+				    messages[i].commands.tts != undefined
+				    && typeof(messages[i].commands.tts.state.readAt) != "number"
 			    ){
-				    this.DebugPrint({msg: "found tts with null readAt", val: messages[i]});
-				    messages[i].commands.tts.state.readAt = Date.now(); // ✅
-				    this.DebugPrint({msg: "updated value so is now read", val: messages[i]});
-				return {message: messages[i], index: i}
+				    try{
+						    this.DebugPrint({msg: "found tts with null readAt", val: messages[i]});
+						    messages[i].commands.tts.state.readAt = Date.now(); // ✅
+						    this.DebugPrint({msg: "updated value so is now read", val: messages[i]});
+						return {message: messages[i], index: i}
+					    }
+				    catch(err){
+					this.DebugPrint({msg: `message at i(${i}) does not have a tts command`});
+				    }
 			    }
-			    }
-			    catch(err){
-				this.DebugPrint({msg: `message at i(${i}) does not have a tts command`});
-			    }
-		    }
+			}
 
 		    return null;
 	}
@@ -2601,10 +2674,6 @@ async ProcessYoutubeV3Message(unprocessedMsg){
 	    } else {
 		this.DebugPrint({ msg: "FOUND MATCHING MESSAGE ID, MARKING READ", val: timelineIndex });
 		this.#state.event_timeline[timelineIndex].commands.tts.state.readAt = Date.now();
-	    }
-
-	    if (message.commands && message.commands.tts) {
-		message.commands.tts.readAt = Date.now();
 	    }
 
 	    this.DebugPrint({ msg: "oldest message found, calling tts", val: message });
@@ -2694,6 +2763,63 @@ async ProcessYoutubeV3Message(unprocessedMsg){
 		    setTimeout(() => window.speechSynthesis.speak(utterance), 100); // ✅;
 	    })
 	}
+
+	async PlayAudioFromFilePath(path){
+		const audio = new Audio(path);
+		audio.play();
+	}
+
+/*
+	async function FileToJSON(file) {
+	    return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		
+		reader.onload = () => {
+		    const jsonObject = {
+			name: file.name,
+			type: file.type, // Important! Keeps track of what the file is
+			size: file.size,
+			rawData: reader.result // The Base64 string
+		    };
+		    resolve(JSON.stringify(jsonObject));
+		};
+
+		reader.onerror = (err) => reject(err);
+		reader.readAsDataURL(file);
+	    });
+	}
+
+	function playAudioFromBase64(jsonString) {
+	    const data = JSON.parse(jsonString);
+	    const base64Data = data.audioData;
+
+	    // 1. Split the metadata from the actual base64 content
+	    const [meta, block] = base64Data.split(';base64,');
+	    const contentType = meta.split(':')[1];
+
+	    // 2. Decode Base64 to binary
+	    const byteCharacters = atob(block);
+	    const byteNumbers = new Array(byteCharacters.length);
+	    for (let i = 0; i < byteCharacters.length; i++) {
+		byteNumbers[i] = byteCharacters.charCodeAt(i);
+	    }
+	    const byteArray = new Uint8Array(byteNumbers);
+
+	    // 3. Create the Blob
+	    const audioBlob = new Blob([byteArray], { type: contentType });
+
+	    // 4. Create a URL and Play
+	    const audioUrl = URL.createObjectURL(audioBlob);
+	    const audio = new Audio(audioUrl);
+	    
+	    audio.play();
+
+	    // Optional: Clean up memory after playing
+	    audio.onended = () => URL.revokeObjectURL(audioUrl);
+	}
+*/
+
+	
 
 	/**
 	 * Parses a single raw YouTube Live Chat Message object and adds it to the 
@@ -3594,6 +3720,7 @@ async ProcessYoutubeV3Message(unprocessedMsg){
 					case("x"):
 					case("y"):
 					case("z"):
+					case(' '):
 						//formattedMessage[i] = formattedMessage[i];
 						break;
 				}
@@ -3804,7 +3931,14 @@ ProcessHelpCommand(processedMsg){
 	
 ProcessTtsCommand(processedMsg) {
 	this.DebugPrint({msg: "processing tts command from message", val: processedMsg});
-	let cmd = {...this.templates.messageCommand};
+
+	let cmd = {
+	    ...this.templates.messageCommand,
+	    flags: {},
+	    state: { readAt: null },
+	    errInfo: { err: null, erroredAt: null },
+	};
+
 	cmd.isValid = null;
 
 	let msg = processedMsg.rawMessage;
@@ -3912,7 +4046,7 @@ ProcessTtsCommand(processedMsg) {
 		}
 	}
 
-	cmd.state["readAt"] = null;
+	//cmd.state["readAt"] = null;
 
 	if (cmd.isValid == null){cmd.isValid = true;}
 	
@@ -3930,6 +4064,7 @@ ProcessTtsCommand(processedMsg) {
 		});
 
 		let fileInputLabel = this.CHE({type:'label', innerText:"add banned words as a .csv or .json, feel free to drag and drop"});
+		fileInputLabel.style.color = "white";
 		container.append(fileInputLabel);
 		let fileInput = this.CHE({type:"input", inputType:"file"});
 		fileInput.addEventListener('change', (event) => {
@@ -3946,7 +4081,7 @@ ProcessTtsCommand(processedMsg) {
 		    type: 'label',
 		    innerText: "Add New Banned Word",
 		    attributes: { for: 'banned-word-input' },
-		    style: "font-size: 0.8rem; color: var(--color-text-muted); font-weight: bold;"
+		    style: "font-size: 0.8rem; color: white; font-weight: bold;"
 		});
 
 		let inputRow = this.CHE({ type: 'div', style: "display: flex; gap: 5px;" });
@@ -4312,144 +4447,6 @@ ProcessTtsCommand(processedMsg) {
 		return btn;
 	    };
 
-		/*
-	    // --- COLUMN 1: LOCAL STORAGE (Save/Load) ---
-	    const saveLoadColumn = createColumn(); 
-	    const saveBtn = createBtn("./assets/save_inputs.png", "save all inputs", "#0f0", () => {
-		let inputs = document.getElementsByTagName('input');
-		for (let x of inputs) {
-		    if (x.id && x.type !== 'button' && x.type !== 'file') {
-			localStorage.setItem(x.id, x.value);
-		    }
-		}
-		console.log("All inputs saved to LocalStorage.");
-	    });
-
-	    const loadBtn = createBtn("./assets/load_inputs.png", "load all inputs", "#ff0", async () => {
-		console.log("Loading values from LocalStorage...");
-		let inputs = document.getElementsByTagName("input");
-		for (let x of inputs) {
-		    if (x.id && x.type !== "button" && x.type !== "file") {
-			let savedValue = localStorage.getItem(String(x.id));
-			if (savedValue !== null) {
-			    x.value = savedValue;
-			}
-		    }
-		}
-		if (window.Cockatiel && window.Cockatiel.yt) {
-		    await window.Cockatiel.yt.LoadValuesFromLocalStorage();
-		}
-	    });
-
-	    saveLoadColumn.append(saveBtn, loadBtn);
-
-	    // --- COLUMN 2: MONITORING (Start/Stop) ---
-	    const startStopColumn= createColumn();
-
-	    const startBtn = createBtn("./assets/start_cockatiel.png", "start Cockatiel", "#f0f", async () => {
-		console.log("Start monitoring clicked...");
-		await window.Cockatiel.MonitoringStart();
-	    });
-
-	    const stopBtn = createBtn("./assets/stop_cockatiel.png", "stop Cockatiel", "#f00", () => {
-		window.Cockatiel.MonitoringStop();
-	    });
-
-	    startStopColumn.append(startBtn, stopBtn);
-	
-	    // START / STOP TTS
-	    const startStopTtsColumn = createColumn();
-	    const startTtsButton = createBtn("./assets/start_tts.png", "Start Tts", "#0ff", () => {
-		this.DebugPrint({msg:"starting tts", type:"warn"});
-		window.Cockatiel.StartTts();
-	    });
-	    const stopTtsButton = createBtn("./assets/start_tts.png", "Stop Tts", "#00f", () => {
-		this.DebugPrint({msg:"stopping tts", type:"warn"});
-		window.Cockatiel.StopTts();
-	    });
-	    startStopColumn.append(startTtsButton, stopTtsButton);
-
-	    // START / STOP EVENT DISPLAY 
-	    const startStopEventDisplay= createColumn();
-	    const startEventMonitoringButton = createBtn("./assets/stop_event_display.png", "Start Event Display", "#ff0", () => {
-		this.DebugPrint({msg:"starting Event Display", type:"warn"});
-		window.Cockatiel.StartEventMonitoring();
-	    });
-	    const stopEventMonitoringButton = createBtn("./assets/start_event_display.png", "Stop Event Display", "#f00", () => {
-		this.DebugPrint({msg:"stopping Event Display", type:"warn"});
-		window.Cockatiel.StopEventMonitoring();
-	    });
-	    startStopEventDisplay.append(startEventMonitoringButton, stopEventMonitoringButton);
-
-	    // --- COLUMN 3: STATE (Export/Import) ---
-	    const exportInportColumn = createColumn();
-
-	const exportBtn = createBtn("./assets/export_settings.png", "Export Settings", "#ff0", () => {
-	    // 1. Get the JSON string from your class
-	    const data = window.Cockatiel.ExportState();
-	    
-	    // 2. Create a Blob (Binary Large Object) with the data
-	    const blob = new Blob([data], { type: "application/json" });
-	    
-	    // 3. Create a temporary anchor (<a>) element
-	    const url = URL.createObjectURL(blob);
-	    const link = document.createElement("a");
-	    
-	    // 4. Set the filename and the target URL
-	    link.href = url;
-	    link.download = "cockatiel_settings.json";
-	    
-	    // 5. Trigger the download and clean up
-	    document.body.appendChild(link);
-	    link.click();
-	    document.body.removeChild(link);
-	    URL.revokeObjectURL(url); // Free up memory
-	});
-
-	    //call next tts button
-	    const callTtsColumn = createColumn();
-	    const callTtsBtn = createBtn("./assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
-		    this.FindOldestUnreadTtsAndCall();
-	    });
-	    callTtsColumn.append(callTtsBtn);
-
-	    const importLabel = document.createElement('label');
-	    importLabel.innerText = "Import settings from file";
-	    importLabel.style.cssText = "color: white; font-size: 0.8rem; margin-top: 5px;";
-
-	    const fileInput = document.createElement('input');
-	    fileInput.id = "state_input";
-	    fileInput.type = "file";
-	    fileInput.style.backgroundColor = "#f0f";
-	    fileInput.addEventListener('change', (event) => {
-	        this.ImportState(event);
-	    });
-
-	    const spacer = createColumn(); // used to seperate values
-		spacer.append()
-
-	    exportInportColumn.append(exportBtn, importLabel, fileInput);
-
-	    // Assemble and Append
-	    let StartContainer = document.createElement("div"); 
-	    let StartSubModules = document.createElement("div");
-	    StartSubModules.append()
-
-	    let StopContainer = document.createElement("div");
-	    let StopSubModules = document.createElement("div");
-	    StopSubModules.append()
-
-	    footer.append(
-		    startStopColumn, 
-		    spacer, 
-		    startStopColumn, 
-		    startStopTtsColumn, 
-		    startStopEventDisplay, 
-		    saveLoadColumn, 
-		    exportInportColumn,
-	    );
-	    */
-
 	    let buttonsContainer = document.createElement("div");
 		buttonsContainer.style = "width:100%;";
 		    let IDs = [
@@ -4781,7 +4778,7 @@ ProcessTtsCommand(processedMsg) {
 
 	    //call next tts button
 	    const callTtsColumn = createColumn();
-	    const callTtsBtn = createBtn("./assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
+	    const callTtsBtn = createBtn("../assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
 		    this.FindOldestUnreadTtsAndCall();
 	    });
 	    callTtsColumn.append(callTtsBtn);
@@ -4791,7 +4788,7 @@ ProcessTtsCommand(processedMsg) {
 	    const exportInportColumn = createColumn();
 
 
-	    const exportBtn = createBtn("./assets/export_settings.png", "Export Settings", "#ff0", () => {
+	    const exportBtn = createBtn("../assets/export_settings.png", "Export Settings", "#ff0", () => {
 	    // 1. Get the JSON string from your class
 	    const data = window.Cockatiel.ExportState();
 	    
@@ -4829,7 +4826,7 @@ ProcessTtsCommand(processedMsg) {
 
 		//save/load inputs
 	    const saveLoadColumn = createColumn(); 
-	    const saveBtn = createBtn("./assets/save_inputs.png", "save all inputs", "#0f0", () => {
+	    const saveBtn = createBtn("../assets/save_inputs.png", "save all inputs", "#0f0", () => {
 		let inputs = document.getElementsByTagName('input');
 		for (let x of inputs) {
 		    if (x.id && x.type != 'button' && x.type != 'file') {
@@ -4840,7 +4837,7 @@ ProcessTtsCommand(processedMsg) {
 	    });
 	    saveBtn.innerText = "save inputs";
 
-	    const loadBtn = createBtn("./assets/load_inputs.png", "load all inputs", "#ff0", async () => {
+	    const loadBtn = createBtn("../assets/load_inputs.png", "load all inputs", "#ff0", async () => {
 		console.log("Loading values from LocalStorage...");
 		let inputs = document.getElementsByTagName("input");
 		for (let x of inputs) {
@@ -4964,7 +4961,7 @@ ProcessTtsCommand(processedMsg) {
 		superChatTest.style = `
 			background-color: "#1E88E5";
 			color: "#fff";
-		`
+		`;
 		superChatTest.onclick = () => {
 			this.ProcessYoutubeV3Data_v1(superChatEventMessages[
 				Math.floor(Math.random()*superChatEventMessages.length)
@@ -4973,7 +4970,21 @@ ProcessTtsCommand(processedMsg) {
 
 		tests.append(superChatTest);	
 
+		let mock = this.CreateMockYoutubeMessageUI();
+		tests.append(mock);
 
+		let testMessageInput = document.createElement("div");
+			let messageInput = document.createElement("input");
+			messageInput.type = "text";
+			messageInput.id = String("youtubeTestInput" + String(crypto.randomUUID()));
+			let messageTester = document.createElement("button");
+			messageTester.innerText = "send a test message";
+			messageTester.onclick = () => {
+				let mockHtml = "";
+				console.warn(mockHtml);
+			};	
+			testMessageInput.append(messageInput, messageTester);
+		tests.append(testMessageInput);
 
 		controlContainer.append(tests);
 	    return controlContainer;
@@ -5542,49 +5553,142 @@ const userIcon = isValidIcon
 	CreateTtsVoiceTester() {
 	    const container = document.createElement("div");
 	    container.style = `
-		font-family: sans-serif; padding: 20px; background: #1a1a1a; 
-		color: #eee; border-radius: 12px; border: 1px solid #333; max-width: 850px;
+		font-family: sans-serif; 
+		padding: 20px; 
+		background: #1a1a1a; 
+		color: #eee; 
+		border-radius: 12px; 
+		border: 1px solid #333; 
+		max-width: 90%;
+		margin:auto;
 	    `;
 
 	    // --- 1. Top Controls (Text, Pitch, Rate) ---
 	    const controlsGrid = document.createElement("div");
-	    controlsGrid.style = "display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 15px; margin-bottom: 20px; align-items: end;";
+	    controlsGrid.style = `
+		display: grid; 
+		grid-template-columns: 2fr 1fr 1fr; 
+		gap: 15px;
+		margin-bottom: 20px; 
+		align-items: end;
+	    `;
 
 	    const textGroup = document.createElement("div");
-	    textGroup.innerHTML = `<label style="display:block; margin-bottom:5px; font-size:0.8rem; color:#888;">Test Message</label>`;
+	    textGroup.innerHTML = `<label style="
+		display:block; 
+		margin-bottom:5px; 
+		font-size:0.8rem; 
+		color:#888;
+	    ">Test Message</label>`;
 	    const testInput = document.createElement("input");
 	    testInput.value = "Testing the Cockatiel TTS system.";
-	    testInput.style = "width:100%; padding:8px; background:#222; border:1px solid #444; color:#fff; border-radius:4px; box-sizing: border-box;";
+	    testInput.style = `
+		width:100%; 
+		padding:8px; 
+		background:#222; 
+		border:1px solid #444; 
+		color:#fff; 
+		border-radius:4px; 
+		box-sizing: border-box;
+	    `;
 	    textGroup.appendChild(testInput);
 
-	    const pitchGroup = document.createElement("div");
-	    pitchGroup.innerHTML = `<label id="p-val" style="display:block; margin-bottom:5px; font-size:0.8rem; color:#888;">Pitch: ${this.#state.commands.tts.flags.p.value}</label>`;
-	    const pitchInput = document.createElement("input");
-	    pitchInput.type = "range"; pitchInput.min = "0"; pitchInput.max = "2"; pitchInput.step = "0.1"; 
-	    pitchInput.value = this.#state.commands.tts.flags.p.value;
-	    pitchInput.oninput = () => document.getElementById("p-val").innerText = `Pitch: ${pitchInput.value}`;
-	    pitchGroup.appendChild(pitchInput);
+	// --- Pitch Group ---
+	const pitchGroup = document.createElement("div");
+	pitchGroup.innerHTML = `<label id="p-val" style="
+		display:block; 
+		margin-bottom:5px; 
+		font-size:0.8rem;
+		color:#888;
+	">Pitch: ${this.#state.commands.tts.flags.p.value}</label>`;
 
-	    const rateGroup = document.createElement("div");
-	    rateGroup.innerHTML = `<label id="r-val" style="display:block; margin-bottom:5px; font-size:0.8rem; color:#888;">Rate: ${this.#state.commands.tts.flags.r.value}</label>`;
-	    const rateInput = document.createElement("input");
-	    rateInput.type = "range"; rateInput.min = "0.1"; rateInput.max = "3"; rateInput.step = "0.1"; 
-	    rateInput.value = this.#state.commands.tts.flags.r.value;
-	    rateInput.oninput = () => document.getElementById("r-val").innerText = `Rate: ${rateInput.value}`;
-	    rateGroup.appendChild(rateInput);
+	const pitchInput = document.createElement("input");
+	pitchInput.type = "range"; 
+	pitchInput.min = "0"; 
+	pitchInput.max = "2"; 
+	pitchInput.step = "0.1"; 
+	pitchInput.value = this.#state.commands.tts.flags.p.value;
+
+	pitchInput.oninput = () => {
+	    // 1. Update the UI Label
+	    document.getElementById("p-val").innerText = `Pitch: ${pitchInput.value}`;
+	    // 2. Update the Config State
+	    this.#state.commands.tts.flags.p.value = Number(pitchInput.value);
+	};
+	pitchGroup.appendChild(pitchInput);
+
+
+	// --- Rate Group ---
+	const rateGroup = document.createElement("div");
+	rateGroup.innerHTML = `<label id="r-val" style="
+		display:block; 
+		margin-bottom:5px;
+		font-size:0.8rem;
+		color:#888;
+	">Rate: ${this.#state.commands.tts.flags.r.value}</label>`;
+
+	const rateInput = document.createElement("input");
+	rateInput.type = "range"; 
+	rateInput.min = "0.1"; 
+	rateInput.max = "3"; 
+	rateInput.step = "0.1"; 
+	rateInput.value = this.#state.commands.tts.flags.r.value;
+
+	rateInput.oninput = () => {
+	    // 1. Update the UI Label
+	    document.getElementById("r-val").innerText = `Rate: ${rateInput.value}`;
+	    // 2. Update the Config State
+	    this.#state.commands.tts.flags.r.value = Number(rateInput.value);
+	};
+	rateGroup.appendChild(rateInput);
 
 	    controlsGrid.append(textGroup, pitchGroup, rateGroup);
 	    container.appendChild(controlsGrid);
 
 	    // --- 2. Table Setup ---
 	    const tableContainer = document.createElement("div");
-	    tableContainer.style = "max-height: 400px; overflow-y: auto; border: 1px solid #333; border-radius: 6px;";
+	    tableContainer.style = `
+		max-height: 400px;
+		overflow-y: auto;
+		border: 1px solid #333;
+		border-radius: 6px;
+	    `;
 	    const table = document.createElement("table");
-	    table.style = "width: 100%; border-collapse: collapse; background: #252525; font-size: 0.9rem;";
+	    table.style = `
+		width: 100%; 
+		border-collapse: collapse;
+		background: #252525;
+		font-size: 0.9rem;
+	    `;
 	    
 	    const tbody = document.createElement("tbody");
-	    table.innerHTML = `<thead style="background:#333; position:sticky; top:0; z-index:1;">
-	    <tr><th style="padding:10px; text-align:left;">ID</th><th style="text-align:left;">Voice</th><th>Lang</th><th style="text-align:center;">Action</th></tr>
+	    table.innerHTML = `
+	    <thead style="
+		background:#333;
+		position:sticky;
+		top:0;
+		z-index:1;
+	    ">
+	        <tr>
+		    <th style="
+			padding:10px;
+			text-align:left
+			;">ID
+		    </th>
+		    <th style="
+		    	text-align:left;
+		    ">
+		    	Voice
+		    </th>
+		    <th>
+		    	Lang
+		    </th>
+		    <th style="
+		    	text-align:center;
+		    ">
+			Action
+		    </th>
+		</tr>
 	    </thead>`;
 
 	    // --- 3. Voice Loading Logic ---
@@ -5663,6 +5767,83 @@ const userIcon = isValidIcon
 	    return container;
 	}
 
+	/**
+	 * Generates a Mock YouTube Message Creator UI.
+	 * @param {Function} onMessageCreated - Callback function that receives the generated JSON object.
+	 * @returns {HTMLElement} The container element.
+	 */
+	CreateMockYoutubeMessageUI(onMessageCreated) {
+	    const container = document.createElement("div");
+	    container.style = `
+		font-family: sans-serif; padding: 1.2rem; background: #282828; 
+		color: #fff; border-radius: 0.5rem; border: 0,1rem solid #444; max-width: 60rem;
+	    `;
+
+	    const title = document.createElement("h4");
+	    title.innerText = "YouTube API Message Simulator";
+	    title.style.margin = "0 0 0.6rem 0";
+
+	    const input = document.createElement("input");
+	    input.type = "text";
+	    input.placeholder = "Type a message to simulate...";
+	    input.style = `
+		width: 100%; padding: 0.7rem; background: #121212; border: 0.1rem solid #ff0000; 
+		color: #fff; border-radius: 0.2rem; box-sizing: border-box; margin-bottom: 0.6rem;
+	    `;
+
+	    const btn = document.createElement("button");
+	    btn.innerText = "Generate & Inject Message";
+	    btn.style = `
+		cursor: pointer; width: 100%; padding: 0.6rem; background: #ff0000; 
+		color: white; border: none; border-radius: 0.2rem; font-weight: bold;
+	    `;
+
+	    btn.onclick = () => {
+		const text = input.value || "Default Test Message";
+		
+		// Construct the specific YouTube API structure
+		const mockYoutubeResponse = {
+		    "kind": "youtube#liveChatMessage",
+		    "etag": "generated_" + Math.random().toString(36).substring(7),
+		    "id": "LCC." + btoa(Date.now().toString()),
+		    "snippet": {
+			"type": "textMessageEvent",
+			"liveChatId": "Cg0KCzhlUFk0ellmX0tj",
+			"authorChannelId": "UCiYflTancqoI-CvKoixE2Fw",
+			"publishedAt": new Date().toISOString(),
+			"hasDisplayContent": true,
+			"displayMessage": text, // Injected input
+			"textMessageDetails": {
+			    "messageText": text // Injected input
+			}
+		    },
+		    "authorDetails": {
+			"channelId": "asdf1234asdf1234",
+			"channelUrl": "http://www.youtube.com/channel/test",
+			"displayName": "TestUser",
+			"profileImageUrl": "/content/stream_utils/tib_stuff/default_icon.png",
+			"isVerified": false,
+			"isChatOwner": false,
+			"isChatSponsor": false,
+			"isChatModerator": false,
+		    }
+		};
+
+		console.log("Simulated YouTube Message:", mockYoutubeResponse);
+	
+		if (typeof onMessageCreated === "function") {
+		    onMessageCreated(mockYoutubeResponse);
+		}
+
+		this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(mockYoutubeResponse);
+		this.ProcessUnprocessedQueue(mockYoutubeResponse);
+
+		input.value = ""; // Clear input after use
+	    };
+
+	    container.append(title, input, btn);
+	    return container;
+	}
 
 	GenerateUi(){
 		this.DebugPrint({msg: "generating ui for the first time"});
@@ -5674,27 +5855,40 @@ const userIcon = isValidIcon
 				settingsContainer == null 
 				|| settingsContainer == undefined){
 				this.DebugPrint({msg: "no container"});
-				settingsContainer = this.CHE({type: 'div', id: "cockatiel_settings_container"});
+				settingsContainer = this.CHE({
+					type: 'div', 
+					id: "cockatiel_settings_container"
+				});
 			}
 			// else: container already got, no need to change anything
-			settingsContainer.style.backgroundColor = "#000000";
-			settingsContainer.style.color = "#000";
-			settingsContainer.style.padding = "1rem";
-			settingsContainer.style.border = "0.2rem solid white";
-			settingsContainer.style.borderRadius = "1rem";
+			settingsContainer.style = `
+				background-color: #000000;
+				border: 0.2rem solid white;
+					borderRadius: 1rem;
+				color: #000;
+				padding: 1rem;
+				margin:auto;
+				width: 90%;
+					max-width: 60rem;
+			`;
 		}
 		catch(err){
 			this.DebugPrint({
 				msg: "err tryiing to get parent, likely lack of element so creating then continuing", 
-				error: err
+				error: err,
+				type: e,
 			});
-			settingsContainer = this.CHE({type: 'div', id: "cockatiel_settings_container"});
+			settingsContainer = this.CHE({
+				type: 'div', 
+				id: "cockatiel_settings_container"
+			});
 		}// Ensure all subwindows are closed if the main app is closed or refreshed
 
 		try{
 			let ttsSettingsContainer = document.createElement("details");
 				let ttsSettingsLabel = document.createElement("summary");
 					ttsSettingsLabel.innerText = "tts settings";
+					ttsSettingsLabel.style.color = "white";
 				ttsSettingsContainer.append(ttsSettingsLabel);
 				let ttsPreview = this.CreateTtsVoiceTester();
 				ttsSettingsContainer.append(ttsPreview);
@@ -5724,6 +5918,14 @@ const userIcon = isValidIcon
 		}
 		catch(err){
 			this.DebugPrint({msg: "cannot cannot GenerateControlBarUI", type:'e', err: err});
+		}
+
+		try{
+
+
+		}
+		catch(err){
+
 		}
 
 		try{
@@ -5851,7 +6053,7 @@ const userIcon = isValidIcon
 				html: `
 					<div style="display: flex; justify-content:space-evenly; flex-direction:column; height: 100%; margin: auto;">
 						<div style="max-width:60rem; width:80%; color:white; padding: 2rem;">event monitor has yet to be started, do so to turn cockatiel on</div>
-						<img style="max-width:60%; margin:auto;" src="./assets/off_tib.png">
+						<img style="max-width:60%; margin:auto;" src="../assets/off_tib.png">
 					</div>
 				`,
 			});
@@ -5973,10 +6175,10 @@ const userIcon = isValidIcon
 			<div class="chatMessageContainer">
 				<div class="chatUserBubble">
 					<div class="chatBubbleTailContainer">
-						<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src="/content/stream_utils/tib_stuff/whispy_tail.png"></div>
+						<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src=""></div>
 					</div>
 					<div class="chatUserInfo">
-						<div class="chatUserImageContainer"><img class="chatUserImage" alt="chatUserImage" src="/assets/headshot_doodle.png"></div>		
+						<div class="chatUserImageContainer"><img class="chatUserImage" alt="chatUserImage" src=""></div>		
 						<div class="chatUserStats">
 							<div class="chatUsername">@usernameUSERNAMEusernameUSERNAME</div>		
 							<div class="chatUserCommendations">community: 1, engagement: 5, support: 2, rep: 8</div>
