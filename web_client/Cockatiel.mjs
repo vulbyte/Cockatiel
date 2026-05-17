@@ -1,3 +1,4 @@
+import {TwitchApi} from "./twitch_state.mjs"
 import {YoutubeV3} from "./youtube_state.mjs"
 import {IntTimer} from  "./intTimer.mjs";
 import {TrieTree} from  "./trie_tree.mjs";
@@ -5,8 +6,14 @@ import {TrieTree} from  "./trie_tree.mjs";
 // magic values
 let trigrams; // = await fetch('/content/stream_utils/tib_stuff/trigrams.json').then((res) => {return res.json()});
 
-export default class Cockatiel {
+export default class Cockatiel {	
+	#hasInited = false;
+
+	twitch = new TwitchApi();
+	yt = new YoutubeV3();
+
 	#isTtsBusy = false;
+
 	templates = {
 		bannedAt: {
 			version: 1, datetime : "", unbannedAt : [], banAppeals : [],
@@ -94,7 +101,7 @@ export default class Cockatiel {
 		},
 		messages: {
 			//originalData: {},
-			commands: [],
+			commands: [/*eac command being a messageCommandObject*/],
 			version: 1,
 			channelOrigin: null,
 			donationAmount: 0,
@@ -252,6 +259,7 @@ export default class Cockatiel {
 		bannedWordsTrie: new TrieTree(), // tree that's good for strings, basically all you need to worry about is: add(), remove(), ContainsString()
 		// NOTE: Assuming this function is part of a class/module where
 		config: {
+		  blockAddOtherFound: true,
 		  monitorMessages : {
 		    debug : true,
 		    strictMode : false,
@@ -1440,6 +1448,7 @@ export default class Cockatiel {
 		border: 0.1rem transparent #ccc; 
 		color: ${backgroundColor};
 		display: flex;
+		font-family:helvetica, ariel, sans-serif;
 		flex-direction: column;
 		justify-content: center;
 		align-items: center;
@@ -1653,7 +1662,6 @@ export default class Cockatiel {
 		}
 	    }
 	}
-	yt = new YoutubeV3();
 
 	CHE(args = {}) {
 	    try {
@@ -1667,7 +1675,7 @@ export default class Cockatiel {
 		if (args.id) elem.id = args.id;
 		if (args.innerHTML) elem.innerHTML = args.innerHTML;
 		if (args.innerText) elem.innerText = args.innerText;
-		if (args.style) elem.style = args.style;
+		if (args.style) elem.style.cssText = args.style;
 
 		if (args.attributes) {
 		    for (const [key, value] of Object.entries(args.attributes)) {
@@ -1969,6 +1977,48 @@ export default class Cockatiel {
 		*/
 	}
 
+	AddUserToUsers(user) {
+		try{
+		    this.DebugPrint({ msg: "attempting to add user to users", val: JSON.stringify(user, null, 4) });
+
+		    // 1. Check if user already exists
+		    let userGet = this.GetUserFromUuid(user.uuid); // Pass the UUID property specifically
+		    if (userGet != null) {
+			this.DebugPrint({ 
+			    msg: "user already in db, not adding.", 
+			    type: "warn", 
+			    val: { user: user, gotUser: userGet } 
+			});
+			return false;
+		    }
+
+		    // 2. Fix the ReferenceError: Use the ID from the user object
+		    const targetId = user.uuid || crypto.randomUUID();
+
+		    // 3. Add to state 
+		    // If #state.users is an Object/Map:
+		    //this.#state.users[targetId] = user;
+			
+		    // remove cyclic reference 
+		    this.#state.users[targetId] = JSON.parse(JSON.stringify(user));
+		    
+		    // If #state.users is an Array, use this instead:
+		    // this.#state.users.push(user);
+
+		    // 4. Update UI
+		    this.UpdateUserDisplay(); 
+		    this.DebugPrint({ msg: "added user to users", val: JSON.stringify(user, null, 4) });
+		    return true;
+		}
+		catch(err){
+			this.DebugPrint({
+				msg: "error attempting to add user",
+				err: err,
+				data: user,
+			});
+		}
+	}
+
 	CreateUserFromFlags(p_msg) { //returns user object on success
 	    // 1. Validation check
 	    this.DebugPrint({ msg: "checking for chaannelOrigin"});
@@ -2087,7 +2137,7 @@ export default class Cockatiel {
 		this.DebugPrint({ msg: `User created: ${user.username}.` });
 		return user;
 	    } catch (err) {
-		this.DebugPrint({ msg: "Failed to add user to state", err: err, type: "t" });
+		this.DebugPrint({ msg: `Failed to add user to state: ${JSON.stringify(user, null, 2)}`, data: user, err: err, type: "t" });
 	    }
 	}
 
@@ -2178,38 +2228,6 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		}
 	}	
 
-	AddUserToUsers(user) {
-	    this.DebugPrint({ msg: "attempting to add user to users", val: JSON.stringify(user, null, 4) });
-
-	    // 1. Check if user already exists
-	    let userGet = this.GetUserFromUuid(user.uuid); // Pass the UUID property specifically
-	    if (userGet != null) {
-		this.DebugPrint({ 
-		    msg: "user already in db, not adding.", 
-		    type: "warn", 
-		    val: { user: user, gotUser: userGet } 
-		});
-		return false;
-	    }
-
-	    // 2. Fix the ReferenceError: Use the ID from the user object
-	    const targetId = user.uuid || crypto.randomUUID();
-
-	    // 3. Add to state 
-	    // If #state.users is an Object/Map:
-	    //this.#state.users[targetId] = user;
-		
-	    // remove cyclic reference 
-	    this.#state.users[targetId] = JSON.parse(JSON.stringify(user));
-	    
-	    // If #state.users is an Array, use this instead:
-	    // this.#state.users.push(user);
-
-	    // 4. Update UI
-	    this.UpdateUserDisplay(); 
-	    return true;
-	}
-
 	RemoveUserProfileFromUuid(userUuid){ //true on success, false on fail
 		try{
 			if(!this.#state.users[userUuid]){			
@@ -2298,174 +2316,150 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	    this.SafeAddToEventTimeline(p_msg)
 	}
 
-	async ProcessUnprocessedQueue(){
-		let q = this.#state.unprocessed_queue.splice(
-			0, 
-			this.#state.unprocessed_queue.length
-		);
+	async ProcessTwitchV1Data_v1(unprocessedMsg) {
+		const raw = unprocessedMsg.data.raw;
+		    
+		    // Improved Regex: matches any tmi.twitch.tv source or numeric codes like 353/366
+		    const isSystemMessage = 
+			/\.tmi\.twitch\.tv \d{3} /.test(raw) || 
+			raw.includes("tmi.twitch.tv") && !raw.includes("PRIVMSG");
 
-		for(let i = 0; i < q.length; ++i){
-		    try {
-		        const raw = q[i];
-		        const p_msg = await this.ProcessYoutubeV3Data_v1(raw);
+		    if (isSystemMessage) {
+			this.DebugPrint({ msg: "Ignoring Twitch System Message", val: "Handshake/NamesList" });
+			return null; 
+		    }
+			    this.DebugPrint({ msg: "Twitch processing started:", val: raw });
 
-		        this.DebugPrint({msg: "message finished processing", val: p_msg});
+			    // 2. Determine type for the switch
+			    let type = "unknown";
+			    if (raw.includes("PRIVMSG")) type = "textmessageevent";
+			    else if (raw.includes("USERNOTICE")) type = "usernoticeevent"; 
+			    else if (raw.includes("bits=")) type = "bitsevent";
 
-			let doesMessageAlreadyExist = false;
-			let messages = await this.GetMessages();
-		        if(messages.length > 0){
-				let m;
-				    for(let j = messages.length-1; j >= 0; --j){
-					    m = messages[j];
-					    if(
-						    m.receivedAt === p_msg.receivedAt 
-						    && m.authorId === p_msg.authorId
-					    ){
-						doesMessageAlreadyExist = true;
-						break;
-					    }
-				    }
-			
-				    if (!doesMessageAlreadyExist){ 
-					    this.DoTheStuffToAddMessageToQueue(p_msg);
-				    }
-				    else{
-					    this.DebugPrint({msg: "message already exists, skipping add"});
-				    }
+			    let msg;
+			    switch(type) {
+				case "textmessageevent":
+				    msg = await this.ProcessTwitchMessage(unprocessedMsg);
+				    this.PushMessageToChatWindow(msg);
+				    return msg;
+
+				case "bitsevent":
+				    this.DebugPrint({ msg: "Bits detected", type: "i" });
+				    return null;
+
+				case "usernoticeevent":
+				    this.DebugPrint({ msg: "Sub/UserNotice detected", type: "i" });
+				    return null;
+
+				default:
+				    // Instead of crashing, just log it as unhandled and continue the loop
+				    this.DebugPrint({ 
+					msg: "UNHANDLED TWITCH IRC COMMAND", 
+					val: raw.substring(0, 50) + "...", 
+					type: "w" 
+				    });
+				    return null; 
 			    }
-			    else {
-				    this.DoTheStuffToAddMessageToQueue(p_msg);
-			    }
-			}
-			catch (err) {
-				this.DebugPrint({msg: "LOOP CRASHED: ", error: err, val: q[i]});
-			}
-			this.DebugPrint({msg: ("Current messages: " + await this.GetMessages())});
-		} 
 	}
 
-	async #DaLoop() {
-		// dLive 
-		// facebook here
-		// instagram
-		// kick here
-		// picarto here
-		// tiktok here
-		// trovo
-		// twitch here
-		// twitter here
-		// youtube
-		this.DebugPrint({msg: "Fetching messages from youtube"});
-		const data = await this.yt.getChatMessages();
+	async ProcessYoutubeV3Data_v1(unprocessedMsg) {
+		let type = String(unprocessedMsg.data.snippet.type).toLowerCase();
+		this.DebugPrint({msg: "type detected: ", val: type});
+		let msg;
+		switch(type){
+			case("textmessageevent"):
+				msg = await this.ProcessYoutubeV3Message(unprocessedMsg);
+				this.PushMessageToChatWindow(msg);
+				return msg;
+			case("superchatevent"):
+				msg = await this.ProcessYoutubeV3SuperChatEvent(unprocessedMsg);
+				this.PushDonationToChatWindow(msg);
+				return msg;
+			default:
+				this.DebugPrint({msg: "UNABLE TO FIND MATCHING 'msg.data.snippet.type'", val: unprocessedMsg, type:"t"});
+		}
+	}
+
+	async ProcessYoutubeV3Message(unprocessedMsg){
+	    try {
+		const rmo = unprocessedMsg.data;
 		
-		this.DebugPrint({msg: `Received ${data.items?.length || 0} items`});
+		this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
+		
+		// 1. Initialize message from template
+		let newMessage = { ...this.templates.messages };
+		newMessage.version = 1;
+		newMessage.type = "message";
+		newMessage.platform = "youtube";
+		newMessage.rawMessage = rmo.snippet.textMessageDetails.messageText;
+		newMessage.messageId = rmo.id;
+		newMessage.channelOrigin = rmo.authorDetails.channelId;
+		newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
+		
+		// Handle @ in username
+		let name = rmo.authorDetails.displayName;
+		newMessage.username = name.startsWith("@") ? name.slice(1) : name;
 
-		if (!data.items || data.items.length === 0) return;
-
-		this.DebugPrint({msg: "adding messages to unprocessed queue"});
-		for (const item of data.items) {
-		    this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(item);
+		// 2. SEARCH FOR EXISTING USER (CRITICAL STEP)
+		const inputChannelId = rmo.authorDetails.channelId;
+		let foundUuid = this.FindUserFromChannelIdAndReturnUuid(inputChannelId);
+		
+		let user;
+		if (!foundUuid) {
+		    this.DebugPrint({ msg: "NEW USER: Creating profile", val: name });
+		    // This function should return a brand new user object and add it to #state.users
+		    user = this.CreateUserFromFlags(newMessage); 
+		    newMessage.userUuid = user.uuid;
+		} else {
+		    this.DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
+		    user = this.#state.users[foundUuid];
+		    newMessage.userUuid = foundUuid;
 		}
 
-		this.DebugPrint({msg: "processing unprocecssed_queue"});
-		await this.ProcessUnprocessedQueue();
+		// 3. Process Message Content (Sanitization & Commands)
+		if (this.CheckMessageForBannedWords(newMessage.rawMessage)) {
+		    // Logic for banned words here
+		}
+		newMessage.processedMessage = this.SanitizeString(newMessage.rawMessage);
+
+		// 4. Handle Commands
+		const commandObject = this.ParseCommandFromMessage(newMessage);
+		newMessage.commands = commandObject || {};
+		
+		// If a command has a custom message (like TTS), use it for processedMessage
+		const firstCmdKey = Object.keys(newMessage.commands)[0];
+		if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
+		    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
+		}
+
+		// 5. Score and Update Points
+		newMessage.score = await this.ScoreMessage(newMessage.processedMessage);
+		this.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
+
+		// 6. Sync User Metadata (Updates icons/roles if they changed)
+		if (user) {
+		    user.icon = rmo.authorDetails.profileImageUrl;
+		    user.isVerified = rmo.authorDetails.isVerified;
+		    user.isChatOwner = rmo.authorDetails.isChatOwner;
+		    user.isChatSponsor = rmo.authorDetails.isChatSponsor;
+		    user.isChatModerator = rmo.authorDetails.isChatModerator;
+		}
+
+		newMessage.state = {
+			displayedAt: false
+		};
+		return newMessage;
+
+	    } catch (err) {
+		this.DebugPrint({ 
+		    msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
+		    type: "e", 
+		    err: err
+		});
+		return null;
+	    }
 	}
-	
 
-
-	async MonitoringStop() {
-		this.DebugPrint({msg: "stopping timers"});
-		let key; 
-		for(let i = 0; i < Object.keys(this.#state.timers).length; ++i){
-			try{
-					key = Object.keys(this.#state.timers)[i];
-					this.#state.timers[key].Stop();
-			}
-			catch(err){
-				this.DebugPrint({msg: "error starting timer", val:key, err:err, type:'e'});
-			}
-		}
-	}	
-
-async ProcessYoutubeV3Message(unprocessedMsg){
-    try {
-        const rmo = unprocessedMsg.data;
-	
-	this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
-        
-        // 1. Initialize message from template
-        let newMessage = { ...this.templates.messages };
-        newMessage.version = 1;
-	newMessage.type = "message";
-        newMessage.platform = "youtube";
-        newMessage.rawMessage = rmo.snippet.textMessageDetails.messageText;
-        newMessage.messageId = rmo.id;
-        newMessage.channelOrigin = rmo.authorDetails.channelId;
-        newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
-        
-        // Handle @ in username
-        let name = rmo.authorDetails.displayName;
-        newMessage.username = name.startsWith("@") ? name.slice(1) : name;
-
-        // 2. SEARCH FOR EXISTING USER (CRITICAL STEP)
-        const inputChannelId = rmo.authorDetails.channelId;
-        let foundUuid = this.FindUserFromChannelIdAndReturnUuid(inputChannelId);
-        
-        let user;
-        if (!foundUuid) {
-            this.DebugPrint({ msg: "NEW USER: Creating profile", val: name });
-            // This function should return a brand new user object and add it to #state.users
-            user = this.CreateUserFromFlags(newMessage); 
-            newMessage.userUuid = user.uuid;
-        } else {
-            this.DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
-            user = this.#state.users[foundUuid];
-            newMessage.userUuid = foundUuid;
-        }
-
-        // 3. Process Message Content (Sanitization & Commands)
-        if (this.CheckMessageForBannedWords(newMessage.rawMessage)) {
-            // Logic for banned words here
-        }
-        newMessage.processedMessage = this.SanitizeString(newMessage.rawMessage);
-
-        // 4. Handle Commands
-        const commandObject = this.ParseCommandFromMessage(newMessage);
-        newMessage.commands = commandObject || {};
-        
-        // If a command has a custom message (like TTS), use it for processedMessage
-        const firstCmdKey = Object.keys(newMessage.commands)[0];
-        if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
-            newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
-        }
-
-        // 5. Score and Update Points
-        newMessage.score = await this.ScoreMessage(newMessage.processedMessage);
-        this.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
-
-        // 6. Sync User Metadata (Updates icons/roles if they changed)
-        if (user) {
-            user.icon = rmo.authorDetails.profileImageUrl;
-            user.isVerified = rmo.authorDetails.isVerified;
-            user.isChatOwner = rmo.authorDetails.isChatOwner;
-            user.isChatSponsor = rmo.authorDetails.isChatSponsor;
-            user.isChatModerator = rmo.authorDetails.isChatModerator;
-        }
-
-        newMessage.state = {
-		displayedAt: false
-	};
-        return newMessage;
-
-    } catch (err) {
-        this.DebugPrint({ 
-            msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
-            type: "e", 
-            err: err
-        });
-        return null;
-    }
-}
 	async ProcessYoutubeV3SuperChatEvent(unprocessedMsg){
 		console.log({msg: "ProcessYoutubeV3SuperChatEvent received:", val: JSON.stringify(unprocessedMsg, null, 4)});
 	    try {
@@ -2598,23 +2592,163 @@ async ProcessYoutubeV3Message(unprocessedMsg){
 	    }
 	}
 
-	async ProcessYoutubeV3Data_v1(unprocessedMsg) {
-		let type = String(unprocessedMsg.data.snippet.type).toLowerCase();
-		this.DebugPrint({msg: "type detected: ", val: type});
-		let msg;
-		switch(type){
-			case("textmessageevent"):
-				msg = await this.ProcessYoutubeV3Message(unprocessedMsg);
-				this.PushMessageToChatWindow(msg);
-				return msg;
-			case("superchatevent"):
-				msg = await this.ProcessYoutubeV3SuperChatEvent(unprocessedMsg);
-				this.PushDonationToChatWindow(msg);
-				return msg;
-			default:
-				this.DebugPrint({msg: "UNABLE TO FIND MATCHING 'msg.data.snippet.type'", val: unprocessedMsg, type:"t"});
+	async ProcessUnprocessedQueue() {
+	    let q = this.#state.unprocessed_queue.splice(
+		0,
+		this.#state.unprocessed_queue.length
+	    );
+
+	    for (let i = 0; i < q.length; ++i) {
+		try {
+		    const raw = q[i];
+		    let p_msg = null; // Initialize as null
+
+		    switch (raw.platform) {
+			case "twitch":
+			    p_msg = await this.ProcessTwitchV1Data_v1(raw);
+			    break;
+			case "youtube":
+			    p_msg = await this.ProcessYoutubeV3Data_v1(raw);
+			    break;
+		    }
+
+		    // CRITICAL FIX: If p_msg is null (system message), skip the rest of this iteration
+		    if (!p_msg) {
+			this.DebugPrint({ msg: "Message filtered or system handshake, skipping storage logic." });
+			continue; 
+		    }
+
+		    this.DebugPrint({ msg: "message finished processing", val: p_msg });
+
+		    let doesMessageAlreadyExist = false;
+		    let messages = await this.GetMessages();
+		    
+		    if (messages && messages.length > 0) {
+			let m;
+			for (let j = messages.length - 1; j >= 0; --j) {
+			    m = messages[j];
+			    // Added optional chaining ?. just to be safe
+			    if (
+				m.receivedAt === p_msg.receivedAt &&
+				(m.authorId === p_msg.authorId || m.username === p_msg.username)
+			    ) {
+				doesMessageAlreadyExist = true;
+				break;
+			    }
+			}
+
+			if (!doesMessageAlreadyExist) {
+			    this.DoTheStuffToAddMessageToQueue(p_msg);
+			} else {
+			    this.DebugPrint({ msg: "message already exists, skipping add" });
+			}
+		    } else {
+			this.DoTheStuffToAddMessageToQueue(p_msg);
+		    }
+		} catch (err) {
+		    // This catch will now only trigger for actual logic failures, not null pointers
+		    this.DebugPrint({ msg: "LOOP CRASHED: ", error: err, val: q[i] });
 		}
+		
+		const currentMsgs = await this.GetMessages();
+		this.DebugPrint({ msg: "Current messages count: " + (currentMsgs ? currentMsgs.length : 0) });
+	    }
 	}
+
+	ParseAndAddTwitchMessagesToUnprocessedQueue(item) {
+	    try {
+		// 1. Simple Regex to pull the username and the actual message text
+		// This matches the pattern: :username!user@host PRIVMSG #channel :message
+		const match = item.match(/^:([^!]+)![^@]+@[^ ]+ PRIVMSG #[^ ]+ :(.+)\r\n$/);
+		
+		let username = "system";
+		let messageText = item;
+
+		if (match) {
+		    username = match[1];
+		    messageText = match[2];
+		}
+
+		// 2. Define the template
+		const template = {
+		    version: 1,
+		    apiVersion: 3, // Keep as 3 per your requirement
+		    data: {
+			raw: item,
+			username: username,
+			message: messageText
+		    },
+		    dateTime: Date.now(),
+		    platform: "twitch",
+		    failedProcessingAt: null,
+		};
+
+		// 3. Structured Clone and Push
+		const formattedMessage = structuredClone(template);
+		this.#state.unprocessed_queue.push(formattedMessage);
+
+		this.DebugPrint({
+		    msg: "Twitch message parsed and queued",
+		    val: formattedMessage
+		});
+
+	    } catch (err) {
+		this.DebugPrint({
+		    msg: "Error parsing Twitch message",
+		    err: err,
+		    val: item
+		});
+	    }
+	}
+	
+
+	async #DaLoop() {
+		this.DebugPrint({msg: "daLoopCalled"});
+		// dLive 
+		// facebook here
+		// instagram
+		// kick here
+		// picarto here
+		// tiktok here
+		// trovo
+		// twitch here
+			/*twitch not needed due to websocket connection, look for "AddTwitchMessageToUnprocessedQueeu()*/	
+		// twitter here
+		// youtube
+		if(this.yt.isReady()){
+			this.DebugPrint({msg: "Fetching messages from youtube"});
+			const data = await this.yt.getChatMessages();
+			
+			this.DebugPrint({msg: `Received ${data.items?.length || 0} items`});
+
+			if (!data.items || data.items.length === 0) return;
+
+			this.DebugPrint({msg: "adding messages to unprocessed queue"});
+			for (const item of data.items) {
+			    this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(item);
+			}
+		}
+
+		//process unprocessed queue
+		this.DebugPrint({msg: "processing unprocecssed_queue"});
+		await this.ProcessUnprocessedQueue();
+	}
+	
+
+
+	async MonitoringStop() {
+		this.DebugPrint({msg: "stopping timers"});
+		let key; 
+		for(let i = 0; i < Object.keys(this.#state.timers).length; ++i){
+			try{
+					key = Object.keys(this.#state.timers)[i];
+					this.#state.timers[key].Stop();
+			}
+			catch(err){
+				this.DebugPrint({msg: "error starting timer", val:key, err:err, type:'e'});
+			}
+		}
+	}	
 
 	async GetOldestUnreadTtsAndMarkRead() { // TODO:this needs to be redone so that way it can look up messages by messageId
 		let messages = await this.GetMessages();
@@ -3721,6 +3855,7 @@ async ProcessYoutubeV3Message(unprocessedMsg){
 					case("y"):
 					case("z"):
 					case(' '):
+					case("'"):
 						//formattedMessage[i] = formattedMessage[i];
 						break;
 				}
@@ -4207,160 +4342,6 @@ ProcessTtsCommand(processedMsg) {
 	    }
 	}
 
-	GenerateYoutubeConfig(){ //returns html element for the yt config
-		if(document == undefined){this.DebugPrint({msg: "cannot create youtube config, returning "}); return;}
-		this.DebugPrint("GENERATING YOUTUBE CONFIG UI");
-	    const container = this.CHE({type: "div"});
-
-	    // 1. Create the Main Details Wrapper
-	    const details = document.createElement('details');
-	    details.style.cssText = `
-		border: var(--tib_border); 
-		border-radius: var(--tib_border-radius); 
-		padding: 0.5rem;
-		margin-top: 10px;
-		color: #fff;
-	    `;
-
-	    const summary = document.createElement('summary');
-	    summary.innerText = "youtube config";
-	    summary.style.cursor = "pointer";
-	    details.appendChild(summary);
-
-	    // 2. Helper function to create standard inputs
-	    const createInputGroup = (labelPath, id, isPassword = false, prefix = null) => {
-		const group = document.createElement('div');
-		group.className = "youtube-config-input";
-		group.style.marginBottom = "10px";
-
-		const label = document.createElement('label');
-		label.innerText = ` ${labelPath}`;
-		label.style.display = "block";
-		group.appendChild(label);
-
-		const row = document.createElement('div');
-		row.style.display = "flex";
-		row.style.flexDirection = "row";
-
-		if (prefix) {
-		    const span = document.createElement('span');
-		    span.innerText = prefix;
-		    span.style.cssText = `
-			padding: var(--input-pad);
-			background: var(--color-surface);
-			border: 0.1rem solid var(--color-border);
-			border-top-left-radius: var(--border_radius_default);
-			border-bottom-left-radius: var(--border_radius_default);
-			font-size: var(--font-size-base);
-		    `;
-		    row.appendChild(span);
-		}
-
-		const input = document.createElement('input');
-		input.id = id;
-		input.type = isPassword ? "password" : "text";
-		input.placeholder = "Enter " + labelPath;
-		input.style.cssText = `
-		    flex-grow: 1;
-		    display: inline-block;
-		    border-top-left-radius: ${prefix ? '0' : 'var(--border_radius_default)'};
-		    border-bottom-left-radius: ${prefix ? '0' : 'var(--border_radius_default)'};
-		`;
-		
-		row.appendChild(input);
-		group.appendChild(row);
-		return group;
-	    };
-
-	    // 3. Append Initial Inputs
-	    details.appendChild(createInputGroup("channelName", "youtube-config-channelName", false, "@"));
-	    details.appendChild(createInputGroup("apiKey", "youtube-config-apiKey", true));
-
-	    // 4. Create the Broadcasts Container
-	    const broadcastsContainer = document.createElement('div');
-	    broadcastsContainer.id = "broadcastsContainer";
-	    broadcastsContainer.style.cssText = `
-		background: var(--color-surface-hover);        
-		border: 0.1rem solid var(--color-border);
-		border-color: var(--color-border-light);
-		height: 10rem;     
-		overflow-x: auto;
-		display: flex;
-		gap: 5%;
-		width: 90%;
-		margin: 5% 0;
-	    `;
-	    details.appendChild(broadcastsContainer);
-
-	    // 5. Create the Action Button
-	    const btn = document.createElement('input');
-	    btn.type = "button";
-	    btn.value = "click to complete";
-	    btn.className = "complete-btn";
-	    
-	    // 6. The Async Logic
-	    btn.onclick = async () => {
-		try {
-		    const channelName = document.getElementById("youtube-config-channelName").value;
-		    const apiKey = document.getElementById("youtube-config-apiKey").value;
-
-		    window.Cockatiel.yt.config.channelName = channelName;
-		    window.Cockatiel.yt.config.apiKey = apiKey;
-
-		    await window.Cockatiel.yt.getChannelId();
-		    const broadcasts = await window.Cockatiel.yt.getLiveAndUpcoming();
-		    
-		    broadcastsContainer.innerHTML = ""; // Clear existing
-
-		    broadcasts.forEach(b => {
-			const bs = document.createElement("div");
-			bs.className = "broadcastSelector";
-			bs.style.backgroundImage = `url(${b.snippet.thumbnails.default.url})`;
-
-			const vi = document.createElement("div");
-			vi.className = "video_info";
-			
-			const t = document.createElement("div");
-			t.className = "title";
-			t.innerText = b.snippet.title;
-			t.style.fontSize = "0.8rem";
-			t.style.padding = "2px";
-			
-			vi.appendChild(t);
-			bs.appendChild(vi);
-
-			bs.onclick = async () => {
-			    window.Cockatiel.yt.config.broadcastId = b.id.videoId;
-			    const startTimeStr = b.liveStreamingDetails?.actualStartTime;
-			    window.Cockatiel.yt.config.streamStartedAt = startTimeStr ? new Date(startTimeStr).getTime() : null;
-
-			    document.getElementById("youtube-config-channelId").value = b.snippet.channelId;
-			    document.getElementById("youtube-config-broadcastId").value = b.id.videoId;
-
-			    const lcid = await window.Cockatiel.yt.getLiveChatId();
-			    document.getElementById("youtube-config-liveChatId").value = lcid;
-
-			    await window.Cockatiel.MonitoringStart();
-			};
-
-			broadcastsContainer.appendChild(bs);
-		    });
-		} catch (err) {
-		    console.error("Config Error:", err);
-		}
-	    };
-
-	    details.appendChild(btn);
-
-	    // 7. Append Footer Read-only Inputs
-	    details.appendChild(createInputGroup("channelId", "youtube-config-channelId"));
-	    details.appendChild(createInputGroup("broadcastId", "youtube-config-broadcastId"));
-	    details.appendChild(createInputGroup("liveChatId", "youtube-config-liveChatId"));
-
-	    container.appendChild(details);
-		return container;
-	}	
-
 	/**
 	 * Generates the Control Bar UI for Saving, Loading, and Monitoring.
 	 * @param {HTMLElement} container - The element to attach the control bar to.
@@ -4776,6 +4757,102 @@ ProcessTtsCommand(processedMsg) {
 		    stopButtons.append(subStopButtons, stopButton);
 		buttonsContainer.append(startButtons, stopButtons);
 
+		//status guide
+		let guide = document.createElement("ul");
+			//offline
+			let gray = document.createElement("li");
+			    gray.innerText = "nothing has been done yet";	
+			    gray.style = "color: lightgray;"
+			//tests
+			let blue = document.createElement("li");
+			    blue.innerText = "all checks passed, good to go!";	
+			    blue.style = "color: lightblue;"
+			//live
+			let purple = document.createElement("li");
+			    purple.innerText = "currently live and using";	
+			    purple.style = "color: lavender;"
+			//errors
+			let yellow = document.createElement("li");
+			    yellow.innerText = "minor issue, but is still operating!";	
+			    yellow.style = "color: lightyellow;"
+			let red = document.createElement("li");
+			    red.innerText = "critical issue, unable to get messages";	
+			    red.style = "color: pink;"
+			guide.append(gray, blue, purple, yellow, red);
+		buttonsContainer.append(guide);
+		//status notifiers
+		let grid_label = document.createElement("label");
+		grid_label.innerText = "platform status's:";
+		let grid = document.createElement("div");
+		grid.style = `
+			display:grid-template-columns(auto-fit, minmax(1.5rem, 1fr));
+			background-color: #000;
+		`;
+		    grid.style.padding = "1rem";
+		    grid.style.margin = "1rem";
+
+		function createStatusNotifier(platform, platformController) {
+		    let container = document.createElement("div");
+		    container.style.display = "flex"; // Helpful for alignment
+		    container.style.alignItems = "center";
+		    container.style.gap = "0.8rem";
+		    container.style.padding = "1rem";
+
+		    let icon_container = document.createElement("div");
+		    let icon = document.createElement("img");
+		    
+		    // Use integers for width/height properties
+		    icon.width = 32;
+		    icon.height = 32;
+
+		    switch(platform) {
+			case ("twitch"):
+			    icon.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Twitch_icon_2012.svg/1280px-Twitch_icon_2012.svg.png";
+			    break;
+			case ("youtube"):
+			    icon.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/3840px-YouTube_full-color_icon_%282017%29.svg.png";
+			    break;
+			default:
+			    return null; // Return null instead of undefined for cleaner grid appending
+		    }
+
+		    icon_container.append(icon);
+		    container.append(icon_container);
+
+		    let stat_icon = document.createElement("div");
+		    stat_icon.style = `
+			width: 1rem;
+			height: 1rem;
+			border-radius: 100%;
+			background-color: #555555; 
+		    `;
+		switch(platform){
+			case("twitch"):
+				platformController.AddStartListener((() => (stat_icon.style.backgroundColor = "#00ff00")));
+				platformController.AddStopListener((() => (stat_icon.style.backgroundColor = "#555555")));
+				platformController.AddWarnListener((() => (stat_icon.style.backgroundColor = "#FFFF00")));
+				platformController.AddErrorListener((() => (stat_icon.style.backgroundColor = "#ff0000")));
+				// this.twitch.AddStatusListener(); THIS IS FOR THE NEXT PART
+				break;
+			case("youtube"):
+				
+				break;
+		}
+		    
+		    container.append(stat_icon);
+		    return container;
+		}
+
+		// When appending, filter out any null returns from the default case
+		const twitchNotifier = createStatusNotifier("twitch", this.twitch);
+		const youtubeNotifier = createStatusNotifier("youtube", this.yt);
+
+		if (twitchNotifier) grid.append(twitchNotifier);
+		if (youtubeNotifier) grid.append(youtubeNotifier);
+
+		buttonsContainer.append(grid_label, grid);
+
+
 	    //call next tts button
 	    const callTtsColumn = createColumn();
 	    const callTtsBtn = createBtn("../assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
@@ -4783,6 +4860,13 @@ ProcessTtsCommand(processedMsg) {
 	    });
 	    callTtsColumn.append(callTtsBtn);
 	    //footer.append();
+		
+	    //call next tts button
+	    const callLoopColumn = createColumn();
+	    const callLoopBtn = createBtn("../assets/call_tts_message.png", "call loop (ie process unprocessed queue)", "#88f", async () => {
+		    this.#DaLoop();
+	    });
+	    callLoopColumn.append(callLoopBtn);
 
 	    // --- COLUMN 3: STATE (Export/Import) ---
 	    const exportInportColumn = createColumn();
@@ -4859,6 +4943,7 @@ ProcessTtsCommand(processedMsg) {
 	    footer.append(
 		    buttonsContainer,
 		    callTtsColumn,
+		callLoopColumn,
 		    exportBtn,
 		    saveLoadColumn,
 		    fileInput,
@@ -5036,41 +5121,23 @@ ProcessTtsCommand(processedMsg) {
 		
 		// Note: 'details' not 'detail' (HTML tag is <details>)
 		listContainer = this.CHE({ type: 'details', id: parentId + "-container" });
-		const listSummary = this.CHE({ type: 'summary', innerText: "User Details" });
-		listElement = this.CHE({ type: 'div', id: parentId });
+		const listSummary = this.CHE({ 
+			type: 'summary', 
+			innerText: "User Details", 
+			/*style: "color: #ffffff;"*/
+		});
+		listElement = this.CHE({ 
+			type: 'div', 
+			id: parentId, 
+			/*style: "color: #ffffff;" */
+		});
 
 		listContainer.appendChild(listSummary);
 		listContainer.appendChild(listElement); // Attach the list to the container!
-		
-		// Crucial: Attach to the UI! 
-		// You might want to append this to a specific settings panel instead of body
-		//document.body.appendChild(listContainer); 
 	    }
 
 	    // 2. Clear existing list
 	    listElement.innerHTML = "";
-
-		/*
-	    // 3. Handle Object Data Structure
-	    const users = this.#state.users;
-	    const userList = (users && typeof users === 'object') ? Object.values(users) : [];
-
-	    if (userList.length === 0) {
-		this.DebugPrint("User list is empty");
-		listElement.innerText = "No users found.";
-		return listElement;
-	    }
-
-	    // 4. Generate the Items
-	    for (const user of userList) {
-		const userItem = this.CHE({ 
-		    type: 'div', 
-		    innerText: `${user.username} (Points: ${user.points})`,
-		    className: 'user-management-row' 
-		});
-		listElement.appendChild(userItem);
-	    }
-	    */
 
 	    // Always return the top-level element created/found
 	    return listContainer; //|| document.getElementById(parentId + "-container");
@@ -5100,18 +5167,18 @@ UpdateUserDisplay() {
     for (const u of userList) {
         // --- PRE-CALCULATIONS (Your CS color logic is great, keeping it) ---
         let cs = u.conduct_score || 0;
-        let csColor = "#fff";
+        /*let csColor = "#fff";*/
         if (cs < 0) {
             csColor = `rgb(255, ${Math.max(0, 255 + (cs * 51))}, ${Math.max(0, 255 + (cs * 51))})`;
             if (cs <= -5) csColor = "#f00";
         } else if (cs > 0) {
             csColor = `rgb(${Math.max(0, 255 - (cs * 51))}, 255, ${Math.max(0, 255 - (cs * 51))})`;
-            if (cs >= 5) csColor = "#0f0";
+            if (cs >= 5) csColor = "#0f0";cock
         }
 
         const details = this.CHE({
             type: 'details',
-            style: "border-bottom: 1px solid #333; font-family: monospace; font-size: 0.75rem; color: #ccc;"
+            style: "border-bottom: 1px solid #333; font-family: monospace; font-size: 0.75rem; /*color: #ccc;*/"
         });
 
         const summary = this.CHE({
@@ -5144,7 +5211,7 @@ const userIcon = isValidIcon
 	identity.innerHTML = `
 	    <span>${userIcon}</span>
 	    <div style="overflow:hidden;">
-		<div style="font-weight:bold; color:#fff;">${u.username || "???"}</div>
+		<div style="font-weight:bold; /*color:#fff;*/">${u.username || "???"}</div>
 		<div style="font-size:0.6rem;">${flags}</div>
 	    </div>`;
 
@@ -5365,6 +5432,7 @@ const userIcon = isValidIcon
 	    // 4. RETURN the template literal
 	    return `
 			<div class="chatMessageContainer" id="${messageId}">
+				<link rel="stylesheet" href="./stylesheets/chatMessage-modernMinimal.css">
 				<div class="chatUserBubble">
 					<div class="chatBubbleTailContainer">
 						<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src="/content/stream_utils/tib_stuff/whispy_tail.png"></div>
@@ -5510,6 +5578,7 @@ const userIcon = isValidIcon
 		    	border-radius:3rem;
 			background-color: #022;
 			color: #0ff;
+			font-family: helvetica, ariel, sans-serif;
 			padding: 0.8rem;
 		    ">
 			${strang}	
@@ -5585,9 +5654,9 @@ const userIcon = isValidIcon
 	    testInput.style = `
 		width:100%; 
 		padding:8px; 
-		background:#222; 
+		/*background:#222; */
 		border:1px solid #444; 
-		color:#fff; 
+		/*color:#fff;*/
 		border-radius:4px; 
 		box-sizing: border-box;
 	    `;
@@ -5862,10 +5931,10 @@ const userIcon = isValidIcon
 			}
 			// else: container already got, no need to change anything
 			settingsContainer.style = `
-				background-color: #000000;
+				/*background-color: #000000;*/
 				border: 0.2rem solid white;
 					borderRadius: 1rem;
-				color: #000;
+				/*color: #000;*/
 				padding: 1rem;
 				margin:auto;
 				width: 90%;
@@ -5913,26 +5982,29 @@ const userIcon = isValidIcon
 				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
 			}
 			let controlBar = this.GenerateControlBarUI();
-			console.warn(controlBar);
+			//console.warn(controlBar);
 			settingsContainer.appendChild(controlBar);
 		}
 		catch(err){
 			this.DebugPrint({msg: "cannot cannot GenerateControlBarUI", type:'e', err: err});
 		}
 
-		try{
-
-
+		try {
+			if(!settingsContainer){
+				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
+			}
+			let twitchConfig = this.twitch.buildInterface();
+			settingsContainer.appendChild(twitchConfig);
 		}
 		catch(err){
-
+			this.DebugPrint({msg: "cannot cannot GenerateControlBarUI", type:'e', err: err});
 		}
 
 		try{
 			if(!settingsContainer){
 				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
 			}
-			let ytConfig = this.GenerateYoutubeConfig();
+			let ytConfig = this.yt.GenerateYoutubeConfigUI();
 			settingsContainer.appendChild(ytConfig);
 		}
 		catch(err){
@@ -5948,6 +6020,49 @@ const userIcon = isValidIcon
 		}
 		catch(err){
 			this.DebugPrint({msg: "cannot cannot GenerateUserManagement", type:'e', err: err});
+		}
+
+		try{
+			if(!settingsContainer){
+				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
+			}
+
+			let logger = document.createElement("details");
+			let loggerTitle = document.createElement("summary");
+			loggerTitle.innerText = "logs";
+			logger.innerText = "here's any/all logs the user would care about. \nthis is mainly for you, the user to understand what's happening. if you need debugging support please select 'export state' and that will be a much better help\n\n"
+			logger.append(loggerTitle);
+
+			function loggerAppend(data){
+				if(data != null){
+					if(data.err){
+						if(data.err.message || data.err.msg){
+							let err = document.createElement("details");
+							err.innerText = data.details || data;
+								let sum = document.createElement("summary");
+								sum.innerText = err.message;
+							logger.append(err);
+						}
+					}
+					else{
+						let container = document.createElement("div");
+						container.innerText = data;
+						logger.append(container);
+					}
+				}
+			}
+
+			if(this.yt){
+				this.yt.AddStatusListener(loggerAppend);
+			}
+			if(this.twitch){
+				this.twitch.AddStatusListener(loggerAppend);
+			}
+
+			settingsContainer.appendChild(logger);
+		}
+		catch(err){
+			this.DebugPrint({msg: "cannot append settings container to document", err: err, type: "err"});
 		}
 
 		try{
@@ -6036,27 +6151,42 @@ const userIcon = isValidIcon
 		try{
 			//this.PushToSubWindow("chatMonitor", this.RenderStandbyHTML());
 			let eventWindowSettings = structuredClone(this.#state.windows.events);
-			this.CreateSubWindow({
-				...eventWindowSettings,
-				script: `
-				    window.addEventListener("htmlUpdate", (event) => {
-				    	console.log("html update received!!!");
-					const { type, payload } = event.data;
+// Inside GenerateEventsWindow() function, focusing on the 'script' string:
 
-				    	if(event.type != htmlUpdate){
-						console.log({msg: "invalid event passed", val: event})console.log;
-						return;
-					}
-				    	document.innerHtml = event.payload;	
-				    });
-				`,
-				html: `
-					<div style="display: flex; justify-content:space-evenly; flex-direction:column; height: 100%; margin: auto;">
-						<div style="max-width:60rem; width:80%; color:white; padding: 2rem;">event monitor has yet to be started, do so to turn cockatiel on</div>
-						<img style="max-width:60%; margin:auto;" src="../assets/off_tib.png">
-					</div>
-				`,
-			});
+this.CreateSubWindow({
+    ...eventWindowSettings,
+    script: `
+        window.addEventListener("htmlUpdate", (event) => {
+            console.log("html update received!!!");
+            const { type, payload } = event.data;
+
+            if(event.type !== "htmlUpdate"){ // Use strict comparison for strings
+                console.log({msg: "invalid event passed", val: event});
+                return;
+            }
+            
+            // *** THE FIX IS HERE ***
+            // You must specify WHICH element to update. 
+            // Assuming you want to target an element with the ID 'monitor-content'
+            const targetElement = document.getElementById('monitor-content');
+            
+            if(targetElement){
+                targetElement.innerHTML = payload; // Use innerHTML correctly
+            } else {
+                console.error("Error: Target element for HTML update not found.");
+            }
+        });
+    `,
+    html: `
+        <div id="monitor-content">
+            <div style="display: flex; justify-content:space-evenly; flex-direction:column; height: 100%; margin: auto; font-family: helvetica, sans-serif, ariel;">
+                <div style="max-width:60rem; width:80%; color:white; padding: 2rem;">event monitor has yet to be started, do so to turn cockatiel on</div>
+                <img style="max-width:60%; margin:auto;" src="../assets/off_tib.png">
+            </div>
+        </div>
+    `,
+});
+
 
 			this.#state.timers.EventDisplayTimer.AddTickListener((()=>{console.log("tick from event display manager")}));
 			this.#state.timers.EventDisplayTimer.AddTimeoutListener((()=>{console.log("time'd out eventdisplaytimer")}));
@@ -6379,6 +6509,9 @@ const userIcon = isValidIcon
 	}
 
 	async Init(){
+		if (this.#hasInited) return; // Stop if already running
+		this.#hasInited = true;
+
 		this.InitTimers();
 		this.AddTtsTimeoutListeners();
 
