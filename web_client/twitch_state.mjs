@@ -444,7 +444,7 @@ fragment.appendChild(c);
 
 		    this.#twitchSocket.onmessage = (event) => {
 			// Here is where you would call your message processing logic
-			window.Cockatiel.ParseAndAddTwitchMessagesToUnprocessedQueue(event.data);
+			this.ParseAndAddTwitchMessagesToUnprocessedQueue(event.data);
 		    };
 
 		    this.#twitchSocket.onerror = (err) => {
@@ -457,5 +457,244 @@ fragment.appendChild(c);
 		    button.innerText = "▶️ Start Listening to Chat";
 		}
 	    }
+	}
+
+	ParseAndAddTwitchMessagesToUnprocessedQueue(item) {
+	    try {
+		let state = window.Cockatiel.GetState();
+		// 1. Simple Regex to pull the username and the actual message text
+		// This matches the pattern: :username!user@host PRIVMSG #channel :message
+		const match = item.match(/^:([^!]+)![^@]+@[^ ]+ PRIVMSG #[^ ]+ :(.+)\r\n$/);
+		
+		let username = "system";
+		let messageText = item;
+
+		if (match) {
+		    username = match[1];
+		    messageText = match[2];
+		}
+
+		// 2. Define the template
+		const template = {
+		    version: 1,
+		    apiVersion: 3, // Keep as 3 per your requirement
+		    data: {
+			raw: item,
+			username: username,
+			message: messageText
+		    },
+		    dateTime: Date.now(),
+		    platform: "twitch",
+		    failedProcessingAt: null,
+		};
+
+		// 3. Structured Clone and Push
+		const formattedMessage = structuredClone(template);
+		state.unprocessed_queue.push(formattedMessage);
+
+		DebugPrint({
+		    msg: "Twitch message parsed and queued",
+		    val: formattedMessage
+		});
+
+	    } catch (err) {
+		DebugPrint({
+		    msg: "Error parsing Twitch message",
+		    err: err,
+		    val: item
+		});
+	    }
+	}
+
+	async ProcessTwitchV1Data_v1(unprocessedMsg) {    
+	    const raw = unprocessedMsg.data.raw;
+
+	    // 1. Explicitly protect actual chat/event messages from being filtered
+	    const isUserEvent = raw.includes("PRIVMSG") || raw.includes("USERNOTICE");
+
+	    if (!isUserEvent) {
+		// If it's not a user event, check if it's a known Twitch system/handshake message
+		const isSystemMessage = 
+		    /\.tmi\.twitch\.tv\s+\d{3}\s+/.test(raw) || 
+		    raw.includes("tmi.twitch.tv") || 
+		    raw.includes("PING") || 
+		    raw.includes("CAP * ACK");
+
+		if (isSystemMessage) {
+		    DebugPrint({ msg: "Ignoring Twitch System Message", val: "Handshake/NamesList" });
+		    return null; 
+		}
+	    }
+	    
+	    DebugPrint({ msg: "Twitch processing started:", val: raw });
+
+	    // 2. Determine type for the switch
+	    let type = "unknown";
+	    if (raw.includes("PRIVMSG")) type = "textmessageevent";
+	    else if (raw.includes("USERNOTICE")) type = "usernoticeevent"; 
+	    else if (raw.includes("bits=")) type = "bitsevent";
+
+	    let msg = null;
+	    
+	    switch(type) {
+		case "textmessageevent":
+		    try {
+			// Try the standard parser first
+			msg = await this.ProcessTwitchMessage(unprocessedMsg);
+		    } catch (innerErr) {
+			DebugPrint({ msg: "Primary ProcessTwitchMessage threw an error:", error: innerErr });
+		    }
+
+		    // FALLBACK LAYER: If primary parser failed or returned null, run matching YouTube style pipeline
+		    if (!msg) {
+			DebugPrint({ msg: "Primary parser returned nothing. Running pipeline fallback..." });
+			
+			const bareIrcRegex = /^:([^!]+)![^ ]+ PRIVMSG #[^\s]+ :([\s\S]*)$/;
+			const match = raw.trim().match(bareIrcRegex);
+
+			if (match) {
+			    const extractedUsername = match[1];
+			    const extractedText = match[2];
+
+			    try {
+				const cockatiel = window.Cockatiel; // Reference main controller
+				const state = cockatiel.GetState();
+
+				// Parse out target channel name cleanly
+				const channelMatch = raw.match(/PRIVMSG\s+(#[^\s:]+)/);
+				const extractedChannel = channelMatch ? channelMatch[1] : `#${extractedUsername}`;
+
+				// 1. Structure the message matching global schema templates
+				let newMessage = structuredClone(cockatiel.templates.messages);
+				newMessage.version = 1;
+				newMessage.type = "message-unmonitized";
+				newMessage.platform = "twitch";
+				newMessage.rawMessage = extractedText;
+				newMessage.messageId = `fallback-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+				newMessage.channelOrigin = extractedChannel;
+				newMessage.receivedAt = unprocessedMsg.dateTime || Date.now();
+				newMessage.username = extractedUsername;
+				newMessage.authorId = extractedUsername;
+
+				// 2. Locate or instantiate the user profile context safely
+				let foundUuid = cockatiel.FindUserFromChannelIdAndReturnUuid(extractedChannel);
+				let user;
+
+				if (!foundUuid) {
+				    DebugPrint({ msg: "NEW USER: Creating profile via native flags", val: extractedUsername });
+				    user = cockatiel.CreateUserFromFlags(newMessage); 
+				    newMessage.userUuid = user.uuid;
+				} else {
+				    DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
+				    user = state.users[foundUuid];
+				    newMessage.userUuid = foundUuid;
+				}
+
+				// 3. Sanitization utility processing
+				if (cockatiel.CheckMessageForBannedWords(newMessage.rawMessage)) {
+				    // Logic for banned words here if your platform config requires it
+				}
+				newMessage.processedMessage = cockatiel.SanitizeString(newMessage.rawMessage);
+
+				// 4. Custom command parser extraction
+				const commandObject = cockatiel.ParseCommandFromMessage(newMessage);
+				newMessage.commands = commandObject || {};
+				
+				const firstCmdKey = Object.keys(newMessage.commands)[0];
+				if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
+				    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
+				}
+
+				// 5. Score parsing metrics and award user community engagement points
+				newMessage.score = await cockatiel.ScoreMessage(newMessage.processedMessage);
+				cockatiel.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
+
+				// 6. Sync User metadata properties across platform boundaries
+				if (user) {
+				    user.icon = unprocessedMsg.data.icon || user.icon || "";
+				    user.isVerified = false;
+				    user.isChatOwner = extractedChannel === `#${extractedUsername}`;
+				    user.isChatSponsor = false;
+				    user.isChatModerator = false;
+				}
+
+				newMessage.state = { displayedAt: false };
+				msg = newMessage;
+
+				DebugPrint({ msg: "Pipeline fallback successfully built and validated msg object!", val: msg });
+
+			    } catch (fallbackErr) {
+				DebugPrint({ 
+				    msg: "CRITICAL ERROR in ProcessTwitchV1Data_v1 Fallback Pipeline", 
+				    type: "e", 
+				    err: fallbackErr.message 
+				});
+				console.error(fallbackErr);
+				msg = null;
+			    }
+			} else {
+			    DebugPrint({ msg: "Fallback regex failed to match raw text stream", val: raw });
+			}
+		    }
+
+		    return msg;
+
+		case "bitsevent":
+		    DebugPrint({ msg: "Bits detected", type: "i" });
+		    return null;
+
+		case "usernoticeevent":
+		    DebugPrint({ msg: "Sub/UserNotice detected", type: "i" });
+		    return null;
+
+		default:
+		    DebugPrint({ 
+			msg: "UNHANDLED TWITCH IRC COMMAND", 
+			val: raw.substring(0, 50) + "...", 
+			type: "w" 
+		    });
+		    return null; 
+	    }
+	}
+
+	async ProcessTwitchMessage(r_msg){ /*r_msg = raw_message*/
+		let p_msg = structuredClone(window.Cockateal.templates.message);
+		/*
+			//originalData: {},
+			commands: [/*eac command being a messageCommandObject],
+			version: 1,
+			channelOrigin: null,
+			donationAmount: 0,
+			donationCurrency: undefined,
+			messageId: null,
+			processedMessage: null,
+			platform: null,
+			rawMessage: null,
+			receivedAt: null, 
+			score: null,
+			state: {},
+			streamOrigin: null, //what streamid via the platform the message came from
+			type: null,//must be selected from: templates.message_types[i]
+			username: null,
+			userUuid: null,
+		*/
+		p_msg.commands = window.Cockatiel.ParseCommandFromMessage(processedMessage);
+		p_msg.version = 1;
+		p_msg.channelOrigin = r_msg.username;
+		p_msg.donationAmount = 0;
+		p_msg.donationCurrency = null;
+		p_msg.messageId = crypto.randomUUID();
+		p_msg.processedMessage = null;
+		p_msg.platform = 'twitch';
+		p_msg.rawMessage = r_msg.raw;
+		p_msg.receivedAt = r_msg.dateTime;
+		p_msg.score = window.Cockatiel.ScoreMessage(r_msg.message);
+		p_msg.state = {};
+		p_msg.streamOrigin = `twitch.tv/${String(this.#twitch_config.nick)}`; //what streamid via the platform the message came from
+		p_msg.type = "message-unmonitized" ;//must be selected from: templates.message_types[i]
+		p_msg.username = r_msg.username;
+
+		let user = window.Cockatiel.CreateUserFromFlags(newMessage); /*returns user object*/
+		p_msg.userUuid = user.uuid;
 	}
 }

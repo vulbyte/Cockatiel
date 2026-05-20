@@ -3,6 +3,8 @@ import {YoutubeV3} from "./youtube_state.mjs"
 import {IntTimer} from  "./intTimer.mjs";
 import {TrieTree} from  "./trie_tree.mjs";
 
+
+
 // magic values
 let trigrams; // = await fetch('/content/stream_utils/tib_stuff/trigrams.json').then((res) => {return res.json()});
 
@@ -99,13 +101,23 @@ export default class Cockatiel {
 			data: null, // data passed into the message
 			error: null, // error info
 		},
+		message_types: [ 
+			"cheer-monitized", //ie claim bits
+			"cheer-unmonitized", //ie use a gif
+			"community_gift-monitized", //ie gifted sub
+			"community_gift-unmonitized", //ie +rep 
+			"follow-monitized", //ie new channel memeber on yt
+			"follow-unmonitized", //ie new follow on twitch
+			"message-monitized", //ie donation 
+			"message-unmonitized", //ie chat
+		],
 		messages: {
 			//originalData: {},
 			commands: [/*eac command being a messageCommandObject*/],
 			version: 1,
 			channelOrigin: null,
 			donationAmount: 0,
-			donationCurrency: undefined,
+			donationCurrency: null,
 			messageId: null,
 			processedMessage: null,
 			platform: null,
@@ -114,7 +126,7 @@ export default class Cockatiel {
 			score: null,
 			state: {},
 			streamOrigin: null, //what streamid via the platform the message came from
-			type: "message",
+			type: null,//must be selected from: templates.message_types[i]
 			username: null,
 			userUuid: null,
 		},
@@ -282,6 +294,10 @@ export default class Cockatiel {
 		      "anything_after",
 		    ],
 		    positionSelected : "start",
+		  },
+		  showSystemMessages: {
+			Twitch: true,
+			Youtube: true,
 		  },
 		},
 		commands: { // only add commands that are implimented
@@ -549,6 +565,10 @@ export default class Cockatiel {
 		ttsAdded: [],
 		voteAdded: [],
 		commandAdded: [],
+	}
+
+	GetTemplates(){
+		return this.templates;
 	}
 
 	GetState(){
@@ -1837,6 +1857,52 @@ export default class Cockatiel {
 	    return this.#state.bannedWordsArray;;
 	}
 
+	AddUnprocessedMessageToUnprocessedQueue(p_msg){
+		/*
+		unprocessed_message_v1: {
+			version : 1,
+			apiVersion : 3, // youtube,
+			data : null,
+			dateTime : null,
+			platform : null,
+			failedProcessingAt : null,
+		},	
+		*/
+		let comperison = this.templates.unprocessed_message_v1;
+
+		let msg = "";
+		let shouldError = false;
+		if(p_msg.version == null){
+			p_msg += "version, ";
+		}
+		if(p_msg.apiVersion == null){
+			p_msg += "api version, ";
+		}
+		if(p_msg.data == null){
+			shouldError = true;
+			p_msg += "data, ";
+		}
+		if(p_msg.dateTime == null){
+			p_msg += "dateTime";
+			p_msg.dateTime = Date.now();
+		}
+		if(p_msg.platform == null){
+			shouldError = true;
+			p_msg += "platform, ";
+		}
+
+		this.DebugLog({
+			msg: String(
+				"attempting to add unprocessed message to queue, here's the following things with errors: ",
+				msg
+			),
+			val: null,
+			err: null,
+		});
+		if(shouldError == true){
+			p_msg.failedProcessingAt = Date.now();
+		}
+	}
 	GetUnprocessedQueue(){
 		return this.#state.unprocessed_queue;
 	}
@@ -2309,288 +2375,54 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	}
 
 	DoTheStuffToAddMessageToQueue(p_msg){
-	    console.log("ADDING MESSAGE TO QUEUE");
+	   this.DebugPrint({msg: "ADDING MESSAGE TO QUEUE", val: p_msg});
 	    p_msg.state.displayedAt = Date.now();
 	    this.DebugPrint({msg: "message does not exist, adding"});
-	    this.#state.users[p_msg.userUuid].totalMessages += 1;
+	    this.#state.users[p_msg.userUuid].totalMessages += 1; /*undefined*/
 	    this.SafeAddToEventTimeline(p_msg)
-	}
 
-	async ProcessTwitchV1Data_v1(unprocessedMsg) {
-		const raw = unprocessedMsg.data.raw;
-		    
-		    // Improved Regex: matches any tmi.twitch.tv source or numeric codes like 353/366
-		    const isSystemMessage = 
-			/\.tmi\.twitch\.tv \d{3} /.test(raw) || 
-			raw.includes("tmi.twitch.tv") && !raw.includes("PRIVMSG");
-
-		    if (isSystemMessage) {
-			this.DebugPrint({ msg: "Ignoring Twitch System Message", val: "Handshake/NamesList" });
-			return null; 
-		    }
-			    this.DebugPrint({ msg: "Twitch processing started:", val: raw });
-
-			    // 2. Determine type for the switch
-			    let type = "unknown";
-			    if (raw.includes("PRIVMSG")) type = "textmessageevent";
-			    else if (raw.includes("USERNOTICE")) type = "usernoticeevent"; 
-			    else if (raw.includes("bits=")) type = "bitsevent";
-
-			    let msg;
-			    switch(type) {
-				case "textmessageevent":
-				    msg = await this.ProcessTwitchMessage(unprocessedMsg);
-				    this.PushMessageToChatWindow(msg);
-				    return msg;
-
-				case "bitsevent":
-				    this.DebugPrint({ msg: "Bits detected", type: "i" });
-				    return null;
-
-				case "usernoticeevent":
-				    this.DebugPrint({ msg: "Sub/UserNotice detected", type: "i" });
-				    return null;
-
-				default:
-				    // Instead of crashing, just log it as unhandled and continue the loop
-				    this.DebugPrint({ 
-					msg: "UNHANDLED TWITCH IRC COMMAND", 
-					val: raw.substring(0, 50) + "...", 
-					type: "w" 
-				    });
-				    return null; 
-			    }
-	}
-
-	async ProcessYoutubeV3Data_v1(unprocessedMsg) {
-		let type = String(unprocessedMsg.data.snippet.type).toLowerCase();
-		this.DebugPrint({msg: "type detected: ", val: type});
-		let msg;
-		switch(type){
-			case("textmessageevent"):
-				msg = await this.ProcessYoutubeV3Message(unprocessedMsg);
-				this.PushMessageToChatWindow(msg);
-				return msg;
-			case("superchatevent"):
-				msg = await this.ProcessYoutubeV3SuperChatEvent(unprocessedMsg);
-				this.PushDonationToChatWindow(msg);
-				return msg;
-			default:
-				this.DebugPrint({msg: "UNABLE TO FIND MATCHING 'msg.data.snippet.type'", val: unprocessedMsg, type:"t"});
-		}
-	}
-
-	async ProcessYoutubeV3Message(unprocessedMsg){
-	    try {
-		const rmo = unprocessedMsg.data;
-		
-		this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
-		
-		// 1. Initialize message from template
-		let newMessage = { ...this.templates.messages };
-		newMessage.version = 1;
-		newMessage.type = "message";
-		newMessage.platform = "youtube";
-		newMessage.rawMessage = rmo.snippet.textMessageDetails.messageText;
-		newMessage.messageId = rmo.id;
-		newMessage.channelOrigin = rmo.authorDetails.channelId;
-		newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
-		
-		// Handle @ in username
-		let name = rmo.authorDetails.displayName;
-		newMessage.username = name.startsWith("@") ? name.slice(1) : name;
-
-		// 2. SEARCH FOR EXISTING USER (CRITICAL STEP)
-		const inputChannelId = rmo.authorDetails.channelId;
-		let foundUuid = this.FindUserFromChannelIdAndReturnUuid(inputChannelId);
-		
-		let user;
-		if (!foundUuid) {
-		    this.DebugPrint({ msg: "NEW USER: Creating profile", val: name });
-		    // This function should return a brand new user object and add it to #state.users
-		    user = this.CreateUserFromFlags(newMessage); 
-		    newMessage.userUuid = user.uuid;
-		} else {
-		    this.DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
-		    user = this.#state.users[foundUuid];
-		    newMessage.userUuid = foundUuid;
-		}
-
-		// 3. Process Message Content (Sanitization & Commands)
-		if (this.CheckMessageForBannedWords(newMessage.rawMessage)) {
-		    // Logic for banned words here
-		}
-		newMessage.processedMessage = this.SanitizeString(newMessage.rawMessage);
-
-		// 4. Handle Commands
-		const commandObject = this.ParseCommandFromMessage(newMessage);
-		newMessage.commands = commandObject || {};
-		
-		// If a command has a custom message (like TTS), use it for processedMessage
-		const firstCmdKey = Object.keys(newMessage.commands)[0];
-		if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
-		    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
-		}
-
-		// 5. Score and Update Points
-		newMessage.score = await this.ScoreMessage(newMessage.processedMessage);
-		this.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
-
-		// 6. Sync User Metadata (Updates icons/roles if they changed)
-		if (user) {
-		    user.icon = rmo.authorDetails.profileImageUrl;
-		    user.isVerified = rmo.authorDetails.isVerified;
-		    user.isChatOwner = rmo.authorDetails.isChatOwner;
-		    user.isChatSponsor = rmo.authorDetails.isChatSponsor;
-		    user.isChatModerator = rmo.authorDetails.isChatModerator;
-		}
-
-		newMessage.state = {
-			displayedAt: false
-		};
-		return newMessage;
-
-	    } catch (err) {
-		this.DebugPrint({ 
-		    msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
-		    type: "e", 
-		    err: err
-		});
-		return null;
-	    }
-	}
-
-	async ProcessYoutubeV3SuperChatEvent(unprocessedMsg){
-		console.log({msg: "ProcessYoutubeV3SuperChatEvent received:", val: JSON.stringify(unprocessedMsg, null, 4)});
-	    try {
-		const rmo = unprocessedMsg.data;
-		
-		this.DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
-		
-		// 1. Initialize message from template
-		let newMessage = { ...this.templates.messages };
-		newMessage.version = 1;
-		newMessage.type = "message";
-		newMessage.platform = "youtube";
-		newMessage.rawMessage = rmo.snippet.displayMessage;
-		newMessage.messageId = rmo.id;
-		newMessage.channelOrigin = rmo.authorDetails.channelId;
-		newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
-		
-		// Handle @ in username
-		let name = rmo.authorDetails.displayName;
-		newMessage.username = name.startsWith("@") ? name.slice(1) : name;
-
-		// 2. SEARCH FOR EXISTING USER (CRITICAL STEP)
-		const inputChannelId = rmo.authorDetails.channelId;
-		let foundUuid = this.FindUserFromChannelIdAndReturnUuid(inputChannelId);
-		
-		let user;
-		if (!foundUuid) {
-		    this.DebugPrint({ msg: "NEW USER: Creating profile", val: name });
-		    // This function should return a brand new user object and add it to #state.users
-		    user = this.CreateUserFromFlags(newMessage); 
-		    newMessage.userUuid = user.uuid;
-		} else {
-		    this.DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
-		    user = this.#state.users[foundUuid];
-		    newMessage.userUuid = foundUuid;
-		}
-
-		// 3. Process Message Content (Sanitization & Commands)
-		if (this.CheckMessageForBannedWords(newMessage.rawMessage)) {
-		    // Logic for banned words here
-		}
-		newMessage.processedMessage = this.SanitizeString(newMessage.rawMessage);
-		try{
-			if(
-				newMessage.processedMessage.indexOf("\"")+1 != -1
-				&& newMessage.processedMessage.indexOf("\"", newMessage.processedMessage.indexOf("\"")+1) != -1
-			){
-				newMessage.processedMessage = newMessage.processedMessage.slice(
-					newMessage.processedMessage.indexOf("\"")+1,
-					newMessage.processedMessage.indexOf("\"", newMessage.processedMessage.indexOf("\"")+1)
-				);
-			}
-			else {
-				newMessage.processedMessage = "";
-			}
-		}
-		catch(err){
-
-		}
-
-		// 4. Handle Commands
-		const commandObject = this.ParseCommandFromMessage(newMessage);
-		newMessage.commands = commandObject || {};
-		
-		// If a command has a custom message (like TTS), use it for processedMessage
-		const firstCmdKey = Object.keys(newMessage.commands)[0];
-		if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
-		    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
-		}
-
-		// 5. Score and Update Points
-		newMessage.score = await this.ScoreMessage(newMessage.processedMessage);
-		this.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
-
-		// 6. Sync User Metadata (Updates icons/roles if they changed)
-		if (user) {
-		    user.icon = rmo.authorDetails.profileImageUrl;
-		    user.isVerified = rmo.authorDetails.isVerified;
-		    user.isChatOwner = rmo.authorDetails.isChatOwner;
-		    user.isChatSponsor = rmo.authorDetails.isChatSponsor;
-		    user.isChatModerator = rmo.authorDetails.isChatModerator;
-		}
-
-		newMessage.donationAmount = Number(rmo.snippet.superChatDetails.amountMicros)/10**6,
-		newMessage.donationCurrency = rmo.snippet.superChatDetails.currency,
-		    /*
-			let superChatEventMessage = {
-			    "kind": "youtube#liveChatMessage",
-			    "etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
-			    "id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
-			    "snippet": {
-				"type": "superChatEvent",
-				"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
-				"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
-				"publishedAt": "2026-03-26T21:07:12.021491+00:00",
-				"hasDisplayContent": true,
-				"displayMessage": "CA$1.00 from @vulbyte",
-				"superChatDetails": {
-				    "amountMicros": "1000000",
-				    "currency": "CAD",
-				    "amountDisplayString": "CA$1.00",
-				    "tier": 1
+	    // reference: this.#templates.message_types
+		for(let i = 0; i < Object.keys(this.#state.config.showSystemMessages).length; ++i){
+			//check if we're skipping the system message for the platform
+			if(String(Object.keys(this.#state.config.showSystemMessages)).toLowerCase() == String(p_msg.platform).toLowerCase()){
+				if(this.#state.config.showSystemMessages[Object.keys(this.#state.config.showSystemMessages)[i]] == false){
+					return;
+				}	
+				else{
+					break;
 				}
-			    },
-			    "authorDetails": {
-				"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
-				"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
-				"displayName": "@vulbyte",
-				"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
-				"isVerified": false,
-				"isChatOwner": true,
-				"isChatSponsor": false,
-				"isChatModerator": false
-			    }
-			}	
-		*/
-
-		newMessage.state = {
-			displayedAt: false
-		};
-		return newMessage;
-
-	    } catch (err) {
-		this.DebugPrint({ 
-		    msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
-		    type: "e", 
-		    err: err
-		});
-		return null;
+			}
+		}
+	    switch(String(p_msg.type).toLowerCase()){
+		case("cheer-monitized"): //ie claim bits
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "cheer-monitized"});
+		case("cheer-unmonitized"): //ie use a gif
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "cheer-unmonitized"});
+		case("community_gift-monitized"): //ie gifted sub
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "community_gift-monitized"});
+		case("community_gift-unmonitized"): //ie +rep 
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "community_gift-unmonitized"});
+		case("donation"):
+		case("follow-monitized"): //ie new channel memeber on yt
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "follow-monitized"});
+		case("follow-unmonitized"): //ie new follow on twitch
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "follow-unmonitized"});
+		case("message"): //imma add this here to be safe
+		case("message-monitized"): //ie superchat on youtube
+			this.DebugPrint({msg: "adding message-monitized to display"});
+			this.PushDonationToChatWindow(p_msg);
+		case("message-unmonitized"): //ie chat
+			this.DebugPrint({msg: "adding message-unmonitized to display"});
+			this.PushMessageToChatWindow(p_msg);
+		default:
+			this.DebugPrint({msg: "could not push the message to the chat window(s), opting not to display instead"});
 	    }
+
+	    return;
 	}
+
+
+	//let msg = await this.yt.ProcessYoutubeV3Data_v1(unprocessedMsg);
 
 	async ProcessUnprocessedQueue() {
 	    let q = this.#state.unprocessed_queue.splice(
@@ -2599,22 +2431,30 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	    );
 
 	    for (let i = 0; i < q.length; ++i) {
+		const raw = q[i];
+		let p_msg = null; // Initialize as null
+		
 		try {
-		    const raw = q[i];
-		    let p_msg = null; // Initialize as null
-
-		    switch (raw.platform) {
+		    switch (String(raw.platform).toLowerCase()) {
 			case "twitch":
-			    p_msg = await this.ProcessTwitchV1Data_v1(raw);
+			    p_msg = await this.twitch.ProcessTwitchV1Data_v1(raw);
 			    break;
 			case "youtube":
-			    p_msg = await this.ProcessYoutubeV3Data_v1(raw);
+			    p_msg = await this.yt.ProcessYoutubeV3Data_v1(raw);
 			    break;
+			default:
+			    this.DebugPrint({ 
+				msg: "could not find matching platform for message", 
+				val: raw,
+			    });
 		    }
 
-		    // CRITICAL FIX: If p_msg is null (system message), skip the rest of this iteration
-		    if (!p_msg) {
-			this.DebugPrint({ msg: "Message filtered or system handshake, skipping storage logic." });
+		    // DIAGNOSTIC CHECKS: See exactly what got assigned to p_msg
+		    this.DebugPrint({ msg: "Raw data sent to platform logic", val: raw });
+		    this.DebugPrint({ msg: "Resulting p_msg value right before validation check:", val: p_msg });
+
+		    if (!p_msg) { 
+			this.DebugPrint({ msg: "Message filtered or system handshake, skipping storage logic.", val: JSON.stringify(p_msg, null, 4) });
 			continue; 
 		    }
 
@@ -2627,18 +2467,19 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 			let m;
 			for (let j = messages.length - 1; j >= 0; --j) {
 			    m = messages[j];
-			    // Added optional chaining ?. just to be safe
 			    if (
 				m.receivedAt === p_msg.receivedAt &&
 				(m.authorId === p_msg.authorId || m.username === p_msg.username)
 			    ) {
+				this.DebugPrint({msg: "message exists, not adding"});
 				doesMessageAlreadyExist = true;
 				break;
 			    }
 			}
 
-			if (!doesMessageAlreadyExist) {
+			if (doesMessageAlreadyExist == false) {
 			    this.DoTheStuffToAddMessageToQueue(p_msg);
+			    this.DebugPrint({msg: "attempting to add message to display", val: p_msg.type});
 			} else {
 			    this.DebugPrint({ msg: "message already exists, skipping add" });
 			}
@@ -2646,58 +2487,11 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 			this.DoTheStuffToAddMessageToQueue(p_msg);
 		    }
 		} catch (err) {
-		    // This catch will now only trigger for actual logic failures, not null pointers
 		    this.DebugPrint({ msg: "LOOP CRASHED: ", error: err, val: q[i] });
 		}
 		
 		const currentMsgs = await this.GetMessages();
 		this.DebugPrint({ msg: "Current messages count: " + (currentMsgs ? currentMsgs.length : 0) });
-	    }
-	}
-
-	ParseAndAddTwitchMessagesToUnprocessedQueue(item) {
-	    try {
-		// 1. Simple Regex to pull the username and the actual message text
-		// This matches the pattern: :username!user@host PRIVMSG #channel :message
-		const match = item.match(/^:([^!]+)![^@]+@[^ ]+ PRIVMSG #[^ ]+ :(.+)\r\n$/);
-		
-		let username = "system";
-		let messageText = item;
-
-		if (match) {
-		    username = match[1];
-		    messageText = match[2];
-		}
-
-		// 2. Define the template
-		const template = {
-		    version: 1,
-		    apiVersion: 3, // Keep as 3 per your requirement
-		    data: {
-			raw: item,
-			username: username,
-			message: messageText
-		    },
-		    dateTime: Date.now(),
-		    platform: "twitch",
-		    failedProcessingAt: null,
-		};
-
-		// 3. Structured Clone and Push
-		const formattedMessage = structuredClone(template);
-		this.#state.unprocessed_queue.push(formattedMessage);
-
-		this.DebugPrint({
-		    msg: "Twitch message parsed and queued",
-		    val: formattedMessage
-		});
-
-	    } catch (err) {
-		this.DebugPrint({
-		    msg: "Error parsing Twitch message",
-		    err: err,
-		    val: item
-		});
 	    }
 	}
 	
@@ -4863,7 +4657,7 @@ ProcessTtsCommand(processedMsg) {
 		
 	    //call next tts button
 	    const callLoopColumn = createColumn();
-	    const callLoopBtn = createBtn("../assets/call_tts_message.png", "call loop (ie process unprocessed queue)", "#88f", async () => {
+	    const callLoopBtn = createBtn("../assets/call_tts_message.png", "call loop (ie process unprocessed queue)", "#f00", async () => {
 		    this.#DaLoop();
 	    });
 	    callLoopColumn.append(callLoopBtn);
@@ -5048,7 +4842,7 @@ ProcessTtsCommand(processedMsg) {
 			color: "#fff";
 		`;
 		superChatTest.onclick = () => {
-			this.ProcessYoutubeV3Data_v1(superChatEventMessages[
+			this.yt.ProcessYoutubeV3Data_v1(superChatEventMessages[
 				Math.floor(Math.random()*superChatEventMessages.length)
 			]);
 		};
@@ -6367,7 +6161,7 @@ this.CreateSubWindow({
 		    },
 		    "receivedAt": 1773288187947
 		} 
-		let msg = await this.ProcessYoutubeV3Data_v1(val);
+		let msg = await this.yt.ProcessYoutubeV3Data_v1(val);
 		this.SafeAddToEventTimeline(msg);
 
 
@@ -6410,7 +6204,7 @@ this.CreateSubWindow({
 		    },
 		    "receivedAt": 1773288187947
 		} 
-		this.ProcessYoutubeV3Data_v1(val);
+		this.yt.ProcessYoutubeV3Data_v1(val);
 	}
 	
 	RunSubWindowTest7(){
@@ -6435,7 +6229,7 @@ this.CreateSubWindow({
 				    "version": 1,
 			}
 			try{
-				//this.ProcessYoutubeV3Data_v1(test_message);
+				//this.yt.ProcessYoutubeV3Data_v1(test_message);
 				this.SafeAddToEventTimeline(test_message);
 			}
 			catch(error){

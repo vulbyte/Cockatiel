@@ -423,6 +423,239 @@ export class YoutubeV3 {
 	    }
 	}
 
+	async ProcessYoutubeV3Message(unprocessedMsg){
+	    try {
+		const rmo = unprocessedMsg.data;
+		const cockatiel = window.Cockatiel; // Reference the main controller
+		const state = cockatiel.GetState();
+		
+		DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
+		
+		// 1. Fix the template reference (assuming templates live on Cockatiel)
+		let newMessage = { ...cockatiel.templates.messages };
+		newMessage.version = 1;
+		newMessage.type = "message-unmonitized";
+		newMessage.platform = "youtube";
+		newMessage.rawMessage = rmo.snippet.textMessageDetails.messageText;
+		newMessage.messageId = rmo.id;
+		newMessage.channelOrigin = rmo.authorDetails.channelId;
+		newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
+		
+		let name = rmo.authorDetails.displayName;
+		newMessage.username = name.startsWith("@") ? name.slice(1) : name;
+
+		// 2. Fix the user tracking methods
+		const inputChannelId = rmo.authorDetails.channelId;
+		let foundUuid = cockatiel.FindUserFromChannelIdAndReturnUuid(inputChannelId);
+		
+		let user;
+		if (!foundUuid) {
+		    DebugPrint({ msg: "NEW USER: Creating profile", val: name });
+		    user = cockatiel.CreateUserFromFlags(newMessage); 
+		    newMessage.userUuid = user.uuid;
+		} else {
+		    DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
+		    user = state.users[foundUuid];
+		    newMessage.userUuid = foundUuid;
+		}
+
+		// 3. Fix sanitization and utility methods
+		if (cockatiel.CheckMessageForBannedWords(newMessage.rawMessage)) {
+		    // Logic for banned words here
+		}
+		newMessage.processedMessage = cockatiel.SanitizeString(newMessage.rawMessage);
+
+		// 4. Fix command parsing
+		const commandObject = cockatiel.ParseCommandFromMessage(newMessage);
+		newMessage.commands = commandObject || {};
+		
+		const firstCmdKey = Object.keys(newMessage.commands)[0];
+		if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
+		    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
+		}
+
+		// 5. Fix scoring metrics
+		newMessage.score = await cockatiel.ScoreMessage(newMessage.processedMessage);
+		cockatiel.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
+
+		// 6. Sync User Metadata
+		if (user) {
+		    user.icon = rmo.authorDetails.profileImageUrl;
+		    user.isVerified = rmo.authorDetails.isVerified;
+		    user.isChatOwner = rmo.authorDetails.isChatOwner;
+		    user.isChatSponsor = rmo.authorDetails.isChatSponsor;
+		    user.isChatModerator = rmo.authorDetails.isChatModerator;
+		}
+
+		newMessage.state = { displayedAt: false };
+		return newMessage;
+
+	    } catch (err) {
+		// This catch block was swallowing your error!
+		DebugPrint({ 
+		    msg: "CRITICAL ERROR in ProcessYoutubeV3Message", 
+		    type: "e", 
+		    err: err.message // Log err.message to see exactly what failed
+		});
+		console.error(err); // Force it to show the full stack trace in your console
+		return null;
+	    }
+	}
+
+	async ProcessYoutubeV3SuperChatEvent(unprocessedMsg){
+		console.log({msg: "ProcessYoutubeV3SuperChatEvent received:", val: JSON.stringify(unprocessedMsg, null, 4)});
+	    try {
+		const rmo = unprocessedMsg.data;
+		const template = window.Cockatiel.GetTemplates().messages;
+		
+		DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
+		
+		// 1. Initialize message from template
+		let newMessage = template;
+		newMessage.version = 1;
+		newMessage.type = "message-monitized";
+		newMessage.platform = "youtube";
+		newMessage.rawMessage = rmo.snippet.displayMessage;
+		newMessage.messageId = rmo.id;
+		newMessage.channelOrigin = rmo.authorDetails.channelId;
+		newMessage.receivedAt = Date.parse(rmo.snippet.publishedAt);
+		
+		// Handle @ in username
+		let name = rmo.authorDetails.displayName;
+		newMessage.username = name.startsWith("@") ? name.slice(1) : name;
+
+		// 2. SEARCH FOR EXISTING USER (CRITICAL STEP)
+		const inputChannelId = rmo.authorDetails.channelId;
+		let foundUuid = this.FindUserFromChannelIdAndReturnUuid(inputChannelId);
+		
+		let user;
+		if (!foundUuid) {
+		    DebugPrint({ msg: "NEW USER: Creating profile", val: name });
+		    // This function should return a brand new user object and add it to #state.users
+		    user = this.CreateUserFromFlags(newMessage); 
+		    newMessage.userUuid = user.uuid;
+		} else {
+		    DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
+		    user = state.users[foundUuid];
+		    newMessage.userUuid = foundUuid;
+		}
+
+		// 3. Process Message Content (Sanitization & Commands)
+		if (this.CheckMessageForBannedWords(newMessage.rawMessage)) {
+		    // Logic for banned words here
+		}
+		newMessage.processedMessage = this.SanitizeString(newMessage.rawMessage);
+		try{
+			if(
+				newMessage.processedMessage.indexOf("\"")+1 != -1
+				&& newMessage.processedMessage.indexOf("\"", newMessage.processedMessage.indexOf("\"")+1) != -1
+			){
+				newMessage.processedMessage = newMessage.processedMessage.slice(
+					newMessage.processedMessage.indexOf("\"")+1,
+					newMessage.processedMessage.indexOf("\"", newMessage.processedMessage.indexOf("\"")+1)
+				);
+			}
+			else {
+				newMessage.processedMessage = "";
+			}
+		}
+		catch(err){
+
+		}
+
+		// 4. Handle Commands
+		const commandObject = this.ParseCommandFromMessage(newMessage);
+		newMessage.commands = commandObject || {};
+		
+		// If a command has a custom message (like TTS), use it for processedMessage
+		const firstCmdKey = Object.keys(newMessage.commands)[0];
+		if (firstCmdKey && newMessage.commands[firstCmdKey].message) {
+		    newMessage.processedMessage = newMessage.commands[firstCmdKey].message;
+		}
+
+		// 5. Score and Update Points
+		newMessage.score = await this.ScoreMessage(newMessage.processedMessage);
+		this.AddPointsToUserWithUuid(newMessage.score, newMessage.userUuid);
+
+		// 6. Sync User Metadata (Updates icons/roles if they changed)
+		if (user) {
+		    user.icon = rmo.authorDetails.profileImageUrl;
+		    user.isVerified = rmo.authorDetails.isVerified;
+		    user.isChatOwner = rmo.authorDetails.isChatOwner;
+		    user.isChatSponsor = rmo.authorDetails.isChatSponsor;
+		    user.isChatModerator = rmo.authorDetails.isChatModerator;
+		}
+
+		newMessage.donationAmount = Number(rmo.snippet.superChatDetails.amountMicros)/10**6,
+		newMessage.donationCurrency = rmo.snippet.superChatDetails.currency,
+		    /*
+			let superChatEventMessage = {
+			    "kind": "youtube#liveChatMessage",
+			    "etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
+			    "id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
+			    "snippet": {
+				"type": "superChatEvent",
+				"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+				"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+				"publishedAt": "2026-03-26T21:07:12.021491+00:00",
+				"hasDisplayContent": true,
+				"displayMessage": "CA$1.00 from @vulbyte",
+				"superChatDetails": {
+				    "amountMicros": "1000000",
+				    "currency": "CAD",
+				    "amountDisplayString": "CA$1.00",
+				    "tier": 1
+				}
+			    },
+			    "authorDetails": {
+				"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+				"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+				"displayName": "@vulbyte",
+				"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+				"isVerified": false,
+				"isChatOwner": true,
+				"isChatSponsor": false,
+				"isChatModerator": false
+			    }
+			}	
+		*/
+
+		newMessage.state = {
+			displayedAt: false
+		};
+		return newMessage;
+
+	    } catch (err) {
+		DebugPrint({ 
+		    msg: "CRITICAL ERROR in ProcessYoutubeV3Data_v1", 
+		    type: "e", 
+		    err: err
+		});
+		return null;
+	    }
+	}
+
+	async ProcessYoutubeV3Data_v1(unprocessedMsg) {
+		let type = String(unprocessedMsg.data.snippet.type).toLowerCase();
+		DebugPrint({msg: "type detected: ", val: type});
+		let msg;
+		switch(type){
+			case("textmessageevent"):
+				msg = await this.ProcessYoutubeV3Message(unprocessedMsg);
+				return msg;
+				break;
+			case("superchatevent"):
+				msg = await this.ProcessYoutubeV3SuperChatEvent(unprocessedMsg);
+				return msg;
+				break;
+			case("fanfundingevent"):
+			case("membermilestonechatevent"):
+			default:
+				DebugPrint({msg: "UNABLE TO FIND MATCHING 'msg.data.snippet.type'", val: unprocessedMsg, type:"t"});
+				break;
+		}
+	}
+
 	GenerateYoutubeConfigUI(){ //returns html element for the yt config
 		try{
 		if(document == undefined){this.DPrint({msg: "cannot create youtube config, returning "}); return;}
