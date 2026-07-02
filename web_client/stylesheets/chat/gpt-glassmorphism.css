@@ -1,0 +1,67 @@
+.chatMessageContainer {
+
+	.chatUserBubble {
+
+		.chatUserInfo {
+			background: rgba(255,255,255,0.08);
+
+			backdrop-filter: blur(24px);
+
+			border:
+				1px solid rgba(255,255,255,0.12);
+
+			border-radius: 2rem;
+
+			padding: 0.5rem 0.8rem;
+
+			box-shadow:
+				0 8px 30px rgba(0,0,0,0.2);
+
+			color: black;
+
+			.chatUserImage {
+				width: 3rem;
+				height: 3rem;
+				border-radius: 100%;
+				object-fit: cover;
+
+				border:
+					2px solid rgba(255,255,255,0.2);
+			}
+
+			.chatUsername {
+				font-weight: 700;
+			}
+		}
+	}
+
+	.chatMessageBubble {
+		background:
+			rgba(255,255,255,0.06);
+
+		backdrop-filter: blur(20px);
+
+		border:
+			1px solid rgba(255,255,255,0.08);
+
+		color: black;
+
+		border-radius: 1.5rem;
+
+		padding: 1rem;
+
+		box-shadow:
+			0 10px 40px rgba(0,0,0,0.2);
+
+		.chatCommand {
+			background:
+				rgba(255,255,255,0.08);
+
+			color: #8be9fd;
+
+			border-radius: 999px;
+
+			font-family: monospace;
+		}
+	}
+}

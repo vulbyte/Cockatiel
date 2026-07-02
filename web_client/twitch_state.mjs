@@ -1,20 +1,54 @@
 import {DebugPrint} from "./DebugPrint.mjs";
+import {IntTimer} from  "./intTimer.mjs";
+import {Result} from "./result.mjs";
 
-export class TwitchApi {
+export class Twitch {
+	Init(){}
+
+	DPrint(data){
+		window.Cockatiel.DebugPrint(data);
+		this.EmitStatus(data);
+	}
+	
 	#twitchSocket = null;
 	#isListening = false;
     // Configuration defaults
-    #twitch_config = {
+    #config = {
         channel: null,
         token: null, 
         nick: null, 
         active: false,
-        GenerateUiContainer: null // Target DOM element or ID
+        GenerateUiContainer: null, // Target DOM element or ID
+	//twitchConfig
     };
+
+    GetConfig(){
+    	return this.#config;
+    }
+
+UpdateConfig(input){
+	if(typeof(input) != "object"){
+		this.DPrint({msg:"could not update config, type is not an object", type: "e"});
+	}	
+	this.DPrint({msg: `updating twitch config values: ${JSON.stringify(input, null, 2)}`});
+
+	let inputKeys = Object.keys(input);
+	for(let i = 0; i < inputKeys.length; ++i){
+		if(this.#config[inputKeys[i]] != undefined){
+			this.DPrint({msg: `updating value ${input[inputKeys[i]]} for key: ${inputKeys[i]}`});
+			this.#config[inputKeys[i]] = input[inputKeys[i]];
+		}
+	}
+}
 
     #socket = null;
 
     constructor(configMap = null) {
+    	this.#config = {
+		...this.#config,
+		...window.Cockatiel.templates.platformsettings
+	} 
+
         if (configMap) {
             this.updateConfig(configMap);
         }
@@ -115,20 +149,34 @@ export class TwitchApi {
         let needsReconnect = false;
 
         for (const [key, value] of entries) {
-            if (key in this.#twitch_config) {
-                if (this.#twitch_config[key] !== value && (key === 'channel' || key === 'token')) {
+            if (key in this.#config) {
+                if (this.#config[key] !== value && (key === 'channel' || key === 'token')) {
                     needsReconnect = true;
                 }
-                this.#twitch_config[key] = value;
+                this.#config[key] = value;
             }
         }
 
         // Trigger UI generation if a container is provided
-        if (this.#twitch_config.GenerateUiContainer) {
-            this.buildInterface();
+        if (this.config.GenerateUiContainer) {
+		return window.Cockatiel.UITemplate(
+				`https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Twitch_Glitch_Logo_Purple.svg/250px-Twitch_Glitch_Logo_Purple.svg.png`, 
+				"twitch",
+				window.Cockatiel.twitch,
+				(() => {
+					this.UpdateConfig({isEnabled: true})
+					this.DPrint({msg: "twitch enabled"});
+				}),
+				(() => {
+					this.UpdateConfig({isEnabled: false})
+					this.DPrint({msg: "twitch disabled"});
+				}),
+				//extra html	
+		);
+            //this.buildInterface();
         }
 
-        if (needsReconnect && this.#twitch_config.active) {
+        if (needsReconnect && this.#config.active) {
             this.connect();
         }
     }
@@ -136,12 +184,12 @@ export class TwitchApi {
 	buildInterface() {
 	    const fragment = document.createDocumentFragment();
 
-	    let c = document.createElement("details");
-	    let s = document.createElement("summary");
+	    let c = document.createElement("div");
+	    let s = document.createElement("h4");
 	    s.innerText = "twitch config settings";
 	    c.appendChild(s);
 
-	    Object.keys(this.#twitch_config).forEach(key => {
+	    Object.keys(this.#config).forEach(key => {
 		if (key === 'GenerateUiContainer' || key === 'active') return;
 
 		const wrapper = document.createElement('div');
@@ -189,7 +237,6 @@ export class TwitchApi {
 						the part you are specifically looking for is:<br>
 						<span style="color:pink;">https://localhost/#access_token=<span style="color:red; font-style:italic;">dnjgzhmp4jttx9gxrvmcxibll8pnpx</span>&scope=chat%3Aread+chat%3Aedit&token_type=bearer</span>
 					</details>
-
 				    </li>
 				</ol>
 			    </div>`;
@@ -224,7 +271,7 @@ export class TwitchApi {
 			break;
 
 		    case "nick":
-			label.innerText = `Twitch ${key}: (Your Twitch username in lowercase)`;
+			label.innerText = `Twitch ${key}: (Your bots username in lowercase)`;
 			break;
 			
 		    default:
@@ -236,6 +283,10 @@ export class TwitchApi {
 		input.type = 'text';
 		input.id = `twitch-config-${key}`;
 		input.placeholder = key;
+		if(key == "token"){
+			input.type = "password"
+			input.title = "we will not reveal this to protect your channel and your career. DO NOT DO THIS LIVE"
+		}
 		input.style.width = "100%";
 		input.style.marginTop = "5px";
 
@@ -294,6 +345,23 @@ fragment.appendChild(c);
 	    return fragment;
 	}
 
+	GenerateUI(){
+		return Result.ok(window.Cockatiel.UITemplate(
+			`https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Twitch_Glitch_Logo_Purple.svg/250px-Twitch_Glitch_Logo_Purple.svg.png`, 
+			"twitch",
+			window.Cockatiel.twitch,
+			(() => {this.UpdateConfig({isEnabled: true})}),
+			(() => {this.UpdateConfig({isEnabled: false})}),
+			(() => {
+				let d = document.createElement("details");
+				let s = document.createElement("summary");
+				s.innerText = "expand for sensitive twitch information";
+				d.append(s, this.buildInterface());
+				return d;
+			})()
+		));
+	}
+
 	async TestTwitchConnection() {
     // 1. Grab values directly from the UI inputs
     const token = document.getElementById('twitch-config-token')?.value.trim();
@@ -307,7 +375,7 @@ fragment.appendChild(c);
     // Clean the token (Twitch API expects just the string, no 'oauth:' prefix)
     const cleanToken = token.replace('oauth:', '');
 
-    DebugPrint({ msg: "Testing Twitch token validation..." });
+    this.DPrint({ msg: "Testing Twitch token validation..." });
 
     try {
         const response = await fetch('https://id.twitch.tv/oauth2/validate', {
@@ -320,14 +388,14 @@ fragment.appendChild(c);
         const data = await response.json();
 
         if (response.ok) {
-            DebugPrint({ msg: "Twitch Connection Success!", val: data });
+            this.DPrint({ msg: "Twitch Connection Success!", val: data });
             alert(`✅ Success! Token belongs to: ${data.login}\nScopes: ${data.scopes.join(', ')}`);
         } else {
-            DebugPrint({ msg: "Twitch Connection Failed", val: data, type: "warn" });
+            this.DPrint({ msg: "Twitch Connection Failed", val: data, type: "warn" });
             alert(`❌ Failed: ${data.message}`);
         }
     } catch (err) {
-        DebugPrint({ msg: "Error during Twitch validation", err: err });
+        this.DPrint({ msg: "Error during Twitch validation", err: err });
         alert("❌ Error: Could not reach Twitch servers.");
     }
 }
@@ -340,15 +408,15 @@ fragment.appendChild(c);
         this.#socket.onopen = () => {
             // When connecting, we pull the LATEST values from the DOM inputs 
             // if they exist, or fallback to the config object.
-            const channel = document.getElementById('twitch-config-channel')?.value || this.#twitch_config.channel;
-            const token = document.getElementById('twitch-config-token')?.value || this.#twitch_config.token;
-            const nick = document.getElementById('twitch-config-nick')?.value || this.#twitch_config.nick;
+            const channel = document.getElementById('twitch-config-channel')?.value || this.#config.channel;
+            const token = document.getElementById('twitch-config-token')?.value || this.#config.token;
+            const nick = document.getElementById('twitch-config-nick')?.value || this.#config.nick;
 
             this.#socket.send(`PASS ${token}`);
             this.#socket.send(`NICK ${nick}`);
             this.#socket.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
             this.#socket.send(`JOIN #${channel}`);
-            this.#twitch_config.active = true;
+            this.#config.active = true;
             console.log(`Twitch Connection Attempt: ${channel}`);
         };
 
@@ -412,7 +480,7 @@ fragment.appendChild(c);
 		this.#isListening = false;
 		button.innerText = "▶️ Start Listening to Chat";
 		button.style.backgroundColor = "#444";
-		DebugPrint({ msg: "Stopped listening to Twitch chat." });
+		this.DPrint({ msg: "Stopped listening to Twitch chat." });
 	    } else {
 		// START LOGIC
 		const token = document.getElementById('twitch-config-token')?.value.trim();
@@ -439,7 +507,7 @@ fragment.appendChild(c);
 			this.#isListening = true;
 			button.innerText = "⏹️ Stop Listening";
 			button.style.backgroundColor = "#ff4444";
-			DebugPrint({ msg: "Connected to Twitch Chat!" });
+			this.DPrint({ msg: "Connected to Twitch Chat!" });
 		    };
 
 		    this.#twitchSocket.onmessage = (event) => {
@@ -448,12 +516,12 @@ fragment.appendChild(c);
 		    };
 
 		    this.#twitchSocket.onerror = (err) => {
-			DebugPrint({ msg: "Socket Error", err: err });
+			this.DPrint({ msg: "Socket Error", err: err });
 			this.toggleChatListener(button); // Reset UI
 		    };
 
 		} catch (err) {
-		    DebugPrint({ msg: "Failed to connect", err: err });
+		    this.DPrint({ msg: "Failed to connect", err: err });
 		    button.innerText = "▶️ Start Listening to Chat";
 		}
 	    }
@@ -490,18 +558,19 @@ fragment.appendChild(c);
 
 		// 3. Structured Clone and Push
 		const formattedMessage = structuredClone(template);
-		state.unprocessed_queue.push(formattedMessage);
+		window.Cockatiel.PushToUnprocessedQueue(formattedMessage);
 
-		DebugPrint({
+		this.DPrint({
 		    msg: "Twitch message parsed and queued",
 		    val: formattedMessage
 		});
 
 	    } catch (err) {
-		DebugPrint({
+		this.DPrint({
 		    msg: "Error parsing Twitch message",
 		    err: err,
-		    val: item
+		    val: item,
+		    type: "t"
 		});
 	    }
 	}
@@ -521,12 +590,12 @@ fragment.appendChild(c);
 		    raw.includes("CAP * ACK");
 
 		if (isSystemMessage) {
-		    DebugPrint({ msg: "Ignoring Twitch System Message", val: "Handshake/NamesList" });
+		    this.DPrint({ msg: "Ignoring Twitch System Message", val: "Handshake/NamesList" });
 		    return null; 
 		}
 	    }
 	    
-	    DebugPrint({ msg: "Twitch processing started:", val: raw });
+	    this.DPrint({ msg: "Twitch processing started:", val: raw });
 
 	    // 2. Determine type for the switch
 	    let type = "unknown";
@@ -542,12 +611,12 @@ fragment.appendChild(c);
 			// Try the standard parser first
 			msg = await this.ProcessTwitchMessage(unprocessedMsg);
 		    } catch (innerErr) {
-			DebugPrint({ msg: "Primary ProcessTwitchMessage threw an error:", error: innerErr });
+			this.DPrint({ msg: "Primary ProcessTwitchMessage threw an error:", error: innerErr });
 		    }
 
 		    // FALLBACK LAYER: If primary parser failed or returned null, run matching YouTube style pipeline
 		    if (!msg) {
-			DebugPrint({ msg: "Primary parser returned nothing. Running pipeline fallback..." });
+			this.DPrint({ msg: "Primary parser returned nothing. Running pipeline fallback..." });
 			
 			const bareIrcRegex = /^:([^!]+)![^ ]+ PRIVMSG #[^\s]+ :([\s\S]*)$/;
 			const match = raw.trim().match(bareIrcRegex);
@@ -565,7 +634,7 @@ fragment.appendChild(c);
 				const extractedChannel = channelMatch ? channelMatch[1] : `#${extractedUsername}`;
 
 				// 1. Structure the message matching global schema templates
-				let newMessage = structuredClone(cockatiel.templates.messages);
+				let newMessage = structuredClone(window.Cockatiel.templates.messages);
 				newMessage.version = 1;
 				newMessage.type = "message-unmonitized";
 				newMessage.platform = "twitch";
@@ -581,11 +650,11 @@ fragment.appendChild(c);
 				let user;
 
 				if (!foundUuid) {
-				    DebugPrint({ msg: "NEW USER: Creating profile via native flags", val: extractedUsername });
+				    this.DPrint({ msg: "NEW USER: Creating profile via native flags", val: extractedUsername });
 				    user = cockatiel.CreateUserFromFlags(newMessage); 
 				    newMessage.userUuid = user.uuid;
 				} else {
-				    DebugPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
+				    this.DPrint({ msg: "EXISTING USER: Mapping to UUID", val: foundUuid });
 				    user = state.users[foundUuid];
 				    newMessage.userUuid = foundUuid;
 				}
@@ -621,10 +690,10 @@ fragment.appendChild(c);
 				newMessage.state = { displayedAt: false };
 				msg = newMessage;
 
-				DebugPrint({ msg: "Pipeline fallback successfully built and validated msg object!", val: msg });
+				this.DPrint({ msg: "Pipeline fallback successfully built and validated msg object!", val: msg });
 
 			    } catch (fallbackErr) {
-				DebugPrint({ 
+				this.DPrint({ 
 				    msg: "CRITICAL ERROR in ProcessTwitchV1Data_v1 Fallback Pipeline", 
 				    type: "e", 
 				    err: fallbackErr.message 
@@ -633,22 +702,22 @@ fragment.appendChild(c);
 				msg = null;
 			    }
 			} else {
-			    DebugPrint({ msg: "Fallback regex failed to match raw text stream", val: raw });
+			    this.DPrint({ msg: "Fallback regex failed to match raw text stream", val: raw });
 			}
 		    }
 
 		    return msg;
 
 		case "bitsevent":
-		    DebugPrint({ msg: "Bits detected", type: "i" });
+		    this.DPrint({ msg: "Bits detected", type: "i" });
 		    return null;
 
 		case "usernoticeevent":
-		    DebugPrint({ msg: "Sub/UserNotice detected", type: "i" });
+		    this.DPrint({ msg: "Sub/UserNotice detected", type: "i" });
 		    return null;
 
 		default:
-		    DebugPrint({ 
+		    this.DPrint({ 
 			msg: "UNHANDLED TWITCH IRC COMMAND", 
 			val: raw.substring(0, 50) + "...", 
 			type: "w" 
@@ -690,11 +759,11 @@ fragment.appendChild(c);
 		p_msg.receivedAt = r_msg.dateTime;
 		p_msg.score = window.Cockatiel.ScoreMessage(r_msg.message);
 		p_msg.state = {};
-		p_msg.streamOrigin = `twitch.tv/${String(this.#twitch_config.nick)}`; //what streamid via the platform the message came from
+		p_msg.streamOrigin = `twitch.tv/${String(this.#config.nick)}`; //what streamid via the platform the message came from
 		p_msg.type = "message-unmonitized" ;//must be selected from: templates.message_types[i]
 		p_msg.username = r_msg.username;
 
 		let user = window.Cockatiel.CreateUserFromFlags(newMessage); /*returns user object*/
 		p_msg.userUuid = user.uuid;
-	}
+	}	
 }

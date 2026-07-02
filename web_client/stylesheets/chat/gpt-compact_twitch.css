@@ -1,0 +1,53 @@
+.chatMessageContainer {
+	padding-bottom: 0.5rem;
+
+	.chatUserBubble {
+		height: auto;
+
+		.chatUserInfo {
+			background: transparent;
+			padding: 0;
+
+			.chatUserImageContainer {
+				display: none;
+			}
+
+			.chatUsername {
+				color: #a970ff;
+				font-weight: 700;
+				font-size: 1rem;
+			}
+
+			.chatUserCommendations {
+				display: none;
+			}
+		}
+	}
+
+	.chatMessageBubble {
+		background: transparent;
+
+		margin-left: 0;
+
+		padding: 0.2rem 0;
+
+		width: auto;
+
+		border-radius: 0;
+
+		color: #efeff1;
+
+		.chatCommand {
+			background: #3a3a3d;
+			color: #00d4ff;
+
+			font-size: 0.85rem;
+			padding: 0.15rem 0.5rem;
+		}
+
+		.chatMessage {
+			display: inline;
+			padding-left: 0.5rem;
+		}
+	}
+}

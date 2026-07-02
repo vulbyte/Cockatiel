@@ -1,20 +1,36 @@
-import {TwitchApi} from "./twitch_state.mjs"
-import {YoutubeV3} from "./youtube_state.mjs"
-import {IntTimer} from  "./intTimer.mjs";
-import {TrieTree} from  "./trie_tree.mjs";
+import {BannedWordsManager} from "./bannedWordsManager.mjs";
+import {ChatManager} from "./chat_manager.mjs";
+import {EventsManager} from "./events_manager.mjs";
+import {ScoreHandler} from "./score_handler.mjs";
+import {Timeline} from "./timeline.mjs";
+import {TtsManager} from "./tts_state.mjs";
+import {UserManager} from "./user_manager.mjs";
 
 
+import {Twitch} from "./twitch_state.mjs";
+import {Youtube} from "./youtube_state.mjs";
 
-// magic values
-let trigrams; // = await fetch('/content/stream_utils/tib_stuff/trigrams.json').then((res) => {return res.json()});
 
-export default class Cockatiel {	
+import {DebugPrint} from "./DebugPrint.mjs";
+import {Result} from "./result.mjs"
+
+
+// TLDR codebase rules:
+/* 1. why do we use getters/setters?: prevent data leaks for sensitive information. ie we don't want api-keys leaking. */
+/* 2. why use the result pattern?: javascript stack traces are a massive pain, and often get consumed in the worst way possible at critical times. so a proper pattern that just formal logging is far better than relying on throws. */
+
+export class Cockatiel {
+	//assigend to document on init
 	#hasInited = false;
+	BannedWordsManager = new BannedWordsManager();
 
-	twitch = new TwitchApi();
-	yt = new YoutubeV3();
+	d; // document
+	ChatWindow; // chat window
+	EventManager; // event window
+	UserManager = new UserManager();
 
-	#isTtsBusy = false;
+	twitch;
+	youtube;	
 
 	templates = {
 		bannedAt: {
@@ -69,15 +85,10 @@ export default class Cockatiel {
 			    prompt: "",
 			    votes: [],
 			    lockoutDuration: 300,
-			    timeRemainingUntilLockout: new IntTimer({
-				autoStart: true,
-				timeoutDuration: 300 // 5 min
-			    }),
-			    timeRemainingUntilRefund: new IntTimer({
-				autoStart: true,
-				timeoutDuration: 28800 // 8 hours
-			    })
-			}
+			    timeRemainingUntilLockout: 60,
+				timeRemainingUntilEnd: 300,
+				timeRemainingUntilRefund: 600,
+			},
 		},
 		errored_data: {
 		    version: 1,          	
@@ -101,16 +112,7 @@ export default class Cockatiel {
 			data: null, // data passed into the message
 			error: null, // error info
 		},
-		message_types: [ 
-			"cheer-monitized", //ie claim bits
-			"cheer-unmonitized", //ie use a gif
-			"community_gift-monitized", //ie gifted sub
-			"community_gift-unmonitized", //ie +rep 
-			"follow-monitized", //ie new channel memeber on yt
-			"follow-unmonitized", //ie new follow on twitch
-			"message-monitized", //ie donation 
-			"message-unmonitized", //ie chat
-		],
+		//moved messageTypes to within platformSettings
 		messages: {
 			//originalData: {},
 			commands: [/*eac command being a messageCommandObject*/],
@@ -152,6 +154,48 @@ export default class Cockatiel {
 			happenedAt: null, // unixTimestamp	
 			byUser: null, //  uuid
 			messageMisconduct: null, // if null do not add
+		},
+		platformSettings: { //key, default value
+			cheerMonitized: {
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie claim bits
+			cheerUnmonitized: {
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie use a gif
+			communityGiftMonitized: {
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie gifted sub
+			communityGiftUnmonitized:{
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie +rep 
+			followMonitized:{
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie new channel memeber on yt
+			followUnmonitized:{
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie new follow on twitch
+			messageMonitized:{
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie donation 
+			messageUnmonitized:{
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+			}, //ie chat
 		},
 		unprocessed_message_v1: {
 			version : 1,
@@ -208,14 +252,14 @@ export default class Cockatiel {
 			totalPoints: 0,
 			styling: { // ONLY CUSTOMIZABLE PROPERTIES ARE HERE, styles are whiteliste'd
 				chatMessageContainer: {
-					styling: ``,
+					styling: null,
 					chatUserBubble: {	
-						styling: ``,
+						styling: null,
 						chatBubbleTailContainer: {
-							styling: ``,
+							styling: null,
 							chatBubbleTailContainer: {
-								styling: ``,
-								chatBubbleTail: {styling: ``,},
+								styling: null,
+								chatBubbleTail: {styling: null,},
 							},
 						},
 						chatUserInfo: {
@@ -229,12 +273,12 @@ export default class Cockatiel {
 									backgroundColor: "#000",
 									borderRadius:"100%",
 								},
-								chatUserImage: {styling: ``},
+								chatUserImage: {styling: null},
 							},
 							chatUserStats: {
-								styling: ``,
-								chatUsername: {styling: ``},
-								chatUserCommendations: {styling: ``,}
+								styling: null,
+								chatUsername: {styling: null},
+								chatUserCommendations: {styling: null,}
 							}
 						}
 					},
@@ -258,13 +302,1741 @@ export default class Cockatiel {
 							},
 						},
 
-						chatMessage: { styling: `` },
+						chatMessage: { styling: null },
 					},
 				},
 			}, //end of styling
 			totalMessages: 0,
 		}
 	};	
+
+	DebugPrint(args = {}) {
+	    // 1. Improved Error handling: Extract message and stack if it's an Error object
+	    const formatError = (e) => {
+		if (e instanceof Error) {
+		    return `[${e.name}] ${e.message}\nStack: ${e.stack}`;
+		}
+		return JSON.stringify(e, null, 4) || "";
+	    };
+
+	    let errorMessage = formatError(args.err || args.error);
+	    
+	    // Fixed: You were checking args.value, but your default object uses args.val
+	    let value = JSON.stringify(args.val, null, 4) || ""; 
+	    let msg = args.msg || "";
+
+	    let statement = `msg: ${msg} \nval: ${value} \nerr: ${errorMessage}`;
+	    
+	    // 2. Fix the "throw" logic
+	    // Your previous code didn't actually throw; it just created a new Error object.
+	    const type = args.type?.toLowerCase();
+
+	    switch(type) {
+		case "throw":
+		case "t":
+		    throw new Error(msg/*statement*/); // Use 'throw' to actually stop execution
+		case "error":
+		case "err":
+		case "e":
+		    console.error(statement);
+		    break;
+		case "warning":
+		case "warn":
+		case "w":
+		    console.warn(statement);
+		    break;
+		default:
+		    console.log(statement);
+		    break;
+	    }
+
+	    // 3. Internal Log Tracking
+	    let log = {
+		type: args.type || "log",
+		message: msg,
+		val: args.val,
+		error: (errorMessage, errorMessage.stack), // Save the string version for readability
+	    };
+	    //this.AddLogToLogs(log);
+
+	    return log;
+	}
+
+
+	CHE(args = {}) {
+	    try {
+		if (!args.type) args.type = "div";
+
+		let elem = document.createElement(args.type);
+
+		if(args.inputType) elem.type = args.inputType;
+
+		if (args.class) elem.className = args.class;
+		if (args.id) elem.id = args.id;
+		if (args.innerHTML) elem.innerHTML = args.innerHTML;
+		if (args.innerText) elem.innerText = args.innerText;
+		if (args.style) elem.style.cssText = args.style;
+
+		if (args.attributes) {
+		    for (const [key, value] of Object.entries(args.attributes)) {
+			elem.setAttribute(key, value);
+		    }
+		}
+
+		if (args.onClick) {
+		    elem.addEventListener("click", args.onClick);
+		}
+
+		return elem;
+	    }
+	    catch (err) {
+		console.error("CHE failed", err);
+		return null;
+	    }
+	}
+
+	UITemplate(
+		icon, 
+		platformName,
+		platformStateManager,
+		enabledFunctionListener,
+		disabledFunctionListener,
+		additionalHTMLOptions,
+	){	
+		//early exits, these are considered manditory
+		if( !icon ){
+			this.DebugPrint({
+				msg: msg,
+				val: icon,
+				type: 't'
+			});
+		}
+		if( !platformName ){
+			this.DebugPrint({
+				msg: "couldn't get platform name, is null",
+				val: platformName,
+				type: 't'
+			});
+		}
+		if( !platformStateManager ){
+			this.DebugPrint({
+				msg: "couldn't get platformStateManager, is null",
+				val: platformStateManager,
+				type: 't'
+			});
+		}
+		if( !enabledFunctionListener){
+			this.DebugPrint({
+				msg: "couldn't get enabledFunctionListener, is null",
+				val: enabledFunctionListener,
+				type: 't'
+			});
+		}
+		if( !disabledFunctionListener){
+			this.DebugPrint({
+				msg: "couldn't get disabledFunctionListener, is null",
+				val: disabledFunctionListener,
+				type: 't'
+			});
+		}
+
+		let generalSettings = document.createElement("details");
+
+		let detailedStatus = document.createElement("output");
+		
+		generalSettings.style = `
+			border: 0.1rem solid white;
+			overflow: scroll;
+		`;
+			let summary = document.createElement("summary");
+				summary.style = `
+						display: flex; 
+						flex-direction: row;
+				`;
+				//summary.innerText = "general settings";
+				let iconContainer = document.createElement("img");
+					iconContainer.src = icon;
+					iconContainer.width = "6.2rem";
+					iconContainer.height = "6.2rem";
+					iconContainer.style = `
+					margin-top:0.3rem;
+					padding:0.4rem;
+					width:1.6rem;
+					height:1.6rem;
+					`;
+					iconContainer.title = platformName;
+				summary.append(iconContainer);
+				let statusIndicatorContainer = document.createElement("div");
+				//statusIndicatorContainer 
+				statusIndicatorContainer.style = `
+					width: 1rem;
+					height: 1rem;
+					margin-top:1.0rem;
+					margin-left: 0.4rem;
+					margin-right: 0.4rem;
+					position: relative;
+					padding-right: 1.2rem;
+				`;
+					let statusIndicator = document.createElement("div");
+						statusIndicator.innerText = null;
+						statusIndicator.style = `
+							background-image: radial-gradient(at 50% 50%, #aaaabb, #334499);
+							background-size: 100% 90%;
+							background-postion: 0% -70%;
+							border-radius: 1rem;
+							width: 1rem;
+							height: 1rem;
+							margin-top:0.0rem;
+							margin-left: 0.4rem;
+							margin-right: 0.4rem;
+							position: absolute;
+							/*
+							padding-left: 0.4rem;
+							padding-right: 1.4rem;
+							*/
+						`;
+					statusIndicatorContainer.append(statusIndicator);	
+					let statusIndicatorShine = document.createElement("div");
+						statusIndicatorShine.innerText = null;
+						statusIndicatorShine.style = `
+							background-image: radial-gradient(#ffff00, #ffaa00);
+							background-size: 20% 20%;
+							background-postion: 0% -0.5rem%;
+							border-radius: 1rem;
+							filter: opacity(0.4);
+							width: 1rem;
+							height: 1rem;
+							margin-top:0.0rem;
+							margin-left: 0.4rem;
+							margin-right: 0.4rem;
+							mix-blend-mode: multiply;
+							position: absolute;
+							/*
+							padding-left: 0.4rem;
+							padding-right: 1.4rem;
+							*/
+						`;
+					statusIndicatorContainer.append(statusIndicatorShine);		
+				summary.append(statusIndicatorContainer);	
+				/*
+				let isActiveLabel = document.createElement("label");
+					isActiveLabel.innerText = "start/stop";
+					isActiveLabel.style = `	
+						padding:0.8rem;
+					`
+					isActiveLabel.title = "determines if the listener will check for messages" + platformName;
+				summary.append(isActiveLabel);
+				*/
+				let isActiveEnable = document.createElement("input");
+					isActiveEnable.value = "▶︎";
+					isActiveEnable.type = "button";
+					isActiveEnable.style = `	
+						color: white;
+						background-image: linear-gradient(#007700, #004400);
+						height: 3rem;
+						width: 3rem;
+					`;
+					isActiveEnable.id = platformName + "enabledToggle";
+					isActiveEnable.title = "enable " + platformName;
+					isActiveEnable.addEventListener("click",  (() => {
+						//will get the value post update
+						this.DebugPrint({msg: `calling enabled function listener for ${platformName}`});
+						enabledFunctionListener();	
+					}));
+				summary.append(isActiveEnable);
+
+				let isActiveDisable = document.createElement("input");
+					isActiveDisable.value = "⏸︎";
+					isActiveDisable.type = "button";
+					isActiveDisable.style = `	
+						color: white;
+						background-image: linear-gradient(#990000, #770000);
+						height: 3rem;
+						width: 3rem;
+					`;
+					isActiveDisable.id = platformName + "enabledToggle";
+					isActiveDisable.title = "disable " + platformName;
+					isActiveDisable.addEventListener("click",  (() => {
+						//will get the value post update
+							this.DebugPrint({msg: `calling disbled function listener for ${platformName}`});
+							disabledFunctionListener();
+					}));
+				summary.append(isActiveDisable);
+
+				let statusLines = document.createElement("output");
+					let statusListenerId = platformName + "StatusListener";
+					statusLines.id = statusListenerId;
+					statusLines.style = `
+						margin-top: 0.8rem;
+						color: #ff0064;
+						
+					`;
+					/*
+					platformStateManager.AddStatusListener((update) => {
+						//run this when the emitStatusListener is called
+						document.getElementById(statusListenerId).innerText = update;
+					});
+					*/
+				summary.append(statusLines);
+				platformStateManager.AddStatusListener(
+				);
+				let simpleStatusMessage = document.createElement("output");
+					simpleStatusMessage.id = platformName + "-SimpleStatusListener";
+					simpleStatusMessage.style = `
+						background-color: #222;
+						color: white;
+						font-family: monospace;
+						min-width: 16rem;
+						min-height: 1.5rem;
+						padding:0.8rem;
+					`;
+					platformStateManager.AddStatusListener((data) => {
+						data = structuredClone(data);
+						if(data == null){return;}
+						if(String(typeof(data)).toLowerCase() == 'object'){
+							if(data.msg){
+								data = data.msg;
+							}
+							else{
+								data = JSON.stringify(data, null, 4);
+							}
+						}
+
+						//run this when the emitStatusListener is called
+						document.getElementById(simpleStatusMessage.id).innerText = data;
+					});
+				
+				summary.append(simpleStatusMessage);	
+			generalSettings.append(summary);
+
+			let statusMessage = document.createElement("div");
+				statusMessage.id = platformName + "-StatusListener";
+				statusMessage.style = `
+					background-color: #222;
+					border-radius:1rem;
+					color: white;
+					font-family: monospace;
+					min-width: 16rem;
+					width: 80%;
+					max-width: 60rem;
+					margin: auto;
+					min-height: 1.5rem;
+					padding:0.8rem;
+					padding-top: 2rem;
+					padding-top: 2rem;
+					margin-top:1rem;
+					margin-bottom:1rem;
+				`;
+				
+				let nullMessages = [
+					 "nothing to display... for now...",
+					"nothing here but us chickens...",
+					"weeeeeee!... oh... nothing has happened yet...",
+				];
+
+				statusMessage.innerText = nullMessages[Math.floor(nullMessages.length*Math.random())];
+				platformStateManager.AddStatusListener((data) => {
+					if(data == null){return;}
+					if(String(typeof(data)).toLowerCase() == 'object'){
+						data = JSON.stringify(data, null, 4);
+					}
+					//run this when the emitStatusListener is called
+					document.getElementById(statusMessage.id).innerText = data;
+				});
+			generalSettings.append(statusMessage)
+
+
+			//general settings that are pretty consistent
+			let globalOverrides = document.createElement("table");
+
+				let headerRow = document.createElement("tr");
+					let th1 = document.createElement("th");
+						th1.innerText = "flag";
+					let th2 = document.createElement("th");
+						th2.innerText = "override global audio?";
+					let th3 = document.createElement("th");
+						th3.innerText = "new Audio";
+					let th4 = document.createElement("th");
+						th4.innerText = "override global css";
+					let th5 = document.createElement("th");
+						th5.innerText = "new css";
+						th5.style = `
+							min-width: 16rem
+						`;
+					headerRow.append(th1, th2, th3, th4, th5);
+				globalOverrides.append(headerRow);
+			let keys = Object.keys(this.templates.platformSettings);
+			this.DebugPrint({
+				msg: `generating inputs for the following keys for ${platformName}`,
+				val: keys,
+			})
+			let key, val;
+			for(let i = 0; i < keys.length; ++i){
+				/* at time of writing the withins are:
+				css: null,
+				notificationSound: null,
+				overrideGlobal: false,
+				*/
+				key = keys[i];	
+				val = Object.keys(this.templates.platformSettings);
+
+				let container = document.createElement("tr");
+					container.style = `
+						/*display:block;
+						flex-direction: row;*/
+						width:100%;
+					`;
+					//for(let j = 0; j < keys.length; ++j){
+					console.log("I AM GENERATING INPUTS")
+					
+					let labelTd = document.createElement("td");
+						let label = document.createElement("label");
+							label.innerText = key; //key.slice(key.lastIndexOf('-'), key.length);
+							label.id = `${platformName}-${key}-overridelabel`;
+						labelTd.append(label);
+					container.append(labelTd);
+					let audioToggleTd = document.createElement("td");
+					let audioToggle = document.createElement("input");
+						audioToggle.type = "checkbox";
+						audioToggle.input = this.templates.platformSettings[key] || null;
+						audioToggle.id = `${platformName}-${key}-${key}Override`;
+						audioToggleTd.append(audioToggle);
+					container.append(audioToggleTd);
+					let audioInputTd = document.createElement("td");
+					let audioInput = document.createElement("input");
+						audioInput.type = "file";
+						audioInput.input = this.templates.platformSettings[key] || null;
+						audioInput.id = `${platformName}-${key}-${key}OverrideValue`;
+						audioInputTd.append(audioInput);
+					container.append(audioInputTd);
+					let toggleTd = document.createElement("td");
+					let toggle = document.createElement("input");
+						toggle.type = "checkbox";
+						toggle.input = this.templates.platformSettings[key] || null;
+						toggle.id = `${platformName}-${key}-${key}Override`;
+						toggleTd.append(toggle);
+					container.append(toggleTd);
+
+	let cssInputTd = document.createElement("td");
+
+	// 1. Create the wrapper
+	let wrapper = document.createElement("div");
+	wrapper.style.cssText = "position: relative; width: 100%; min-height: 2rem; border: 1px solid #3e3d32; box-sizing: border-box; resize: vertical; overflow: auto; background: #272822;";
+
+	// 2. Common styles
+	let commonStyles = `
+	    position: absolute; top: 0; left: 0; width: 100%; 
+	    padding: 10px; margin: 0; border: none;
+	    font-family: 'Consolas', 'Monaco', monospace; 
+	    font-size: 13px; line-height: 19px; 
+	    letter-spacing: normal;
+	    white-space: pre-wrap; word-wrap: break-word;
+	    box-sizing: border-box;
+	`;
+
+	// 3. Visual layers
+	let highlightLayer = document.createElement("div");
+	highlightLayer.style.cssText = commonStyles + "z-index: 0; color: #f8f8f2; pointer-events: none; overflow: hidden;";
+
+	let cssInput = document.createElement("textarea");
+	cssInput.style.cssText = commonStyles + "z-index: 1; background: transparent; color: transparent; caret-color: white; resize: none; outline: none; overflow: hidden; height: 3rem;";
+
+	cssInput.id = `${platformName}-${key}-${key}OverrideValue`;
+
+					/**
+	 * Recursively converts the JSON object to CSS string
+	 * Usage: let cssString = this.jsonToCss(this.templates.styling);
+	 */
+	function JSONToCss(data, parentSelectors = "") {
+	    let css = "";
+
+	    for (let key in data) {
+		let value = data[key];
+		
+		// If it's a styling object, apply it to the current selector
+		if (key === "styling" && value && typeof value === 'object') {
+		    if (Object.keys(value).length > 0) {
+			css += `.${parentSelectors.trim()} {\n`;
+			for (let prop in value) {
+			    // Convert camelCase to kebab-case
+			    let kebabProp = prop.replace(/([a-z0-9]|(?=[A-Z]))([A-Z])/g, '$1-$2').toLowerCase();
+			    css += `    ${kebabProp}: ${value[prop]};\n`;
+			}
+			css += `}\n\n`;
+		    }
+		} 
+		// If it's a nested container, recurse
+		else if (typeof value === 'object' && value !== null) {
+		    css += JSONToCss(value, `${parentSelectors} ${key}`);
+		}
+	    }
+	    return css;
+	}
+
+	cssInput.value = JSONToCss(window.Cockatiel.templates.user.styling);
+
+	// 4. Robust Tokenizing Logic (Comments added first)
+	cssInput.oninput = () => {
+	    let text = cssInput.value
+		.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+	    // The Regex now matches:
+	    // 1. Comments: /\/\*[\s\S]*?\*\//g
+	    // 2. Classes, 3. IDs, 4. Keys, 5. Values
+	    highlightLayer.innerHTML = text.replace(
+		/(\/\*[\s\S]*?\*\/)|(\.[a-zA-Z0-9_-]+)|(#[a-zA-Z0-9_-]+)|([a-zA-Z\-]+(?=\s*:))|((?<=:\s*)([^;\n]+))/g,
+		(match, comment, cls, id, key, val) => {
+		    let spanStyle = "color: %COLOR%; font-family: inherit;";
+		    if (comment) return `<span style="${spanStyle.replace('%COLOR%', '#75715e')}">${comment}</span>`;
+		    if (cls) return `<span style="${spanStyle.replace('%COLOR%', '#e6db74')}">${cls}</span>`;
+		    if (id) return `<span style="${spanStyle.replace('%COLOR%', '#f92672')}">${id}</span>`;
+		    if (key) return `<span style="${spanStyle.replace('%COLOR%', '#66d9ef')}">${key}</span>`;
+		    if (val) return `<span style="${spanStyle.replace('%COLOR%', '#ae81ff')}">${val}</span>`;
+		    return match;
+		}
+	    ) + "\n";
+	};
+
+	// 5. Sync scrolling and resize
+	let observer = new ResizeObserver(() => {
+	    let h = wrapper.clientHeight + "px";
+	    cssInput.style.height = h;
+	    highlightLayer.style.height = h;
+	});
+	observer.observe(wrapper);
+
+	cssInput.onscroll = () => {
+	    highlightLayer.scrollTop = cssInput.scrollTop;
+	    highlightLayer.scrollLeft = cssInput.scrollLeft;
+	};
+
+	cssInput.oninput();
+	wrapper.append(highlightLayer, cssInput);
+	cssInputTd.append(wrapper);
+	container.append(cssInputTd);
+
+
+				globalOverrides.append(container);
+			}	
+			generalSettings.append(globalOverrides);
+					       //globalOverrides
+
+			//more specific stuff injected in
+			if(additionalHTMLOptions){
+				generalSettings.appendChild(additionalHTMLOptions);
+			}
+		return generalSettings;
+	}
+
+	GenerateControlBarUI(container) {
+		if(document == undefined){this.DebugPrint({msg: "no document, cannot append a control bar ui"}); return}
+		let controlContainer = this.CHE({type: 'div'})
+		this.DebugPrint("GENERATING CONTROL BAR UI");
+	    // 1. Main Wrapper
+	    const footer = document.createElement('div');
+	    footer.style.cssText = `
+		background-color: #033; 
+		border-radius: 1.4rem; 
+		height: auto; 
+		position: relative; 
+		bottom: 0px; 
+		display: flex; 
+		flex-direction: row;
+		margin-top: 20px;
+		flex-wrap: wrap;
+		gap: 1rem;
+	    `;
+
+	    // Helper to create the column containers
+	    const createColumn = () => {
+		const col = document.createElement('div');
+		col.style.cssText = `
+		    height: 100%; 
+		    /*width: 16rem; */
+		    padding: calc(var(--tib_padding) * 4); 
+		    display: flex; 
+		    flex-direction: column; 
+		    gap: 10px;
+		`;
+		return col;
+	    };
+
+	    // Helper to create buttons
+	    const createBtn = (imageLink, altText, bgColor, onClick) => {
+		const btn = document.createElement('button');
+		if(imageLink == undefined){
+			btn.type = "button";
+			btn.value = altText;
+			btn.style.cssText = `
+			    background-color: ${bgColor}; 
+			    color: black; 
+			    user-select: none; 
+			    cursor: pointer; 
+			    font-weight: bold; 
+			    border: none; 
+			    padding: 5px; 
+			    border-radius: 4px;
+			`;
+			btn.onclick = onClick;
+			return btn;
+		}
+
+		const img = document.createElement('img');
+		btn.type = "button";
+		img.src = imageLink;
+		img.alt = altText;
+		img.style.userSelect = "none";
+		img.width = "256";
+		img.height= "256";
+		img.style.maxHeight = "100%";
+		img.style.maxWidth = "100%";
+		img.style.height = "3rem";
+		img.style.width = "3rem";
+		img.style.minHeight = "1rem";
+		img.style.minWidth = "1rem";
+		btn.style.cssText = `
+		    background-color: ${bgColor}; 
+		    color: black; 
+		    user-select: none; 
+		    cursor: pointer; 
+		    font-weight: bold; 
+		    border: none; 
+		    padding: 5px; 
+		    border-radius: 4px;
+		`;
+		btn.onclick = onClick;
+		btn.append(img);
+
+		return btn;
+	    };
+
+		/*
+	    let buttonsContainer = document.createElement("div");
+		buttonsContainer.style = "width:100%;";
+		    let IDs = [
+			"startMonitorMessages",
+			"startTts",
+			"startEventMonitor",
+			"stopMonitorMessages",
+			"stopTts",
+			"stopEventMonitor",
+		    ];
+		    let startButtons = document.createElement("div");
+			startButtons.style = `
+				display:flex;
+				flex-direction:row;
+			`;
+			    let activeStartButtonStyle = `
+					background-color: #0f0;
+					color: #fff; 
+					height:1.5rem;
+					width:12rem;
+				`;
+			    let inactiveStartButtonStyle = `
+					background-color: #030;
+					color: #fff; 
+					height:1.5rem;
+					width:12rem;
+				`;
+			let subStartButtons = document.createElement("div");
+			subStartButtons.style = `
+				display: flex;
+				flex-direction: column;
+			`;
+				let startMonitorMessages = document.createElement("button");
+				startMonitorMessages.innerText = "startMonitorMessages";
+				startMonitorMessages.id = IDs[0];
+				startMonitorMessages.style = inactiveStartButtonStyle;
+				startMonitorMessages.onclick = () => {
+					let elem = document.getElementById(IDs[0]);
+					let counterElem = document.getElementById(IDs[0+3]);
+					elem.style = activeStartButtonStyle;
+					elem.setAttribute("isActive", true);
+					counterElem.setAttribute("isActive", false);
+					if (
+					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
+					) {
+					    // If all three sub-start buttons are active, make the main Start button active
+					    let mainStart = document.getElementById("cockatielStartButton");
+					    mainStart.style = activeStartButtonStyle;
+					    mainStart.style.height = "4.5rem";
+					    
+					    // Also reset the main Stop button to inactive
+					    let mainStop = document.getElementById("cockatielStopButton");
+					    mainStop.style = inactiveStopButtonStyle;
+					    mainStop.style.height = "4.5rem";
+					} else {
+					    // Fallback if one or more sub-start buttons are still inactive
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
+					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
+
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
+					}
+					counterElem.style = inactiveStopButtonStyle;
+					console.log("startMonitorMessages clicked");
+					window.Cockatiel.StartMonitoringMessages();
+				}
+				let startTts = document.createElement("button");
+				startTts.innerText = "startTts";
+				startTts.id = IDs[1];
+				startTts.style = inactiveStartButtonStyle;
+				startTts.onclick = () => {
+					let elem = document.getElementById(IDs[1]);
+					let counterElem = document.getElementById(IDs[1+3]);
+					elem.style = activeStartButtonStyle;
+					elem.setAttribute("isActive", true);
+					counterElem.setAttribute("isActive", false);
+					if (
+					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
+					) {
+					    // If all three sub-start buttons are active, make the main Start button active
+					    let mainStart = document.getElementById("cockatielStartButton");
+					    mainStart.style = activeStartButtonStyle;
+					    mainStart.style.height = "4.5rem";
+					    
+					    // Also reset the main Stop button to inactive
+					    let mainStop = document.getElementById("cockatielStopButton");
+					    mainStop.style = inactiveStopButtonStyle;
+					    mainStop.style.height = "4.5rem";
+					} else {
+					    // Fallback if one or more sub-start buttons are still inactive
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
+					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
+
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
+					}
+					counterElem.style = inactiveStopButtonStyle;
+					console.log("startTts clicked");
+					window.Cockatiel.StartTts();
+				}
+				let startEventMonitor = document.createElement("button");
+				startEventMonitor.innerText = "startEventMonitor";
+				startEventMonitor.id = IDs[2];
+				startEventMonitor.style = inactiveStartButtonStyle;
+				startEventMonitor.onclick = () => {
+					let elem = document.getElementById(IDs[2]);
+					let counterElem = document.getElementById(IDs[2+3]);
+					elem.style = activeStartButtonStyle;
+					elem.setAttribute("isActive", true);
+					counterElem.setAttribute("isActive", false);
+					if (
+					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
+					) {
+					    // If all three sub-start buttons are active, make the main Start button active
+					    let mainStart = document.getElementById("cockatielStartButton");
+					    mainStart.style = activeStartButtonStyle;
+					    mainStart.style.height = "4.5rem";
+					    
+					    // Also reset the main Stop button to inactive
+					    let mainStop = document.getElementById("cockatielStopButton");
+					    mainStop.style = inactiveStopButtonStyle;
+					    mainStop.style.height = "4.5rem";
+					} else {
+					    // Fallback if one or more sub-start buttons are still inactive
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
+					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
+
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
+					}
+					counterElem.style = inactiveStopButtonStyle;
+					console.log("startEventMonitor clicked");
+					window.Cockatiel.StartEventMonitor();
+				}
+			subStartButtons.append(startMonitorMessages, startTts, startEventMonitor);
+
+			let startButton = document.createElement("button");
+			startButton.style = inactiveStartButtonStyle; 
+			startButton.style.height = "4.5rem";
+			startButton.innerText = "start cockatiel";
+			startButton.id = "cockatielStartButton";
+			startButton.onclick = () => {
+				window.Cockatiel.StartMonitoringMessages();
+				window.Cockatiel.StartTts();
+				window.Cockatiel.StartEventMonitor();	
+
+				document.getElementById(IDs[0]).style = activeStartButtonStyle;
+				document.getElementById(IDs[0]).setAttribute("isActive", true);
+				document.getElementById(IDs[1]).style = activeStartButtonStyle;
+				document.getElementById(IDs[1]).setAttribute("isActive", true);
+				document.getElementById(IDs[2]).style = activeStartButtonStyle;
+				document.getElementById(IDs[2]).setAttribute("isActive", true);
+				document.getElementById(IDs[3]).style = inactiveStopButtonStyle;
+				document.getElementById(IDs[3]).setAttribute("isActive", false);
+				document.getElementById(IDs[4]).style = inactiveStopButtonStyle;
+				document.getElementById(IDs[4]).setAttribute("isActive", false);
+				document.getElementById(IDs[5]).style = inactiveStopButtonStyle;
+				document.getElementById(IDs[5]).setAttribute("isActive", false);
+			        document.getElementById("cockatielStartButton").style = activeStartButtonStyle + "; height:4.5rem;";
+			        document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem;";
+			};
+		    startButtons.append(subStartButtons, startButton);
+		    let stopButtons = document.createElement("div");
+			let activeStopButtonStyle = `
+					background-color: #f00;
+					color: #fff; 
+					height:1.5rem;
+					width:12rem;
+				`;
+			let inactiveStopButtonStyle = `
+					background-color: #600;
+					color: #fff; 
+					height:1.5rem;
+					width:12rem;
+				`;
+			stopButtons.style = `
+					display:flex;
+					flex-direction:row;
+				`;
+			let subStopButtons = document.createElement("div");
+			subStopButtons.style = `
+				display: flex;
+				flex-direction: column;
+			`;
+				let stopMonitorMessages = document.createElement("button");
+				stopMonitorMessages.innerText = "stopMonitorMessages";
+				stopMonitorMessages.id = IDs[3];
+				stopMonitorMessages.style = activeStopButtonStyle;
+				stopMonitorMessages.onclick = () => {
+					let elem = document.getElementById(IDs[3]);
+					let counterElem = document.getElementById(IDs[3-3]);
+					elem.style = activeStopButtonStyle;
+					counterElem.style = inactiveStartButtonStyle;
+					elem.setAttribute("isActive", true);
+					counterElem.setAttribute("isActive", false);
+					if (
+					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
+					) {
+					    // If all three sub-start buttons are active, make the main Start button active
+					    let mainStart = document.getElementById("cockatielStopButton");
+					    mainStart.style = activeStopButtonStyle;
+					    mainStart.style.height = "4.5rem";
+					    
+					    // Also reset the main Stop button to inactive
+					    let mainStop = document.getElementById("cockatielStartButton");
+					    mainStop.style = inactiveStartButtonStyle;
+					    mainStop.style.height = "4.5rem";
+					} else {
+					    // Fallback if one or more sub-start buttons are still inactive
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
+					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
+
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
+					}
+					console.log("stopMonitorMessages clicked");
+					window.Cockatiel.StopMonitoringMessages();
+				}
+				let stopTts = document.createElement("button");
+				stopTts.innerText = "stopTts";
+				stopTts.id = IDs[4];
+				stopTts.style = activeStopButtonStyle;
+				stopTts.onclick = () => {
+					let elem = document.getElementById(IDs[4]);
+					let counterElem = document.getElementById(IDs[4-3]);
+					elem.style = activeStopButtonStyle;
+					counterElem.style = inactiveStartButtonStyle;
+					elem.setAttribute("isActive", true);
+					counterElem.setAttribute("isActive", false);
+					if (
+					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
+					) {
+					    // If all three sub-start buttons are active, make the main Start button active
+					    let mainStart = document.getElementById("cockatielStopButton");
+					    mainStart.style = activeStopButtonStyle;
+					    mainStart.style.height = "4.5rem";
+					    
+					    // Also reset the main Stop button to inactive
+					    let mainStop = document.getElementById("cockatielStartButton");
+					    mainStop.style = inactiveStartButtonStyle;
+					    mainStop.style.height = "4.5rem";
+					} else {
+					    // Fallback if one or more sub-start buttons are still inactive
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
+					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
+
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
+					}
+					console.log("stopTts clicked");
+					window.Cockatiel.StopTts();
+				}
+				let stopEventMonitor = document.createElement("button");
+				stopEventMonitor.innerText = "stopEventMonitor";
+				stopEventMonitor.id = IDs[5];
+				stopEventMonitor.style = activeStopButtonStyle;
+				stopEventMonitor.onclick = () => {
+					let elem = document.getElementById(IDs[5]);
+					let counterElem = document.getElementById(IDs[5-3]);
+					elem.style = activeStopButtonStyle;
+					counterElem.style = inactiveStartButtonStyle;
+					elem.setAttribute("isActive", true);
+					counterElem.setAttribute("isActive", false);
+					if (
+					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
+					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
+					) {
+					    // If all three sub-start buttons are active, make the main Start button active
+					    let mainStart = document.getElementById("cockatielStopButton");
+					    mainStart.style = activeStopButtonStyle;
+					    mainStart.style.height = "4.5rem";
+					    
+					    // Also reset the main Stop button to inactive
+					    let mainStop = document.getElementById("cockatielStartButton");
+					    mainStop.style = inactiveStartButtonStyle;
+					    mainStop.style.height = "4.5rem";
+					} else {
+					    // Fallback if one or more sub-start buttons are still inactive
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
+					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
+
+					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
+					}
+					console.log("stopEventMonitor clicked");
+					window.Cockatiel.StopEventMonitor();
+				}
+			subStopButtons.append(stopMonitorMessages, stopTts, stopEventMonitor);
+			// main MonitoringStop()
+			let stopButton = document.createElement("button");
+			stopButton.id = "cockatielStopButton";
+			stopButton.innerText = "stop cockatiel";
+			stopButton.style = activeStopButtonStyle; 
+			stopButton.style.height = "4.5rem";
+			stopButton.onclick = () => {
+				window.Cockatiel.StopMonitoringMessages();
+				window.Cockatiel.StopTts();
+				window.Cockatiel.StopEventMonitor();
+				
+				
+				document.getElementById(IDs[0]).style = inactiveStartButtonStyle;
+				document.getElementById(IDs[0]).setAttribute("isActive", false);
+				document.getElementById(IDs[1]).style = inactiveStartButtonStyle;
+				document.getElementById(IDs[1]).setAttribute("isActive", false);
+				document.getElementById(IDs[2]).style = inactiveStartButtonStyle;
+				document.getElementById(IDs[2]).setAttribute("isActive", false);
+				document.getElementById(IDs[3]).style = activeStopButtonStyle;
+				document.getElementById(IDs[3]).setAttribute("isActive", true);
+				document.getElementById(IDs[4]).style = activeStopButtonStyle;
+				document.getElementById(IDs[4]).setAttribute("isActive", true);
+				document.getElementById(IDs[5]).style = activeStopButtonStyle;
+				document.getElementById(IDs[5]).setAttribute("isActive", true);
+			        document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
+			        document.getElementById("cockatielStopButton").style = activeStopButtonStyle + "; height:4.5rem";
+			};
+		    stopButtons.append(subStopButtons, stopButton);
+		buttonsContainer.append(startButtons, stopButtons);
+
+		//status guide
+		let guide = document.createElement("ul");
+			//offline
+			let gray = document.createElement("li");
+			    gray.innerText = "nothing has been done yet";	
+			    gray.style = "color: lightgray;"
+			//tests
+			let blue = document.createElement("li");
+			    blue.innerText = "all checks passed, good to go!";	
+			    blue.style = "color: lightblue;"
+			//live
+			let purple = document.createElement("li");
+			    purple.innerText = "currently live and using";	
+			    purple.style = "color: lavender;"
+			//errors
+			let yellow = document.createElement("li");
+			    yellow.innerText = "minor issue, but is still operating!";	
+			    yellow.style = "color: lightyellow;"
+			let red = document.createElement("li");
+			    red.innerText = "critical issue, unable to get messages";	
+			    red.style = "color: pink;"
+			guide.append(gray, blue, purple, yellow, red);
+		buttonsContainer.append(guide);
+		//status notifiers
+		//width: 100%;
+		/*
+		let grid_label = document.createElement("label");
+		grid_label.innerText = "platform status's:";
+		let grid = document.createElement("div");
+		grid.style = `
+			display:grid-template-columns(auto-fit, minmax(1.5rem, 1fr));
+			background-color: #000;
+		`;
+		    grid.style.padding = "1rem";
+		    grid.style.margin = "1rem";
+
+		function createStatusNotifier(platform, platformController) {
+		    let container = document.createElement("div");
+		    container.style.display = "flex"; // Helpful for alignment
+		    container.style.alignItems = "center";
+		    container.style.gap = "0.8rem";
+		    container.style.padding = "1rem";
+
+		    let icon_container = document.createElement("div");
+		    let icon = document.createElement("img");
+		    
+		    // Use integers for width/height properties
+		    icon.width = 32;
+		    icon.height = 32;
+
+		    switch(platform) {
+			case ("twitch"):
+			    icon.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Twitch_icon_2012.svg/1280px-Twitch_icon_2012.svg.png";
+			    break;
+			case ("youtube"):
+			    icon.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/3840px-YouTube_full-color_icon_%282017%29.svg.png";
+			    break;
+			default:
+			    return null; // Return null instead of undefined for cleaner grid appending
+		    }
+
+		    icon_container.append(icon);
+		    container.append(icon_container);
+
+		    let stat_icon = document.createElement("div");
+		    stat_icon.style = `
+			width: 1rem;
+			height: 1rem;
+			border-radius: 100%;
+			background-color: #555555; 
+		    `;
+		switch(platform){
+			case("twitch"):
+				platformController.AddStartListener((() => (stat_icon.style.backgroundColor = "#00ff00")));
+				platformController.AddStopListener((() => (stat_icon.style.backgroundColor = "#555555")));
+				platformController.AddWarnListener((() => (stat_icon.style.backgroundColor = "#FFFF00")));
+				platformController.AddErrorListener((() => (stat_icon.style.backgroundColor = "#ff0000")));
+				// this.twitch.AddStatusListener(); THIS IS FOR THE NEXT PART
+				break;
+			case("youtube"):
+				
+				break;
+		}
+		    
+		    container.append(stat_icon);
+		    return container;
+		}
+
+		// When appending, filter out any null returns from the default case
+		const twitchNotifier = createStatusNotifier("twitch", this.twitch);
+		const youtubeNotifier = createStatusNotifier("youtube", this.yt);
+
+		if (twitchNotifier) grid.append(twitchNotifier);
+		if (youtubeNotifier) grid.append(youtubeNotifier);
+
+		buttonsContainer.append(grid_label, grid);
+		*/
+
+
+	    //call next tts button
+	    const callTtsColumn = createColumn();
+	    const callTtsBtn = createBtn("../assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
+		    this.FindOldestUnreadTtsAndCall();
+	    });
+	    callTtsColumn.append(callTtsBtn);
+	    //footer.append();
+		
+	    //call next tts button
+	    const callLoopColumn = createColumn();
+	    const callLoopBtn = createBtn("../assets/call_tts_message.png", "call loop (ie process unprocessed queue)", "#f00", async () => {
+		    console.log("call loop button pressed");
+	    });
+	    callLoopColumn.append(callLoopBtn);
+
+	    // --- COLUMN 3: STATE (Export/Import) ---
+	    const exportInportColumn = createColumn();
+
+
+	    const exportBtn = createBtn("../assets/export_settings.png", "Export Settings", "#ff0", () => {
+	    // 1. Get the JSON string from your class
+	    const data = window.Cockatiel.ExportState();
+	    
+	    // 2. Create a Blob (Binary Large Object) with the data
+	    const blob = new Blob([data], { type: "application/json" });
+	    
+	    // 3. Create a temporary anchor (<a>) element
+	    const url = URL.createObjectURL(blob);
+	    const link = document.createElement("a");
+	    
+	    // 4. Set the filename and the target URL
+	    link.href = url;
+	    link.download = "cockatiel_settings.json";
+	    
+	    // 5. Trigger the download and clean up
+	    document.body.appendChild(link);
+	    link.click();
+	    document.body.removeChild(link);
+	    URL.revokeObjectURL(url); // Free up memory
+	});
+
+
+
+	    const importLabel = document.createElement('label');
+	    importLabel.innerText = "Import settings from file";
+	    importLabel.style.cssText = "color: white; font-size: 0.8rem; margin-top: 5px;";
+
+	    const fileInput = document.createElement('input');
+	    fileInput.id = "state_input";
+	    fileInput.type = "file";
+	    fileInput.style.backgroundColor = "#f0f";
+	    fileInput.addEventListener('change', (event) => {
+	        this.ImportState(event);
+	    });
+
+		//save/load inputs
+	    const saveLoadColumn = createColumn(); 
+	    const saveBtn = createBtn("../assets/save_inputs.png", "save all inputs", "#0f0", () => {
+		let inputs = document.getElementsByTagName('input');
+		for (let x of inputs) {
+		    if (x.id && x.type != 'button' && x.type != 'file') {
+			localStorage.setItem(x.id, x.value);
+		    }
+		}
+		console.log("All inputs saved to LocalStorage.");
+	    });
+	    saveBtn.innerText = "save inputs";
+
+	    const loadBtn = createBtn("../assets/load_inputs.png", "load all inputs", "#ff0", async () => {
+		console.warn("LOAD BUTTON DISBALED, NEEDS TO BE REDONE");
+		    /*
+		console.log("Loading values from LocalStorage...");
+		let inputs = document.getElementsByTagName("input");
+		for (let x of inputs) {
+		    if (x.id && x.type !== "button" && x.type !== "file") {
+			let savedValue = localStorage.getItem(String(x.id));
+			if (savedValue !== null) {
+			    if(String(String(x.id).toLowerCase()).includes("api")){
+				this.DebugPrint({
+					msg: `getting value from localStorage("${x.id}")`,
+					val: "<restricted value>"
+				});
+			    }
+			    else{
+				this.DebugPrint({
+					msg: `getting value from localStorage("${x.id}")`,
+					val: savedValue
+				});
+			    }
+			    x.value = savedValue;
+			}
+		    }
+		}
+		if (window.Cockatiel && window.Cockatiel.yt) {
+		    await window.Cockatiel.yt.LoadValuesFromLocalStorage();
+		}
+		*/
+	    });
+	    loadBtn.innerText = "load inputs";
+
+	    saveLoadColumn.append(saveBtn, loadBtn);
+
+	    footer.append(
+		    buttonsContainer,
+		    callTtsColumn,
+		callLoopColumn,
+		    exportBtn,
+		    saveLoadColumn,
+		    fileInput,
+	    );
+
+	    controlContainer.appendChild(footer);
+
+	    //tests 	
+		let tests = document.createElement("details");
+		tests.style = "color:white;";
+		let summary = document.createElement("summary");
+		summary.innerText = "youtube test events";
+		tests.append(summary);
+
+		// superChatEvent - message
+		let superChatEventMessages = [
+			{
+				"version": 1,
+				"apiVersion": 3,
+				"platform": "YouTube",
+				"data": {
+					"kind": "youtube#liveChatMessage",
+					"etag": "cyISaLoRJzops1Dhjhwp5ineYeI",
+					"id": "LCC.EhwKGkNLanpxY2J1dnBNREZRbkN3Z1FkVGhZVVJB",
+					"snippet": {
+						"type": "superChatEvent",
+						"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+						"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+						"publishedAt": "2026-03-27T00:52:12.560546+00:00",
+						"hasDisplayContent": true,
+						"displayMessage": "CA$2.00 from @vulbyte: \"IS A TEST OF THE YOUTUBE API WITH A MESSAGE\"",
+						"superChatDetails": {
+							"amountMicros": "2000000",
+							"currency": "CAD",
+							"amountDisplayString": "CA$2.00",
+							"userComment": "HERE IS A TEST OF THE YOUTUBE API WITH A MESSAGE",
+							"tier": 2
+						}
+					},
+					"authorDetails": {
+						"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+						"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+						"displayName": "@vulbyte",
+						"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+						"isVerified": false,
+						"isChatOwner": true,
+						"isChatSponsor": false,
+						"isChatModerator": false
+					}
+				},
+				"receivedAt": 1774572732560
+			},
+			{ //donation with no message
+				    "version": 1,
+				    "apiVersion": 3,
+				    "platform": "YouTube",
+				    "data": {
+					"kind": "youtube#liveChatMessage",
+					"etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
+					"id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
+					"snippet": {
+					    "type": "superChatEvent",
+					    "liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+					    "authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+					    "publishedAt": "2026-03-26T21:07:12.021491+00:00",
+					    "hasDisplayContent": true,
+					    "displayMessage": "CA$1.00 from @vulbyte",
+					    "superChatDetails": {
+						"amountMicros": "1000000",
+						"currency": "CAD",
+						"amountDisplayString": "CA$1.00",
+						"tier": 1
+					    }
+					},
+					"authorDetails": {
+					    "channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+					    "channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+					    "displayName": "@vulbyte",
+					    "profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+					    "isVerified": false,
+					    "isChatOwner": true,
+					    "isChatSponsor": false,
+					    "isChatModerator": false
+					}
+				    },
+				    "receivedAt": 1774559232021
+				}
+			];
+		    /*
+		    --scoreColor1000plus: #E62117;
+		    --scoreColor500plus: #E91E63;
+		    --scoreColor100plus: #FFCA28;
+		    --scoreColor50plus: #1DE9B6;
+		    --scoreColor20plus: #00E5FF;
+		    --scoreColor0plus: #1E88E5;
+		    --scoreColorBelow0: #0000E5;
+		    */
+		let superChatTest = document.createElement("button");
+		superChatTest.innerText =  'test "superChatEvent" message';
+		superChatTest.style = `
+			background-color: "#1E88E5";
+			color: "#fff";
+		`;
+		superChatTest.onclick = () => {
+			this.yt.ProcessYoutubeV3Data_v1(superChatEventMessages[
+				Math.floor(Math.random()*superChatEventMessages.length)
+			]);
+		};
+
+		tests.append(superChatTest);	
+
+		//let mock = await this.yt.CreateMockYoutubeMessageUI();
+		//tests.append(mock);
+
+		let testMessageInput = document.createElement("div");
+			let messageInput = document.createElement("input");
+			messageInput.type = "text";
+			messageInput.id = String("youtubeTestInput" + String(crypto.randomUUID()));
+			let messageTester = document.createElement("button");
+			messageTester.innerText = "send a test message";
+			messageTester.onclick = () => {
+				let mockHtml = "";
+				console.warn(mockHtml);
+			};	
+			testMessageInput.append(messageInput, messageTester);
+		tests.append(testMessageInput);
+
+		controlContainer.append(tests);
+	    return controlContainer;
+	}
+
+	/*
+	 *
+	 */
+CreateCockatielDragableChild(inputHTML){
+    try{
+        const UUID = crypto.randomUUID();
+        let handleGap = `0.3rem`;
+        let iconSize = `1.5rem`;
+        const handleClass = "handle-" + UUID;    
+
+        let r = Number(Math.floor(Math.random() * 255));
+        let g = Number(Math.floor(Math.random() * 255));
+        let b = Number(Math.floor(Math.random() * 255));
+        let randomColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+
+        // for things being moved
+        let styleSheet = document.createElement("style");
+        document.head.append(styleSheet);
+        const movingClassName = ".isBeingMoved";    
+        const borderRadius = `0.4rem`;
+
+        styleSheet.sheet.insertRule(
+            `${movingClassName} {  
+            filter: opacity(0.5);
+            }`, 
+            styleSheet.sheet.cssRules.length
+        );    
+
+
+        //for bg and border color
+        styleSheet.sheet.insertRule(`:root { --${handleClass}-color: ${randomColor}; }`, 0);
+        //general class
+        styleSheet.sheet.insertRule(
+            `.${handleClass}{ 
+                background-color: #00000028;
+                border-radius: ${borderRadius};
+                display: inline;
+                position: relative;
+                height: ${iconSize};
+                max-height: 100%;
+                text-align: center;
+            }`, 
+            styleSheet.sheet.cssRules.length
+        );    
+        styleSheet.sheet.insertRule(
+            `.${handleClass}:hover {
+                background-color: #00000077;
+            }`, 
+            styleSheet.sheet.cssRules.length
+        );    
+        //mousedown
+        styleSheet.sheet.insertRule(
+            `.${handleClass}:active {  
+                background-color: #000000bb;
+            }`, 
+            styleSheet.sheet.cssRules.length
+        );    
+        // FIX: Add this rule right below your existing ones
+        styleSheet.sheet.insertRule(
+            `body.global-dragging #${handleClass}-textPrompt {
+            pointer-events: auto !important;
+            }`,
+            styleSheet.sheet.cssRules.length
+        );
+
+        const container = document.createElement("div");
+        container.id = UUID;
+        container.classList.add("cockatiel-widget"); // FIX: Added target class to the widget item container
+        container.style.cssText = `
+		box-sizing: border-box;
+            border: 0.4rem solid var(--${handleClass}-color);
+            border-radius: ${borderRadius};
+		overflow: auto;
+            padding: 0.6rem;
+            position: relative;
+            min-height: 10rem;
+	    width: 100%;
+        `;
+        console.log(randomColor);
+
+        const hoverOver = document.createElement("div");
+            hoverOver.id = `${handleClass}-hover_over`;
+            hoverOver.style.cssText = `
+                border-color: ${randomColor};
+                border-radius: ${borderRadius};
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 100;
+                display: flex;
+                filter: opacity(0);
+                flex-direction: column;
+                justify-content: center;
+                text-align: center;
+                align-items: center;
+                color: white;
+                background-color: #000000bb;
+                font-size: 2rem;
+                pointer-events: none;
+                user-select: none;
+            `;
+            const textContainer = document.createElement("div");
+                textContainer.id = `${handleClass}-textPrompt`;
+                let textContainerDefaultText = "drop here to add element AFTER this one";
+                textContainer.innerText = textContainerDefaultText;
+                textContainer.style.cssText = `
+                    pointer-events: none; /* changes to auto on drag*/
+                    user-select: none;
+                `;
+                textContainer.addEventListener("dragover", (e) => {
+                    e.preventDefault();
+                    console.log("The mouse is hovering, AND something is being dragged!");
+                    document.getElementById(hoverOver.id).style.filter = "opacity(1)";
+                });
+
+                function EndDrag(){
+                    document.getElementById(hoverOver.id).style.filter = "opacity(0.0)";
+                }
+
+                textContainer.addEventListener("dragleave", (e) => {
+                    console.log("the hovering and drag has now left");
+                    EndDrag();
+                });
+
+textContainer.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const droppedElementId = e.dataTransfer.getData("text/plain");
+    const droppedElement = document.getElementById(droppedElementId);
+    
+    // 1. Find the target widget
+    const targetCard = e.target.closest('.cockatiel-widget');
+    
+    // Safety check
+    if (!targetCard || droppedElement === targetCard) return;
+
+    // 2. Perform the Physical Move
+    // This physically updates the DOM list so the browser renders it correctly
+    targetCard.after(droppedElement);
+    
+    // 3. The "Sync" Step:
+    // Now that the DOM is physically correct, iterate through the container
+    // and re-assign every single order property to match its new physical index.
+    const allSiblings = Array.from(textContainer.querySelectorAll('.cockatiel-widget'));
+    
+    allSiblings.forEach((child, index) => {
+        child.style.order = index;
+    });
+
+    EndDrag();
+});
+
+            hoverOver.appendChild(textContainer);
+        container.appendChild(hoverOver);                        
+        const body = document.createElement("div");
+		body.id = `${UUID}-body`
+            body.style.cssText = `
+	    	box-sizing: border-box;
+                padding: 0.6rem;
+                display: block; /* FIX: Changed from invalid position: inline; */
+		width: 100%;
+            `;
+            const containerHandle = document.createElement("div");
+            containerHandle.style.cssText = `
+                border-radius: ${borderRadius};
+                background-color: var(--${handleClass}-color);                    
+                display: grid;
+                gap: ${handleGap};
+                grid-template-columns: repeat(auto-fit, minmax(${iconSize}, ${iconSize}));
+                flex-direction: row;
+                overflow: scroll;
+                padding: 0.3rem;
+                position: relative;
+                top: 0px;
+                left: 0px;
+                height: ${iconSize};
+                width: 100%;
+		max-width: 16rem;
+            `;
+
+                const moveHandle = document.createElement("div");
+                    moveHandle.id = `${handleClass}-move_handle`;
+                    moveHandle.innerText = `☁︎`;
+                    // FIX: Removed "handleClass +" from string injection which caused invalid css formatting
+                    moveHandle.style.cssText = `
+                        background-image: radial-gradient(
+                        circle, 
+                        #fff 0%, 
+                        #fff 19.9%, 
+                        transparent 20%, 
+                        transparent 100%
+                        );
+                        background-repeat: repeat;
+                        background-size: 30% 30%;
+                        cursor: move;
+                        user-select: none;
+                    `;
+                    moveHandle.draggable = "true";
+                    moveHandle.classList.add(handleClass);
+                    moveHandle.classList.add("moveHandle");
+                    moveHandle.addEventListener("dragstart", (e)=> {
+                        try{
+                            console.log("drag begin");
+                            let elem = document.getElementById(container.id);
+                            elem.classList.add("isBeingMoved");
+                            // Save the container's ID into the drag data
+                            e.dataTransfer.setData("text/plain", container.id);
+                            
+                            console.log("Started dragging container:", container.id);
+                        }
+                        catch(err){
+                            console.error(err);
+                        }
+                    });
+                    moveHandle.addEventListener("dragend", (e)=> {
+                        try{
+                            console.log("drag end");
+                            let elem = document.getElementById(container.id);
+                            elem.classList.remove("isBeingMoved");
+                        }
+                        catch(err){
+                            console.error(err);
+                        }    
+                    });
+                containerHandle.append(moveHandle);
+                //detatch btn
+                const detatchHandle = document.createElement("div");
+			detatchHandle.id = `${UUID}-detatch_button`;
+                    detatchHandle.innerText = '⤴️';
+                    detatchHandle.classList.add(handleClass);
+                    detatchHandle.classList.add("moveHandle");
+                    detatchHandle.style.cssText = detatchHandle.style.cssText + `
+                        cursor: pointer;
+                        user-select: none;
+                    `;
+                containerHandle.append(detatchHandle);
+                //reattach btn
+                const reattachHandle = document.createElement("div");
+			detatchHandle.id = `${UUID}-detatch_button`;
+                    reattachHandle.innerText = '↩️';
+                    reattachHandle.classList.add(handleClass);
+                    reattachHandle.classList.add("moveHandle");
+                    reattachHandle.style.cssText = reattachHandle.style.cssText + `
+                        cursor: pointer;
+                        user-select: none;
+                    `;
+                containerHandle.append(reattachHandle);
+                //lock btn
+                const lockHandle = document.createElement("div");
+                    lockHandle.innerText = '🔓';
+                    lockHandle.id = String(container.id + "-lock_handle");
+                    lockHandle.classList.add(handleClass);
+                    lockHandle.classList.add("moveHandle");
+                    lockHandle.style.cssText = lockHandle.style.cssText + `
+                        cursor: pointer;
+                        user-select: none;
+                    `;
+                    lockHandle.dataset.isLocked = "false";
+                    lockHandle.addEventListener("click", (e) => {
+                        const isLocked = (lockHandle.dataset.isLocked === "true");
+                        lockHandle.dataset.isLocked = isLocked ? "false" : "true";
+                        if(isLocked == false){
+                            document.getElementById(lockHandle.id).innerText = '🔒';
+                        }
+                        else {
+                            document.getElementById(lockHandle.id).innerText = '🔓';
+                        }
+                        console.log("lh is:", lockHandle.dataset.isLocked);
+                    });;
+                containerHandle.append(lockHandle)
+
+                const recolorHandle = document.createElement("input");
+                    recolorHandle.type = "color";
+                    recolorHandle.value = randomColor;
+                    recolorHandle.innerText = '🔓';
+                    recolorHandle.id = String(container.id + "-recolor_handle");
+                    recolorHandle.classList.add(handleClass);
+                    recolorHandle.classList.add("moveHandle");
+                    recolorHandle.addEventListener("change", (e) => {
+                        document.documentElement.style.setProperty(`--${handleClass}-color`, e.target.value);
+                    });
+
+                containerHandle.append(recolorHandle);
+                
+            body.append(containerHandle);
+
+            const br = document.createElement("br");
+            body.append(br);
+        body.append(inputHTML);
+        container.append(body);
+                
+
+        //always keep below right before return
+        return Result.ok(container);
+    }
+    catch(err){
+        return Result.err(`could not create dragable child from inputHTML:\n${inputHTML}, \n${err}`);
+    }
+}
+
+	GenerateUI(){
+		try{
+			if (!document.body.dataset.dragTrackerAttached) {
+			    document.body.dataset.dragTrackerAttached = "true";
+			    document.addEventListener("dragstart", () => document.body.classList.add("global-dragging"));
+			    document.addEventListener("dragend", () => document.body.classList.remove("global-dragging"));
+			}
+
+			const g =  document.createElement('div');
+			g.id = "cockatiel-grid_container";
+			g.style = `
+				border: 0.3rem solid white;
+				border-radius: 0.4rem;
+				display: grid;
+				gap: 1rem;
+				grid-template-columns: repeat(auto-fit, minmax(32rem, 1fr));
+				margin: auto;
+				min-height:3rem;
+				min-width: 10rem;
+				overflow: scroll;
+				width: 90%;	
+				max-width: 60rem;
+			`;
+
+			let titleContainer = document.createElement("div");
+			titleContainer.id = "titleContainer";
+			titleContainer.style.cssText = `
+				width: 100%;
+			`;
+				let title = document.createElement("h1");
+				title.id = "cockatiel-title";
+				title.innerText = "Cockatiel";
+				let credit = document.createElement("h3");
+				credit.innerText = "- by vulbyte";
+				credit.title = "cockatiel-credit";
+				titleContainer.append(title, credit);
+				let titalContainerFinal = this.CreateCockatielDragableChild(titleContainer);
+			if(titalContainerFinal.isSuccess){
+				g.append(titalContainerFinal.value);
+			}
+			else{
+				throw new Error("error Generating ui with title container");
+			}
+
+			let twitchUI = this.twitch.GenerateUI();
+			if(twitchUI.isSuccess){
+				let twitchContainer = this.CreateCockatielDragableChild(twitchUI.value);
+				console.log(
+					twitchContainer.isSuccess, 
+					twitchContainer.value
+				);
+				if(twitchContainer.isSuccess){
+					g.append(twitchContainer.value);
+				}
+			}
+
+			let youtubeUI = this.youtube.GenerateUI();
+			if(youtubeUI.isSuccess){
+				let ytContainer = this.CreateCockatielDragableChild(youtubeUI.value);
+				console.log(
+					ytContainer.isSuccess, 
+					ytContainer.value
+				);
+				if(ytContainer.isSuccess){
+					g.append(ytContainer.value);
+				}
+			}
+
+			//keep before append!
+			//Array.from(g.children).forEach((child, index) => {
+			//	child.style.order = index;
+			//});
+			document.body.append(g);
+
+			return Result.ok("created UI successfully");
+		}
+		catch(err){
+			return Result.err(`couldn't create UI: ${err}`);
+		}
+	}
+
+	async Init(){	
+		if (this.#hasInited) return; // Stop if already running
+
+		this.d = document;
+		this.tts = new TtsManager();		
+		this.tts.Init();
+		this.ChatManager = new ChatManager();
+		this.ChatManager.Init();
+		this.EventManager = new EventsManager();
+		this.EventManager.Init();
+		this.UserManager = new UserManager();
+		this.UserManager.Init();
+
+		this.twitch = new Twitch();
+		this.twitch.Init();
+		this.youtube = new Youtube();
+		this.youtube.Init();
+
+		this.d.body.append(
+			this.GenerateUI(),
+		);
+
+		//essentails above
+		this.#hasInited = true;
+	}
+
+
+	/*
+	 * WE CANNOT DELETE THIS AS SOME MADLAD (@Cunningstuntsinc) dropped a 50 banger (thankies ily)*
+                                                        .=.@@                   
+                                             .@..      .@@.@#@                  
+                                             @@.@.     .@@.@@@.                 
+                                             @@.-..   @.*@..@@.                 
+                                             @@#...  ....@.+@@@+                
+                                            @@.@.@#@@.@.@@.*@@@..               
+                                            .@.@.@=..@@@@@..@@@..               
+                                            @@..@@--+*..@..@@@@@.               
+                                       ......@@...@@....-@@..#...@@.            
+                             @.#.....-@(@@@@=.@@..@.@@@@.@%@.-..@@.@@@.          
+                             ..:.@@@@......@@@....@@%.........@.@@@=@@@         
+                              .........@@..@#@.++........=@@.@@@@#%%#+@.        
+                                   ............=======.@@#..@%+##%%%%#@@.       
+                                       ....+==========..#.@@%%@@@@@@@@@@.       
+                                          .....======..@.@+*#%@@@........       
+                                           .@@..====..*@.@#@@@@.@.@@@@@..       
+                                           .%.@......@@@@@@@.@@@@@.@@@@@@.      
+                            .@.=@@@@.    .....@@@@@@@.@%%%@.@@@@.@@@@@@@@@@.    
+ ...@.@@.                    .........@@..@@@@@@.....@@%%+@@@@.@@@@@@@@@@@@.    
+  ........@@@.                  .:.*=....@@.@-@.@@@@@@%@@@@@@.@.@%%#@@@@@%@.    
+      .......@@@                 ..++*++..@@@@@@@@@.@@%@.@+@@@@@@@@%%%%%%%@.    
+         .+%...@@@                 ...*++..@@@.@@@.@@%@@@@.@@@@@.@@%%%%%@@@@    
+          .=%+...@@.                 ...*+.@@@@@@.@@@@@.@.@@#@...@%@@@@@@@@@    
+            ..*+..@@@                @@.+@=...@%@@@@....@@@@%@@.@@@@@@#%@@@.    
+             ...--.@%%#@@           ..@@.......@@@@@@@@@@.@%%@@@@@@@@@@#%@@.    
+                ...@@@@@.@#@.       @@@@@@@@@@@@@@%.@@@@@@@%%@.@..@@@@@@@@..    
+                   .@..@@@@@@@%#@. .@@@@@...@..........@@@@@@@@@@@@.@@@@@@..    
+                      ....@@@@@%@@@@@@@#@.:...@.@....==...@@@@@@@@@@@@@#@@.     
+                        .....@@@@@@@%#@%@@.%...@.@.@@..@@=.....@@@@@@@@@@.@     
+                           .....@@@@@%%%@@..@.........=...%=@#............      
+                              ......@@@@@@.  .@@=.@@@@.@@.@..-@@@@%+++%:.       
+                                  ........   ........:....@.@=....@@:...        
+                                             ..@.@@.@:@@.......@@....           
+                                            +@@@@@...@..@@..@..@@@@@@.          
+                                           .@.@%@@@@@@@@...@@.........          
+                                           @@@@@@.@@@.@@.@@....@.@.@:@.         
+                                          .@...@@@@.@@.@@@@@@@.@.@@...@         
+                                         @@@@@@@.@@@.@@@@....@.@......@.        
+                                         .@@@..@@@.@@.@@@.@.@@..@@.@@@@..       
+
+	 */
+
+}
+
+export class OldCockatiel {
+	soundContext;
+	twitch;
+	yt;		
+	tts;
+
 
 	#state = { // when saving and loading this is what will be saved/loaded
 		bannedWordsArray: [], //do not add manually, use the AddBannedWord/RemoveBannedWordFunctions
@@ -299,12 +2071,15 @@ export default class Cockatiel {
 			Twitch: true,
 			Youtube: true,
 		  },
+		  style: {
+			  overwriteUserStyling: true,
+		  }
 		},
 		commands: { // only add commands that are implimented
 			clip: {
 				version: 1,
 				command: "clip",
-				audio: null,
+				audio: "/Users/insert/Cockatiel/assets/audio/vulbyte_pack",
 			        eventHtml: null,
 				flags: [
 					{ flag: ['l'], value: 1, description: "approximate duration of the clip in minutes", range: { min: 0.1, max: 10 } },
@@ -319,6 +2094,7 @@ export default class Cockatiel {
 			help: {
 				version: 1,
 				command: "help",
+				audio: null,
 				description: "",
 				flags: [],
 				func: 'ProcessHelpCommand', //function to call when triggered
@@ -327,6 +2103,7 @@ export default class Cockatiel {
 			tts: {
 				version: 1,
 				command: "tts",
+				audio: null,
 				description: "",
 				flags: {
 					p: {value: 0.3, type:"number", description: "modifys the pitch of the tts", range: { min: 0.5, max: 3 } },
@@ -335,7 +2112,7 @@ export default class Cockatiel {
 					v: {value: 51, type:"number", description: "modifys the voice of the tts message", range: { min: 0, max: 180 } },
 				},
 				AuthNeeded: { owner: false, admin: false, mod: false, trused: false},
-				func: 'CallTts', //function to call when triggered
+				func: 'window.Cockatiel.tts.Speak', //function to call when triggered
 				cost: 10000,
 				state: {readAt: null},
 				errInfo: {err: null, errMsg: null},
@@ -492,30 +2269,15 @@ export default class Cockatiel {
 		},
 		flaggedMessageQueue: [],
 		event_timeline: [], // everything that has happened, messages, tts, etc
-		timers: {/*declared at the start of the constructor*/},
 		windows: {
 			main: {
 				insertId: "cockatiel_settings_container",
 			},
 			chat: {
-				key: "chatDisplay",
-				height: 800,
-				width: 420,  // this was an accident lol
-				background: "#0f0",
-				color: "#000",
-				messageDisplayDuration: 30,
-				displayRate: {min: 1.1, max: 5}, // min and max values for when to add the next message to chat display
-				defaultStylesheet: "/stylesheets/chatMessage-modernMinimal.css", 
-				//"./stylesheets/chatMessage-modernMinimal.css",
+				//now in class
 			},
 			events: {
-				key: "eventDisplay",
-				height: 300,
-				width: 400, 
-				background: "#000",
-				color: undefined,	
-				defaultStylesheet: "",
-				updateDelay: 7, // the time it takaes for the update to change
+				// now in class
 			}
 		},
 		unprocessed_queue: [], // messages returned from yt fetch
@@ -572,7 +2334,7 @@ export default class Cockatiel {
 	}
 
 	GetState(){
-		return /*structuredClone*/(this.#state);
+		return structuredClone(this.#state);
 	}
 
 	CastValueToType(value, type){
@@ -619,58 +2381,6 @@ export default class Cockatiel {
 		}
 
 		return msgArr;
-	}
-
-	DebugPrint(args = {}) {
-	    // 1. Improved Error handling: Extract message and stack if it's an Error object
-	    const formatError = (e) => {
-		if (e instanceof Error) {
-		    return `[${e.name}] ${e.message}\nStack: ${e.stack}`;
-		}
-		return JSON.stringify(e, null, 4) || "";
-	    };
-
-	    let errorMessage = formatError(args.err || args.error);
-	    
-	    // Fixed: You were checking args.value, but your default object uses args.val
-	    let value = JSON.stringify(args.val, null, 4) || ""; 
-	    let msg = args.msg || "";
-
-	    let statement = `msg: ${msg} \nval: ${value} \nerr: ${errorMessage}`;
-	    
-	    // 2. Fix the "throw" logic
-	    // Your previous code didn't actually throw; it just created a new Error object.
-	    const type = args.type?.toLowerCase();
-
-	    switch(type) {
-		case "throw":
-		case "t":
-		    throw new Error(msg/*statement*/); // Use 'throw' to actually stop execution
-		case "error":
-		case "err":
-		case "e":
-		    console.error(statement);
-		    break;
-		case "warning":
-		case "warn":
-		case "w":
-		    console.warn(statement);
-		    break;
-		default:
-		    console.log(statement);
-		    break;
-	    }
-
-	    // 3. Internal Log Tracking
-	    let log = {
-		type: args.type || "log",
-		message: msg,
-		val: args.val,
-		error: errorMessage, // Save the string version for readability
-	    };
-	    this.AddLogToLogs(log);
-
-	    return log;
 	}
 
 	// Private helper to handle the "Clearer Printing" without cluttering the switch
@@ -817,7 +2527,7 @@ export default class Cockatiel {
 		if (Array.isArray(this.#state.commands)) {
 		    this.#state.commands = this.#state.commands.map(cmd => {
 			if (cmd.command === "tts") {
-			    cmd.func = this.CallTts.bind(this);
+			    cmd.func = window.Cockatiel.tts.Speak(this);
 			}
 			// Add logic here for other command re-bindings if needed
 			return cmd;
@@ -833,7 +2543,7 @@ export default class Cockatiel {
 
 	    // Refresh UI
 	    this.UpdateUserDisplay();
-	    this.UpdateBannedWordsList();
+	    this.BannedWordsManager.UpdateBannedWordsList();
 	}
 
 	ProcessVoteCommand(processedMsg) {
@@ -1049,66 +2759,6 @@ export default class Cockatiel {
 
 		return ret;
 	}
-/**
-	 * Processes a validated vote command into the state.
-	 * @param {Object} commandObj - The messageCommand object (isValid: true)
-	 * @param {string} userUuid - The UUID of the voter
-	 * @returns {boolean} - Success or failure
-	 */
-	async HandleVoteStateUpdate(commandObj, userUuid) { //TODO: rework this carp
-	    // 1. Safety Check: Only process if the command itself is valid 
-	    if (!commandObj || !commandObj.isValid) return false;
-
-	    let eventsArr = await this.GetEvents();
-	    // 2. Locate the active prediction event
-	    const activePrediction = eventsArr(e => 
-		e.type === "prediction" && !e.completedAt
-	    );
-
-	    if (!activePrediction) {
-		this.DebugPrint?.({ msg: "Vote failed: No active prediction found." });
-		return false;
-	    }
-
-	    // 3. Check Lockout Timer
-	    // Assuming IntTimer has a method to check if it's finished, or checking the duration
-	    const timer = activePrediction.state.timeRemainingUntilLockout;
-	    const isLocked = (timer.time >= timer.timeoutDuration);
-
-	    if (isLocked) {
-		this.DebugPrint?.({ msg: "Vote failed: Prediction is locked." });
-		return false;
-	    }
-
-	    // 4. Prepare Vote Data
-	    const choice = commandObj.command.flags.y ? "yes" : "no";
-	    const wager = commandObj.spend || 0;
-	    const isDoubleDown = commandObj.command.flags.dd || false;
-
-	    // 5. Check for Existing Vote (Upsert logic)
-	    // If user already voted, we update their current vote rather than pushing a new one
-	    const existingVoteIndex = activePrediction.state.votes.findIndex(v => v.userUuid === userUuid);
-
-	    const voteEntry = {
-		userUuid: userUuid,
-		choice: choice,
-		wager: wager,
-		doubleDown: isDoubleDown,
-		timestamp: Date.now()
-	    };
-
-	    if (existingVoteIndex !== -1) {
-		// Update existing vote
-		activePrediction.state.votes[existingVoteIndex] = voteEntry;
-	    } else {
-		// Add new vote
-		activePrediction.state.votes.push(voteEntry);
-	    }
-
-	    // 6. Final UI/State Trigger
-	    this.EventDisplayManager();
-	    return true;
-	}
 
 	async ProcessPredictionCommand(messageObject) {
 	    this.DebugPrint({msg: "--- Function Entered ---"});
@@ -1199,521 +2849,8 @@ export default class Cockatiel {
 	    return commandObj;
 	}
 
-	CreateNewPrediction(commandObject) {
-	    const msg = commandObject.processedMessage || "";
-	    
-	    // 1. Regex Extraction
-	    // Looks for "-p " followed by text until the next flag "-" or end of string
-	    const promptMatch = msg.match(/-p\s+([^-\n\r]*)/);
-	    const lockoutMatch = msg.match(/-l\s+(\d+)/);
-
-	    const prompt = promptMatch ? promptMatch[1].trim() : this.DebugPrint({type: "throw", msg: "prompt is empty, cannot create"});
-	    const lockoutDuration = lockoutMatch ? parseInt(lockoutMatch[1]) : 300;
-
-	    const predId = `pred_${Date.now()}`;
-	    const now = Date.now();
-
-	    // 2. Build the structure to match EXPECTED output
-	    const newPred = {
-		id: predId,
-		type: "prediction",
-		startedAt: now,
-		state: {
-		    prompt: prompt,
-		    votes: [],
-		    lockoutDuration: lockoutDuration,
-		    // Include classes for logic, but we'll use toJSON for the test runner
-		    timeRemainingUntilLockout: new IntTimer({
-			autoStart: false,
-			timeoutDuration: lockoutDuration
-		    }),
-		    timeRemainingUntilRefund: new IntTimer({
-			autoStart: false,
-			timeoutDuration: 28800
-		    })
-		},
-		
-		// This ensures the test runner (JSON.stringify) sees what it expects
-		toJSON() {
-		    return {
-			id: this.id,
-			type: this.type,
-			startedAt: this.startedAt,
-			state: {
-			    prompt: this.state.prompt,
-			    votes: this.state.votes,
-			    lockoutDuration: this.state.lockoutDuration,
-			    // The test expects these to be identified as classes/objects
-			    timeRemainingUntilLockout: "type:class", 
-			    timeRemainingUntilRefund: "type:class"
-			}
-		    };
-		}
-	    };
-
-	    // 3. Attach Listener (Keep your existing UI logic here)
-	    newPred.state.timeRemainingUntilLockout.AddTickListener(() => {
-		    // TODO: add stuff here
-	    });
-
-	    // 4. Finalize
-	    newPred.state.timeRemainingUntilLockout.Start();
-	    this.AddEventToEventQueue(newPred);
-
-	    return newPred;
-	}
 
 
-	RenderPredictionHtml(event) {
-	    const { id, type, state } = event;
-	    let eventsWin;
-		try{
-			eventsWin = this.subWindows["events"];
-		    if (!eventsWin || !eventsWin.document) return "";
-
-		    const targetDoc = eventsWin.document;
-		    const existingElement = targetDoc.getElementById(id);
-		}
-		catch(err){
-			this.DebugPrint({msg: "document not found, skipping append", error: err})
-		}
-
-		/*
-	    // 1. If it exists, return the current HTML of the body to avoid overwriting with ""
-	    if (existingElement) {
-		this.DebugPrint({msg: `Prediction ${id} already exists. Maintaining current render.`});
-		return targetDoc.body.innerHTML; 
-	    }
-
-	    // 2. If it doesn't exist, we are transitioning (e.g., from Standby to Prediction)
-	    this.DebugPrint(`New Prediction detected. Clearing and rendering ID: ${id}`);
-	    
-	    // We don't manually clear targetDoc.body.innerHTML here because the 
-	    // calling function's assignment (=) will replace whatever was there.
-	    */
-
-	    // 3. Prepare data for the first-time injection
-	    const yesCount = state.yesVotes?.length || 0;
-	    const noCount = state.noVotes?.length || 0;
-	    const totalWagerPool = [...(state.yesVotes || []), ...(state.noVotes || [])]
-		.reduce((sum, vote) => sum + (vote.wager || 0), 0);
-	    
-	    const voteTotalCount = yesCount + noCount;
-	    const yesPercent = voteTotalCount > 0 ? Math.round((yesCount / voteTotalCount) * 100) : 50;
-	    const noPercent = 100 - yesPercent;
-
-	    const lockoutTimer = state.timeRemainingUntilLockout;
-	    const initialSeconds = Math.max(0, lockoutTimer.timeoutDuration - lockoutTimer.time);
-
-	    // 4. Return the full template
-	    return `
-		<style>
-		    @keyframes orbFly {
-			0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-			100% { transform: translate(var(--tx), var(--ty)) scale(0.1); opacity: 0; }
-		    }
-		    body { margin: 0; padding: 0; background: #0e0e10; overflow: hidden; color: #efeff1; font-family: 'Inter', sans-serif; }
-		</style>
-		<div id="${id}" style="width: 100%; height: 100vh; padding: 5%; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid #303032; position: relative;">
-		    <div style="display: flex; justify-content: space-between; align-items: center;">
-			<span style="background: #ff0; color: #000; padding: 4px 12px; border-radius: 4px; font-weight: 800; text-transform: uppercase;">${type}</span>
-			<div style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 20px;">
-			    <span>🔮</span><span style="font-weight: bold;">${totalWagerPool.toLocaleString()}</span>
-			</div>
-		    </div>
-
-		    <div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; text-align: center;">
-			<div style="font-size: 32px; font-weight: 600;">${state.prompt}</div>
-		    </div>
-
-		    <div style="width: 100%; margin-bottom: 2vh;">
-			<div style="display: flex; justify-content: space-between; font-weight: 900; margin-bottom: 10px;">
-			    <span style="color: #0ff;">YES (${yesCount}) ${yesPercent}%</span>
-			    <span style="color: #f06;">NO (${noCount}) ${noPercent}%</span>
-			</div>
-			<div style="width: 100%; height: 40px; background: #1f1f23; border-radius: 10px; display: flex; border: 3px solid #1f1f23;">
-			    <div style="width: ${yesPercent}%; background: linear-gradient(90deg, #0ff, #5a96ff); position: relative;">
-				 <div id="particle-emitter-${id}" style="position: absolute; right: -4px; top: -10%; height: 120%; width: 6px; background: #ffea00; box-shadow: 0 0 15px #ffea00;"></div>
-			    </div>
-			    <div style="width: ${noPercent}%; background: linear-gradient(90deg, #f06, #ff4081);"></div>
-			</div>
-		    </div>
-
-		    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-top: 1px solid #303032; padding-top: 10px;">
-			<div>
-			    <span style="font-size: 10px; color: #adadb8; text-transform: uppercase;">Lockout In</span>
-			    <span id="timer-val-${id}" style="display: block; font-weight: 800; font-size: 24px;">${this.FormatTime(initialSeconds)}</span>
-			</div>
-		    </div>
-		    
-		    <img src="" onload="(function(){ /* particle logic */ })();" style="display:none;">
-		</div>`;
-	}
-
-	async EndPrediction(eventId, winningSide) {
-	    this.DebugPrint({msg: `Ending prediction: ${eventId} with outcome: ${winningSide}`});
-	    let events = await this.GetEvents();
-	    const event = events.find(e => e.id === eventId);
-	    if (!event) return { error: "Event not found" };
-
-	    const state = event.state;
-	    let results = [];
-
-	    // --- 1. HANDLE REFUND PATH ---
-	    if (winningSide === 'refund') {
-		const allVotes = [...state.yesVotes, ...state.noVotes];
-		results = allVotes.map(v => {
-		    const amountToReturn = Number(v.wager || v.pointsAmount || 0);
-		    
-		    // Apply points back to user state
-		    const user = this.#state.users.find(u => u.uuid === v.userUuid);
-		    if (user) {
-			user.points = (user.points || 0) + amountToReturn;
-		    }
-
-		    return {
-			userUuid: v.userUuid,
-			originalBet: amountToReturn,
-			totalReturned: amountToReturn,
-			profit: 0,
-			sharePercent: "N/A (Refund)"
-		    };
-		});
-
-		event.outcome = 'refund';
-		event.status = 'resolved';
-		return { totalPot: 0, payouts: results };
-	    }
-
-	    // --- 2. HANDLE WIN/LOSS PATH ---
-	    const winners = winningSide === 'yes' ? state.yesVotes : state.noVotes;
-	    const losers = winningSide === 'yes' ? state.noVotes : state.yesVotes;
-
-	    // Use Number() to ensure math doesn't concatenate strings
-	    const winnerPool = winners.reduce((sum, v) => sum + Number(v.wager || v.pointsAmount || 0), 0);
-	    const loserPool = losers.reduce((sum, v) => sum + Number(v.wager || v.pointsAmount || 0), 0);
-	    const totalPot = winnerPool + loserPool;
-
-	    if (winners.length === 0) {
-		this.DebugPrint({msg: "No winners found. Consider manual refund if points are stuck."});
-		return { totalPot, payouts: [], winnerPool };
-	    }
-
-	    // 3. Calculate Payouts and Update User State
-	    results = winners.map(userVote => {
-		const originalBet = Number(userVote.wager || userVote.pointsAmount || 0);
-		const userShare = originalBet / winnerPool;
-		const grossPayout = userShare * totalPot;
-		const finalPayout = Math.floor(grossPayout);
-		const profit = finalPayout - originalBet;
-
-		// --- UPDATE USER BALANCE ---
-		const user = this.#state.users.find(u => u.uuid === userVote.userUuid);
-		if (user) {
-		    this.DebugPrint({msg: `giving points to user for winning prediction:`, val: {user, finalPayout}})
-		    user.points = (user.points || 0) + finalPayout;
-		    this.DebugPrint({msg: `Paid ${finalPayout} to ${user.username || user.uuid}`});
-		}
-
-		return {
-		    userUuid: userVote.userUuid,
-		    originalBet: originalBet,
-		    totalReturned: finalPayout,
-		    profit: profit,
-		    sharePercent: (userShare * 100).toFixed(2) + "%"
-		};
-	    });
-
-	    // 4. Update Event State
-	    event.outcome = winningSide;
-	    event.status = 'resolved';
-
-	    return {
-		totalPot,
-		winnerPool,
-		loserPool,
-		payouts: results
-	    };
-	}
-	
-	async GetStandbyEventHtml() {
-	    let id = crypto.randomUUID();
-	    // Assuming updateDelay is your starting number (e.g., 10 seconds)
-	    const startCount = (this.#state.windows.events.updateDelay);
-
-	    const GetRandomColor = () => {
-		// Corrected: Math.random() is a function call
-		const colors = ["#f00", "#0f0", "#00f", "#f0f", "#0ff", "#ff0", /*"#000"*/, /*"#fff"*/];
-		const index = Math.floor(Math.random() * colors.length-1);
-		return colors[index];
-	    };
-
-	    const backgroundColor = GetRandomColor();
-	    
-	    const GetUniqueRandomColor = (existing) => {
-		let newColor = GetRandomColor();
-		// Keep picking until it's different
-		while (newColor === existing) {
-		    newColor = GetRandomColor();
-		}
-		return newColor;
-	    };
-
-	    //const color = GetUniqueRandomColor(backgroundColor);
-
-	    const html = `
-	    <div style="
-		background-color: ${backgroundColor}; 
-		border-radius: 2rem;
-		border: 0.1rem transparent #ccc; 
-		color: ${backgroundColor};
-		display: flex;
-		font-family:helvetica, ariel, sans-serif;
-		flex-direction: column;
-		justify-content: center;
-		align-items: center;
-		font-size: 2rem;
-		/*font-family: sans-serif;*/
-		font-variant-numeric: tabular-nums;
-		padding: 0.5rem; 
-		margin: 1rem;
-		position: absolute; 
-		bottom: 10px; 
-		right: 10px; 
-		height: 3rem;
-		width: 3rem;
-		z-index: 1000;
-	    ">
-		<span id="${id}" style="mix-blend-mode:difference;">${startCount}</span>
-		
-		<img src="" style="display:none;" onerror="(function(){
-		    const targetId = '${id}';
-		    const interval = setInterval(() => {
-			const elem = document.getElementById(targetId);
-			if (elem) {
-			    const current = parseInt(elem.innerText);
-			    if (current > 0) {
-				elem.innerText = current - 1;
-			    } else {
-				clearInterval(interval);
-				// Optional: Hide the timer when it hits 0
-				elem.parentElement.style.display = 'none';
-			    }
-			} else {
-			    clearInterval(interval); 
-			}
-		    }, 1000); // 1000ms = 1 second ticks
-		})()">
-	    </div>
-	    
-	    <div style="width:400px; height:300px; background-color:pink; position: relative;">
-		<div style="display:flex; flex-direction:column; justify-content:space-evenly; background-color:black; width:100%; height:100%;">
-		    <div style="display:flex; flex-direction:row; justify-content:space-evenly; width:100%;">
-			<p style="color:#ddd">No Events Happening Right Now!</p>
-		    </div>
-		    <div style="display:flex; flex-direction:row; justify-content:space-evenly; width:100%;">
-			<div>
-			    <img style="color:#aaa" src="./assets/sleepi_tib.png" alt="new events probably happening soon!">
-			</div>
-		    </div>
-		</div>
-	    </div>
-	    `;    
-	    return html;
-	}
-
-	async UpdateEventDisplayWindowWithNewHTML(html){ //returns 0 on success, other on fail
-		if(html == null || html == undefined){
-			//this.DebugPrint({msg: "cannot update event display, no html given"});
-			return 1;
-		}
-
-		//let w /*window*/ = this.subWindows[this.#state.windows.events.key];
-		
-		    const win = this.subWindows[this.#state.windows.events.key];
-		    if (!win || win.closed) {
-			//this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
-			return;
-		    }
-
-		    /*win.postMessage({ 
-			type: 'newHtml', 
-			payload: html,
-		    }, "*");*/
-		win.document.body.innerHTML = html;
-		return 0;
-	}
-
-	async EventDisplayManager() {
-		console.log({msg: "eventDisplayManagerCalled"});
-		let events = await this.GetActiveEvents();
-		console.log({msg: "got events:", val: events});
-		let html;
-		if(events.length < 1 || events == null || events == undefined){
-			html = await this.GetStandbyEventHtml();
-			console.log({
-				msg: "no events, adding placeholder html", 
-				// val: JSON.stringify(html)
-			});
-			let result = await this.UpdateEventDisplayWindowWithNewHTML(html);	
-			switch(result){
-				case(0):
-					//this.DebugPrint({msg: "event display without error"});
-				default:
-					console.log({
-						msg: "event display errored with value:", 
-						val: result, 
-						type:"e"
-					});
-			}
-			return;
-		}
-
-		//logic for multiple events
-		console.log({
-			msg: "at least one active event found!", 
-			//val: JSON.stringify(html),
-		});
-
-		return;
-	}
-
-	tib_sleeping = '';
-	RenderStandbyHTML() {
-	    // Replace this with your actual GIF URL
-	    let gifUrl = this.tib_sleeping;
-
-	    return `
-	    <div style="
-		width: 100%; height: 100vh; background: #0e0e10; color: #efeff1;
-		font-family: 'Inter', sans-serif; display: flex; flex-direction: column;
-		align-items: center; justify-content: center; border: 1px solid #303032;
-	    ">
-		<div style="display: flex; align-items: center; gap: 15px; opacity: 0.3; margin-bottom: 20px;">
-		    <div style="font-size: 40px;">💤</div>
-		    <!--<img src="${gifUrl}" alt="" style="width: 50px; height: 50px; object-fit: contain;" />-->
-		</div>
-
-		<div style="text-transform: uppercase; letter-spacing: 3px; font-weight: 900; color: #303032;">
-		    tib can rest easy
-		</div>
-		<div style="font-size: 12px; color: #303032; margin-top: 10px;">
-		    NO ACTIVE EVENTS
-		</div>
-	    </div>`;
-	}
-
-	CreateEvent(
-		type = undefined, 
-		promp = undefined,//prompt for user
-		id = undefined
-	){
-		let ev = this.templates.event; // ev = event
-
-		if(id == undefined){this.DebugPrint({msg: "no id given, generating random one"});}
-		ev.type;
-		ev.state;
-		ev.outcome;
-
-		if(type == undefined){this.DebugPrint({msg: "need a type to create an event"})}
-		switch(type.toLowerCase()){
-			case("predition"):
-				if(prompt == undefined){this.DebugPrint({msg: "cannot create event, no prompt"});}
-				this.CreateNewPrediction(type, prompt, id);
-				break;
-			default:
-				this.DebugPrint({msg: `no matching event type to ${type} found`});
-				break;
-		}
-	}
-	EndEvent(
-		id = undefined, 
-		outcome = undefined,
-	){
-		if(id == undefined){
-
-		}
-	}
-	EndAllEvents(){
-
-	}
-
-	UpdateBannedWordsTrie(){
-		this.#state.bannedWordsTrie = new TrieTree();
-		for(let i = 0; i < this.#state.bannedWordsArray; ++i){
-			this.#state.bannedWordsTrie.Add(this.#state.bannedWordsArray[i]);
-		}
-	}
-	AddBannedWord(word = undefined){
-		this.DebugPrint({msg: "attepting to add banned word:", word});
-		if(word == undefined){throw new Error("word is undefined");}		
-		for(let i = 0; i < this.#state.bannedWordsArray; ++i){
-			if(this.#state.bannedWordsArray[i] == word){
-				this.DebugPrint({msg: "not adding word, word already in array"});
-				return
-			}
-		}
-		this.#state.bannedWordsArray.push(word);
-		this.UpdateBannedWordsTrie();
-	}
-	RemoveBannedWord(word = undefined) {
-	    this.DebugPrint({msg: "attepting to add banned word:", word});
-	    if (word === undefined) { 
-		throw new Error("word is undefined"); 
-	    }
-
-	    // Ensure we are working with an array (fixes the += string bug)
-	    if (!Array.isArray(this.#state.bannedWordsArray)) {
-		console.error("State Error: bannedWordsArray is not an array. Resetting...");
-		return;
-	    }
-
-	    for (let i = 0; i < this.#state.bannedWordsArray.length; ++i) {
-		if (this.#state.bannedWordsArray[i] === word) {
-		    this.DebugPrint({msg: `Word "${word}" found, removing.`});
-		    
-		    // USE SPLICE TO MUTATE THE ARRAY
-		    this.#state.bannedWordsArray.splice(i, 1);
-		    
-		    // Sync your TrieTree and UI
-		    this.UpdateBannedWordsTrie();
-		    this.UpdateBannedWordsList(); 
-		    return;
-		}
-	    }
-	}
-
-	CHE(args = {}) {
-	    try {
-		if (!args.type) args.type = "div";
-
-		let elem = document.createElement(args.type);
-
-		if(args.inputType) elem.type = args.inputType;
-
-		if (args.class) elem.className = args.class;
-		if (args.id) elem.id = args.id;
-		if (args.innerHTML) elem.innerHTML = args.innerHTML;
-		if (args.innerText) elem.innerText = args.innerText;
-		if (args.style) elem.style.cssText = args.style;
-
-		if (args.attributes) {
-		    for (const [key, value] of Object.entries(args.attributes)) {
-			elem.setAttribute(key, value);
-		    }
-		}
-
-		if (args.onClick) {
-		    elem.addEventListener("click", args.onClick);
-		}
-
-		return elem;
-	    }
-	    catch (err) {
-		console.error("CHE failed", err);
-		return null;
-	    }
-	}
 
 	/**
 	 * Recursively alphabetizes keys in objects and elements in arrays.
@@ -1780,139 +2917,49 @@ export default class Cockatiel {
 	    return val;
 	}
 
-	CalcUserConductScore(user = undefined){
-		unixTimes = {"month1": 2648400,"year1": 31536000,}
-		
-		let minDuration = unixTimes.month1;
-		let maxDuration = unixTimes.year1*2; 
 
-		if(user == undefined){throw new Error("could not calculate user conduct score, input is null")}
-		let conduct_score, misconduct_score = 0;	
 
-		const now = Date.now();
-		let eventTime; // = user.commendations[Object.keys(user.commendations)[i]][j].happenedAt;
-		let age; // = now - eventTime;
+	AddUnprocessedMessageToUnprocessedQueue(p_msg) {
+    // 1. Create a shallow copy to avoid side-effects if needed
+    const validatedMsg = { ...p_msg };
+    let errors = [];
 
-		let commendment;
-		for(let i = 0; i < Object.keys(user.commendments.length); ++i){
-			for(let j = 0; j < user.commendments[i].length; ++j){
-				// conduct_score += Number(
-				// 	this.clamp(Object.keys(user.commendations)[i][j].happenedAt-(Date.now()-maxDuration), 0, 1)
-				// 	/ (maxDuration-minDuration)
-				// )
-				let timeWeight = (maxDuration - age) / (maxDuration - minDuration);
-				eventTime = user.commendations[Object.keys(user.commendations)[i]][j].happenedAt;
-				age = now - eventTime;
-				conduct_score += Number(this.Clamp({
-						val: timeWeight, 
-						min: 0, 
-						max: 1
-					}));
-			}
-		}
-	}
-	GetUsers(){
-		return this.#state.users;
-	}
+    // 2. Validate properties
+    if (validatedMsg.version == null) errors.push("version");
+    if (validatedMsg.apiVersion == null) errors.push("api version");
+    if (validatedMsg.data == null) errors.push("data");
+    if (validatedMsg.platform == null) errors.push("platform");
 
-	async LoadBannedWords(event = undefined, method = "add") {
-	    this.DebugPrint({msg: "LoadBannedWords(}) called"});
-	    if (!event) throw new Error("event is null");
+    // 3. Set defaults/fixes
+    if (validatedMsg.dateTime == null) {
+        validatedMsg.dateTime = Date.now();
+    }
 
-	    let file = event.target.files[0];
-	    if (!file) {
-		this.DebugPrint({msg: "No file detected"});
-		return;
-	    }
+    if (errors.length > 0) {
+        this.DebugPrint({ msg: `Validation failed for fields: ${errors.join(", ")}` });
+        validatedMsg.failedProcessingAt = Date.now();
+	this.error_queue.psuh(validatedMsg);
+	return;
+    }
 
-	    let fileType = file.name.split(".").pop().toLowerCase(); // force lowercase to simplify greatly
-	    let data = []; 
+    this.#state.unprocessed_queue.push(validatedMsg); 
+    
+    this.DebugPrint({ msg: "Added item to queue" });
 
-	    const text = await file.text(); 
+    return validatedMsg;
+}
 
-	    if (fileType === "json") {
-		this.DebugPrint({msg: ".json found, attempting to parse"});
-		data = JSON.parse(text);
-		//verify is an array, if not throw error
-	    } else if (fileType === "csv") {
-		this.DebugPrint({msg: ".csv found, attempting to parse"});
-		data = text.split(/[,\n\r]+/).map(w => w.trim()).filter(w => w !== "");
-	    }
-
-	    this().#state.bannedWordsArray = [...this.#state.bannedWordsArray, ...data];
-
-	    // Initialize the tree if it doesn't exist
-	    if (!this.#state.bannedWordsTrie || method === "replace") {
-		this.DebugPrint({msg: method === "replace" ? "Replacing tree" : "Initializing new tree"});
-		this.#state.bannedWordsTrie = new TrieTree();
-	    }
-
-	    this.DebugPrint({msg: `Adding ${data.length} words to the Trie`}); 
-	    // Fill the tree with the new data
-	    this.UpdateBannedWordsTrie()
-
-	    this.DebugPrint({msg: "Banned words Trie updated.", val: this.#state.bannedWordsArray});
-
-	    this.UpdateBannedWordsList();
-	    return this.#state.bannedWordsArray;;
-	}
-
-	AddUnprocessedMessageToUnprocessedQueue(p_msg){
-		/*
-		unprocessed_message_v1: {
-			version : 1,
-			apiVersion : 3, // youtube,
-			data : null,
-			dateTime : null,
-			platform : null,
-			failedProcessingAt : null,
-		},	
-		*/
-		let comperison = this.templates.unprocessed_message_v1;
-
-		let msg = "";
-		let shouldError = false;
-		if(p_msg.version == null){
-			p_msg += "version, ";
-		}
-		if(p_msg.apiVersion == null){
-			p_msg += "api version, ";
-		}
-		if(p_msg.data == null){
-			shouldError = true;
-			p_msg += "data, ";
-		}
-		if(p_msg.dateTime == null){
-			p_msg += "dateTime";
-			p_msg.dateTime = Date.now();
-		}
-		if(p_msg.platform == null){
-			shouldError = true;
-			p_msg += "platform, ";
-		}
-
-		this.DebugLog({
-			msg: String(
-				"attempting to add unprocessed message to queue, here's the following things with errors: ",
-				msg
-			),
-			val: null,
-			err: null,
-		});
-		if(shouldError == true){
-			p_msg.failedProcessingAt = Date.now();
-		}
-	}
 	GetUnprocessedQueue(){
 		return this.#state.unprocessed_queue;
 	}
+
 	async GetMessages(){
 		let msgArr = [];
 		if(!this.ProbeForBadNodes()){
 			//add logic here to trim nodes
 			//return null;
 		}
-		const timelineClone = [...this.#state.event_timeline];
+		const timelineClone = struct([...this.#state.event_timeline]);
 		if(
 			timelineClone == undefined 
 			|| timelineClone == null
@@ -2043,332 +3090,12 @@ export default class Cockatiel {
 		*/
 	}
 
-	AddUserToUsers(user) {
-		try{
-		    this.DebugPrint({ msg: "attempting to add user to users", val: JSON.stringify(user, null, 4) });
 
-		    // 1. Check if user already exists
-		    let userGet = this.GetUserFromUuid(user.uuid); // Pass the UUID property specifically
-		    if (userGet != null) {
-			this.DebugPrint({ 
-			    msg: "user already in db, not adding.", 
-			    type: "warn", 
-			    val: { user: user, gotUser: userGet } 
-			});
-			return false;
-		    }
 
-		    // 2. Fix the ReferenceError: Use the ID from the user object
-		    const targetId = user.uuid || crypto.randomUUID();
 
-		    // 3. Add to state 
-		    // If #state.users is an Object/Map:
-		    //this.#state.users[targetId] = user;
-			
-		    // remove cyclic reference 
-		    this.#state.users[targetId] = JSON.parse(JSON.stringify(user));
-		    
-		    // If #state.users is an Array, use this instead:
-		    // this.#state.users.push(user);
 
-		    // 4. Update UI
-		    this.UpdateUserDisplay(); 
-		    this.DebugPrint({ msg: "added user to users", val: JSON.stringify(user, null, 4) });
-		    return true;
-		}
-		catch(err){
-			this.DebugPrint({
-				msg: "error attempting to add user",
-				err: err,
-				data: user,
-			});
-		}
-	}
 
-	CreateUserFromFlags(p_msg) { //returns user object on success
-	    // 1. Validation check
-	    this.DebugPrint({ msg: "checking for chaannelOrigin"});
-	    if (!p_msg.channelOrigin) {
-		this.DebugPrint({ msg: "channelOrigin CANNOT be null", type: "t"});
-	    }
 
-	    // 2. Check for existing user (Fixed the variable name casing)
-	    let existingUuid; 
-	    try {
-		existingUuid = this.FindUserFromChannelIdAndReturnUuid(p_msg.channelOrigin);
-		
-		// Simplified check: if it's truthy, return it
-		if (existingUuid) {
-		    this.DebugPrint({ msg: "User already exists. UUID:", val: existingUuid });
-		    return existingUuid; 
-		}
-	    } catch (err) {
-		this.DebugPrint({
-		    msg: "Error checking for existing UUID", 
-		    val: p_msg,
-		    type: "t", 
-		    err: err
-		});
-		// Decide if you want to continue or return here
-	    }
-
-	    // 3. Create new user object
-	    // Note: p_msg uses .userUuid, but you access .uuid below. 
-	    // I've updated this to check p_msg.userUuid first.
-	    let user = { 
-		...this.templates.user,
-		username: p_msg.username,
-		icon: p_msg.icon,
-		channels: [{
-			version: 1,
-			channelId: p_msg.channelOrigin,
-			platform: p_msg.platform,
-			channelName: p_msg.username,
-		}],
-		isSponser: p_msg.isSponser || false,
-		isChatModerator: p_msg.isChatModerator || false,
-		isChatAdmin: p_msg.isChatAdmin || false,
-		uuid: crypto.randomUUID(), 
-		firstSeen: p_msg.firstSeen || Date.now()
-	    };
-		let color;
-		switch(user.uuid[String(user.uuid).length-1]){
-			case('a'):
-			case('b'):
-			case('c'):
-			case('d'):
-			case('e'):
-				color = "#f00";
-				break;
-			case('f'):
-			case('g'):
-			case('h'):
-			case('i'):
-			case('j'):
-				color = "#ff0";
-				break;
-			case('k'):
-			case('l'):
-			case('m'):
-			case('n'):
-			case('o'):
-				color = "#000"; //can't be green because of bg
-				break;
-			case('p'):
-			case('q'):
-			case('r'):
-			case('s'):
-			case('t'):
-				color  = "#0ff";
-				break;
-			case('u'):
-			case('v'):
-			case('w'):
-			case('x'):
-			case('y'):
-			case('z'):
-				color = "#00f";
-				break;
-			case('0'):
-			case('1'):
-			case('2'):
-			case('3'):
-			case('4'):
-				color = "#f0f";
-				break;
-			case('5'):
-			case('6'):
-			case('7'):
-			case('8'):
-			case('9'):
-				color = "#fff";
-				break;
-			default: 
-				color = "#555";
-				break
-		}
-		user.styling.chatMessageContainer.chatUserBubble.chatUserInfo.styling.backgroundColor = color;
-
-		/*
-		channel: {
-			version : 1, platform : "", channelName : "", channelId : ""
-		},
-		*/
-
-	    // 4. Add and return
-	    try {
-		if(this.AddUserToUsers(user) == false){
-			throw new Error("user could not be added to users");
-		}
-		this.DebugPrint({ msg: `User created: ${user.username}.` });
-		return user;
-	    } catch (err) {
-		this.DebugPrint({ msg: `Failed to add user to state: ${JSON.stringify(user, null, 2)}`, data: user, err: err, type: "t" });
-	    }
-	}
-
-	GetUserFromUuid(uuid){
-		let users;
-		try{
-			users = this.#state.users || window.Cockatiel.GetUsers();
-		}
-		catch(err){
-			this.DebugPrint({msg: "could not get users", type: "t", err: err});
-		}
-
-		let user = users[uuid];
-		if(user == undefined){
-			return null;
-		}
-
-		return user;
-	}
-
-FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
-    if (!searchChannelId) return null;
-
-    const users = this.#state.users;
-    if (!users) return null;
-
-    const userList = Object.values(users);
-
-    for (let i = 0; i < userList.length; i++) {
-        const user = userList[i];
-        
-        // Based on your log: channels is an Array [ {channelId: "..."} ]
-        const channelsArray = user.channels;
-
-        if (Array.isArray(channelsArray)) {
-            for (let j = 0; j < channelsArray.length; j++) {
-                if (channelsArray[j].channelId === searchChannelId) {
-                    return user.uuid; // Found him!
-                }
-            }
-        }
-    }
-    return null; // Not found
-}
-
-	AddPointsToUserWithUuid(score, uuid) {
-	    if (!uuid) {
-		console.error("No UUID provided.");
-		return false;
-	    }
-	    // Note: score could be 0, so check if it's undefined or null specifically
-	    if (score === undefined || score === null) {
-		console.error("no score to give to user");
-		return false;
-	    }
-
-	    this.DebugPrint({msg: `attempting to add score to user`, val: {score: score, user: uuid}});
-
-	    // 1. Locate the user
-	    let user = this.#state.users[uuid];
-		
-	    try{
-	            if(!user){
-	                this.DebugPrint({msg: `user is not found, attempting to create user.`, val: {uuid: uuid}, type:"w"});    
-			    return false;
-	                //this.DebugPrint({msg: `AddPointsToUser: User with UUID ${uuid} not found.`, type:"error"});
-	            }
-	    }
-	    catch(err){
-	    	this.DebugPrint({msg: `user is not found, cannot add points to user.`, val: {uuid: uuid}, err: err, type:'e'});    
-	    	return false;
-	    }
-
-		try{
-		if (user.points === undefined || isNaN(user.points)) {
-				user.points = 0;
-			}
-
-			// 3. Add the new points
-			user.points += score;
-			user.totalPoints += score;
-
-			this.DebugPrint({msg: `Points updated for ${user.username}: +${score} (Total: ${user.points}})`});
-			return true;
-		}
-		catch(err){
-			this.DebugPrint({msg: "failure adding points to user", type: 'e', err:err})
-		}
-	}	
-
-	RemoveUserProfileFromUuid(userUuid){ //true on success, false on fail
-		try{
-			if(!this.#state.users[userUuid]){			
-				this.DebugPrint({msg: "cannot remove user, user does not exist", type: "t"});
-			}
-			this.#state.users.delete(userUuid);
-			this.UpdateUserDisplay();
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot remove user", err:err});
-		}
-		return;
-	}
-
-	MergeUserProfiles(user1, user2){ // will merge the 1st into the 2nd, true on success, false on fail
-		try{
-			if(
-				user1.version == 1 
-				&& user2.version == 1
-			){
-				let newUserProfile = this.templates.user;
-				newUserProfile.version = 1;
-				newUserProfile.username = user2.username;
-				newUserProfile.channels = [...user1.channels, ...user2.channels];
-				newUserProfile.uuid = user2.uuid;
-				newUserProfile.ttsBans = [...user1.ttsBans, ...user2.ttsBans];
-				newUserProfile.channelBans = [...user1.channelBans, ...user2.channelBans];
-				newUserProfile.conduct_score = Number((user1.conduct_score+user2.conduct_score)/2);
-				newUserProfile.commendments = {	
-					community: [...user1.commendments.community, ...user2.commendments.community ], // welcoming, helpful, inclusivity, etc
-					engagement: [...user1.commendments.engagement, ...user2.commendments.engagement], // hype, constructive feedback, good chatting, etc
-					support: [...user1.commendments.support, ...user2.commendments.support], //the only thing one can buy
-				}
-				newUserProfile.misconduct = {
-					discrimination: [...user1.misconduct.discrimination, ...user2.misconduct.discrimination], // racism, sexism, etc
-					harassment: [...user1.misconduct.harassment, ...user2.misconduct.harassment], // bullying, hate speech, etc
-					spam: [...user1.misconduct.spam, ...user2.misconduct.spam], // self-promo, asdl;fknfrtn, links, etc
-					integrity: [...user1.misconduct.integrity, ...user2.misconduct.integrity], // language, spoilers, trolling/rage, bypassing filters
-				};
-				newUserProfile.icon = user2.icon;
-				(user1.isSponser || user2.isSponser) ? newUserProfile.isSponser = true : newUserProfile.isSponser = false;
-				(user1.isChatModerator || user2.isChatModerator) ? newUserProfile.isChatModerator = true : newUserProfile.isChatModerator = false;
-				(user1.isChatAdmin || user2.isChatAdmin) ? newUserProfile.isChatAdmin = true : newUserProfile.isChatAdmin = false;
-				(user1.isVerified || user2.isVerified) ? newUserProfile.isVerified = true : newUserProfile.isVerified = false;
-				
-				//prioritize older
-				if(user1.firstSeen < user2.firstSeen){
-					newUserProfile.firstSeen = user1.firstSeen;
-				}
-				else{
-					newUserProfile.firstSeen = user2.firstSeen;
-				}
-
-				//combine points
-				newUserProfile = user1.points + user2.points;
-				this.DebugPrint({msg: "user profiles merged successfully!"});
-
-				//merge done, add new user to users
-				this.AddUserToUsers(newUserProfile);
-				this.DebugPrint({msg: "new user profile added to users"});
-				this.RemoveUserProfileFromUuid(user1.uuid);
-				this.DebugPrint({msg: "removed user 1 from list, goodbye:", val: user1});
-				this.RemoveUserProfileFromUuid(user2.uuid);
-				this.DebugPrint({msg: "removed user 2 from list, goodbye:", val: user2});
-				return true;
-			}
-			else{
-				this.DebugPrint({msg: "cannot merge users, both are not version 1, which is the only one that has support"});
-			}
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot merge users due to error", err:err});
-			return false;
-		}
-	}
 
 	async SafeAddToEventTimeline(p_msg) {
 		this.#state.event_timeline.push(p_msg);
@@ -2382,40 +3109,63 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	    this.SafeAddToEventTimeline(p_msg)
 
 	    // reference: this.#templates.message_types
-		for(let i = 0; i < Object.keys(this.#state.config.showSystemMessages).length; ++i){
-			//check if we're skipping the system message for the platform
-			if(String(Object.keys(this.#state.config.showSystemMessages)).toLowerCase() == String(p_msg.platform).toLowerCase()){
-				if(this.#state.config.showSystemMessages[Object.keys(this.#state.config.showSystemMessages)[i]] == false){
-					return;
-				}	
-				else{
-					break;
-				}
-			}
-		}
+    	    for(let i = 0; i < Object.keys(this.#state.config.showSystemMessages).length; ++i){
+	    	//check if we're skipping the system message for the platform
+	    	if(String(Object.keys(this.#state.config.showSystemMessages)).toLowerCase() == String(p_msg.platform).toLowerCase()){
+	    		if(this.#state.config.showSystemMessages[Object.keys(this.#state.config.showSystemMessages)[i]] == false){
+	    			return;
+	    		}	
+	    		else{
+	    			break;
+	    		}
+	    	}
+	    }
+
 	    switch(String(p_msg.type).toLowerCase()){
 		case("cheer-monitized"): //ie claim bits
 			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "cheer-monitized"});
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("cheer-unmonitized"): //ie use a gif
 			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "cheer-unmonitized"});
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("community_gift-monitized"): //ie gifted sub
 			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "community_gift-monitized"});
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("community_gift-unmonitized"): //ie +rep 
 			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "community_gift-unmonitized"});
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("donation"):
+			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "donation-monitized"});
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("follow-monitized"): //ie new channel memeber on yt
 			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "follow-monitized"});
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("follow-unmonitized"): //ie new follow on twitch
 			this.DebugPrint({msg: "MESSAGE TYPE NOT YET ACCOUNTED FOR", value: "follow-unmonitized"});
-		case("message"): //imma add this here to be safe
+			this.PushDonationToChatWindow(p_msg);
+			    break;
 		case("message-monitized"): //ie superchat on youtube
 			this.DebugPrint({msg: "adding message-monitized to display"});
 			this.PushDonationToChatWindow(p_msg);
+			    break;
+		case("message"): //imma add this here to be safe
+			this.DebugPrint({msg: "adding message-unmonitized to display"});
+			this.PushMessageToChatWindow(p_msg);
+			    break;
 		case("message-unmonitized"): //ie chat
 			this.DebugPrint({msg: "adding message-unmonitized to display"});
 			this.PushMessageToChatWindow(p_msg);
+			    break;
 		default:
 			this.DebugPrint({msg: "could not push the message to the chat window(s), opting not to display instead"});
+			this.PushMessageToChatWindow(p_msg)
+			break;
 	    }
 
 	    return;
@@ -2499,28 +3249,42 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	async #DaLoop() {
 		this.DebugPrint({msg: "daLoopCalled"});
 		// dLive 
-		// facebook here
+		// discord channel(s?)
+		// facebook
 		// instagram
-		// kick here
-		// picarto here
-		// tiktok here
+		// kick
+		// picarto
+		// tiktok
 		// trovo
-		// twitch here
+		// twitch
 			/*twitch not needed due to websocket connection, look for "AddTwitchMessageToUnprocessedQueeu()*/	
 		// twitter here
 		// youtube
-		if(this.yt.isReady()){
-			this.DebugPrint({msg: "Fetching messages from youtube"});
-			const data = await this.yt.getChatMessages();
-			
-			this.DebugPrint({msg: `Received ${data.items?.length || 0} items`});
+		try{
+			if(this.yt.isReady()){
+				this.DebugPrint({msg: "Fetching messages from youtube"});
+				const data = await this.yt.getChatMessages();
+				
+				this.DebugPrint({msg: `Received ${data.items?.length || 0} items`});
 
-			if (!data.items || data.items.length === 0) return;
+				if (!data.items || data.items.length === 0) return;
 
-			this.DebugPrint({msg: "adding messages to unprocessed queue"});
-			for (const item of data.items) {
-			    this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(item);
+				this.DebugPrint({msg: "adding messages to unprocessed queue"});
+				for (const item of data.items) {
+					this.DebugPrint({msg: `of messages ${data.items.length}, proccessing messages: ${JSON.stringify(item, null, 2)}`});	
+					this.AddUnprocessedMessageToUnprocessedQueue(this.yt.ParseYoutubeV3Message(item));
+					this.DebugPrint({msg: `added item to unprocessedMessageQueue`});	
+				}
 			}
+			else{
+				this.DebugPrint({msg: "YOUTUBE DISABLED IGNORING"});
+			}
+		}
+		catch(err){
+			this.DebugPrint({
+				msg: "could not run youtube loop in da loop",
+				err: err,
+			})
 		}
 
 		//process unprocessed queue
@@ -2544,28 +3308,6 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		}
 	}	
 
-	async GetOldestUnreadTtsAndMarkRead() { // TODO:this needs to be redone so that way it can look up messages by messageId
-		let messages = await this.GetMessages();
-		let currentTime = Date.now();
-		    for (let i = 0; i < messages.length; i++) {
-			    if(
-				    messages[i].commands.tts != undefined
-				    && typeof(messages[i].commands.tts.state.readAt) != "number"
-			    ){
-				    try{
-						    this.DebugPrint({msg: "found tts with null readAt", val: messages[i]});
-						    messages[i].commands.tts.state.readAt = Date.now(); // ✅
-						    this.DebugPrint({msg: "updated value so is now read", val: messages[i]});
-						return {message: messages[i], index: i}
-					    }
-				    catch(err){
-					this.DebugPrint({msg: `message at i(${i}) does not have a tts command`});
-				    }
-			    }
-			}
-
-		    return null;
-	}
 
 	GetEventTimelineIndexByMessageId(messageId) {
 	    for (let i = 0; i < this.#state.event_timeline.length; ++i) {
@@ -2575,215 +3317,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 	    }
 	    return -1;
 	}
-
-	async FindOldestUnreadTtsAndCall() {
-	    this.DebugPrint({ msg: "find and call tts called" });
-
-	    const returnObj = await this.GetOldestUnreadTtsAndMarkRead();
-	    this.DebugPrint({msg: "alleged oldest unread tts message:", val: returnObj});
-
-	    if (returnObj == null) {
-		this.DebugPrint({msg: "no tts messages found, queue is empty"});
-		return false;
-	    }
-
-	    const message = returnObj.message;
-
-	    if (!message) {
-		this.DebugPrint({ msg: "no tts message found, returning", val: message });
-		return false;
-	    }
-
-	    // 2. IMMEDIATE LOCK — find the real index in event_timeline by messageId
-	    const timelineIndex = this.GetEventTimelineIndexByMessageId(message.messageId);
-
-	    if (timelineIndex == -1) {
-		this.DebugPrint({ msg: "could not find message in event_timeline by messageId", val: message.messageId, type: 'e' });
-	    } else {
-		this.DebugPrint({ msg: "FOUND MATCHING MESSAGE ID, MARKING READ", val: timelineIndex });
-		this.#state.event_timeline[timelineIndex].commands.tts.state.readAt = Date.now();
-	    }
-
-	    this.DebugPrint({ msg: "oldest message found, calling tts", val: message });
-
-	    try {
-		await this.CallTts(message);
-		return true;
-	    } catch (err) {
-		this.DebugPrint({ msg: "TTS Call failed", error: err, type: 'e' });
-		return false;
-	    }
-	}
-
-	/**
-	 * Executes the Text-to-Speech command using the message and flags.
-	 * @param {string} message The clean message text to speak.
-	 * @param {Object} flags The command parameters/flags.
-	 * @param {Object} messageState - Reference to the message.state object (messageObj.state)
-	 * @returns {Promise<void>}
-	 */
-	async CallTts(message) { 
-	    this.DebugPrint({ msg: "CallTts: Starting TTS for message:", val: message });
-
-	    // 1. Validation: Ensure we have a valid message object
-	    if (!message) {
-		this.DebugPrint({ msg: "TTS Error: Message object is null or undefined.", type: "e" });
-		return;
-	    }
-
-	    // 2. Extract TTS text and flags safely
-	    // We assume the structure: message.commands.tts = { isValid, params, message }
-	    const ttsCmd = message.commands?.tts;
-	    
-	    if (!ttsCmd || !ttsCmd.isValid) {
-		this.DebugPrint({ msg: "TTS Error: No valid TTS command found in message.", type: "t" });
-		return;
-	    }
-
-	    const textToSpeak = ttsCmd.message || "No text";
-	    const flags = ttsCmd.flags || {};
-
-	    // 3. Voice Initialization
-	    const getVoices = () => new Promise((resolve) => {
-		let voices = window.speechSynthesis.getVoices();
-		if (voices.length > 0) return resolve(voices);
-		
-		window.speechSynthesis.onvoiceschanged = () => {
-		    resolve(window.speechSynthesis.getVoices());
-		};
-	    });
-
-	    const voices = await getVoices();
-	    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-
-	    // 4. Apply Param Flags
-	    utterance.rate = Number(flags.r) || 1; 
-	    utterance.pitch = Number(flags.p) || 1;
-
-	    // Handle voice selection (v is index)
-	    if (flags.v !== undefined && voices[flags.v]) {
-		utterance.voice = voices[flags.v];
-	    }
-
-	    // 5. Execution & State Update
-	    return new Promise((resolve, reject) => {
-		utterance.onstart = () => {
-		    // Mark as read the moment it actually starts speaking
-		    ttsCmd.readAt = Date.now();
-		    if (message.state) message.state.isRead = true;
-		    this.DebugPrint({ msg: "TTS: Speech started..." });
-		};
-
-		utterance.onend = () => {
-		    this.DebugPrint({ msg: "TTS: Speech completed successfully." });
-		    resolve("SUCCESS"); 
-		};
-
-		utterance.onerror = (e) => {
-		    console.error("CallTts: TTS error:", e);
-		    // Mark as error so the timer doesn't retry this specific message
-		    ttsCmd.readAt = "ERROR"; 
-		    reject(new Error(`TTS failed: ${e.error}`));
-		};
-
-		// Standard cleanup: stop current audio and speak
-		    window.speechSynthesis.cancel();
-		    setTimeout(() => window.speechSynthesis.speak(utterance), 100); // ✅;
-	    })
-	}
-
-	async PlayAudioFromFilePath(path){
-		const audio = new Audio(path);
-		audio.play();
-	}
-
-/*
-	async function FileToJSON(file) {
-	    return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		
-		reader.onload = () => {
-		    const jsonObject = {
-			name: file.name,
-			type: file.type, // Important! Keeps track of what the file is
-			size: file.size,
-			rawData: reader.result // The Base64 string
-		    };
-		    resolve(JSON.stringify(jsonObject));
-		};
-
-		reader.onerror = (err) => reject(err);
-		reader.readAsDataURL(file);
-	    });
-	}
-
-	function playAudioFromBase64(jsonString) {
-	    const data = JSON.parse(jsonString);
-	    const base64Data = data.audioData;
-
-	    // 1. Split the metadata from the actual base64 content
-	    const [meta, block] = base64Data.split(';base64,');
-	    const contentType = meta.split(':')[1];
-
-	    // 2. Decode Base64 to binary
-	    const byteCharacters = atob(block);
-	    const byteNumbers = new Array(byteCharacters.length);
-	    for (let i = 0; i < byteCharacters.length; i++) {
-		byteNumbers[i] = byteCharacters.charCodeAt(i);
-	    }
-	    const byteArray = new Uint8Array(byteNumbers);
-
-	    // 3. Create the Blob
-	    const audioBlob = new Blob([byteArray], { type: contentType });
-
-	    // 4. Create a URL and Play
-	    const audioUrl = URL.createObjectURL(audioBlob);
-	    const audio = new Audio(audioUrl);
-	    
-	    audio.play();
-
-	    // Optional: Clean up memory after playing
-	    audio.onended = () => URL.revokeObjectURL(audioUrl);
-	}
-*/
-
 	
-
-	/**
-	 * Parses a single raw YouTube Live Chat Message object and adds it to the 
-	 * standardized unprocessed message template.
-	 * @param {Object} rawMessage A single raw message object from the YouTube API 'items' array.
-	 * @returns {void}
-	 */
-	ParseAndAddYouTubeV3MessagesToUnprocessedQueue(rawMessage) {
-	// Check if the input is a valid object
-	    this.DebugPrint({msg: "attempt to add message to unprocessed_queue:", rawMessage});
-	    if (!rawMessage || typeof rawMessage !== 'object' || !rawMessage.snippet) {
-	        console.warn("rawMessage is not an object, has no snippet, or undefined, skipping");
-	        return;
-	    }
-
-	    // Convert the ISO 8601 string to Unix time in milliseconds.
-	    const unixTimestampMs = new Date(rawMessage.snippet.publishedAt).getTime();
-
-	    // Create a new message object based on the class template
-	    let processedMessage = {
-		// Use a shallow copy of the template to avoid modifying the template itself
-		version : this.templates.unprocessed_message_v1.version,
-		apiVersion : 3, // WARN: do not change this, if this needs to be changed make a new function
-		platform : "YouTube",
-		// Set dynamic/specific fields
-		data : rawMessage, // Store the entire raw message object
-		receivedAt: unixTimestampMs, // Unix time in milliseconds
-		failedProcessingAt : undefined, 
-	    };
-
-	    this.DebugPrint({msg: "Adding message to unprocessed_queue: ", processedMessage});
-	    this.#state.unprocessed_queue.push(processedMessage)
-	    return(processedMessage);
-	}
-
-			// PRIVATE FUNCTIONS
 	#LSGI(id) {
 		try{
 		return localStorage.getItem(String(id));
@@ -2803,172 +3337,6 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		}
 	}
 
-			async ScoreMessage(message) { // TODO: MORSE CODE BREAKS THE SCORE: "..-. ..- -.-. -.- / -- --.- / .-.. .. ..-. ." == 440
-			    if(
-				    message == undefined 
-				    || message == null 
-				    || message == ""
-				    || message.length < 1
-				    || typeof(message) == "number"
-			    ){
-				this.DebugPrint({msg: "message is null, cannot score, returning 0", message});
-
-				    return 0;
-			    }
-			  // 1. DEFINE ALL SCORING FUNCTIONS (using arrow functions for
-			  // 'this' context)
-			this.DebugPrint({msg: "attempting to score message:", message});
-			  const CheckPunctuation = (message) => {
-			    let score = 0;
-
-			    // Long messages without basic punctuation get penalized
-			    if (message.length > 75) {
-			      if (!(message.includes(",") || message.includes(".") ||
-				    message.includes("?") || message.includes("!"))) {
-				score += 150;
-			      }
-			    }
-
-			    // Reward for proper spacing after end-of-sentence
-			    // punctuation
-			    for (let i = 0; i < message.length; ++i) {
-			      let char = message[i];
-
-			      if (char == "." || char == "?" || char == "!") {
-				// Check if the next 1, 2, or 3 characters contain a
-				// space (handles single space, double space, etc.)
-				const nextChar = message[i + 1];
-				const nextNextChar = message[i + 2];
-				const nextNextNextChar = message[i + 3];
-
-				if (nextChar == " " || nextNextChar == " " || nextNextNextChar == " ") {
-				  score += 30;
-				}
-			      }
-			    }
-			    this.DebugPrint({msg: `score CheckPunctuation(}) : ${score}`});
-			    return score;
-			  };
-
-				const CheckTrigrams = async (message) => {
-				  let score = 0;
-				  try {
-				    // Corrected Regex: \s+ (one or more whitespace characters)
-				    const words = message.trim().toLowerCase().split(/\s+/);
-
-				    // Ensure 'trigrams' exists or use this.#trigrams if it's a class property
-				    const trigramList = typeof trigrams !== 'undefined' ? trigrams : [];
-
-				    for (const word of words) {
-				      if (word.length >= 3) {
-					const currentTrigram = word.slice(0, 3);
-					
-					if (trigramList.includes(currentTrigram)) {
-					  score += 50;
-					} else {
-					  //score -= 50;
-					}
-				      }
-				    }
-				    return score;
-				  } catch (err) {
-				    // Log the actual error to your internal logs so you can see if it was a ReferenceError
-				    this.DebugPrint({ msg: "Trigram Fatal Error:", error: err.message });
-				    this.DebugPrint({msg: "Error processing trigrams logic.", type: "error",});
-				  }
-				};
-
-			  const CheckForRepeats = (message) => {
-			    let score = 0;
-			    // Safety: Stop 2 chars before the end to safely check i+1
-			    // and i+2
-			    for (let i = 0; i < message.length - 2; ++i) {
-			      let char = message[i];
-			      if (message[i + 1] == char &&message[i + 2] == char) {
-				score += 50;
-			      }
-			    }
-			    this.DebugPrint({msg: `score CheckForRepeats() : ${score}`});
-			    return score;
-			  };
-
-			  const CheckForCaps = (message) => {
-			    let score = 0;
-			    if (message[0] == message.charAt(0).toUpperCase()) {
-			      score += 20;
-			    } else {
-			      //score -= 10;
-			    }
-			    //this.DebugPrint(`score CheckForCaps() : ${score}`);
-			    return score;
-			  };
-
-			  const CheckForSpaces = (message) => {
-			    let scoreSe = 0;
-			    let spaceCount = 0;
-			    for (let i = 0; i < message.length; ++i) {
-			      if (message[i] == " ") {
-				spaceCount += 1;
-			      }
-			    }
-			    const nonSpaceLength = message.length - spaceCount;
-
-			    // Avoid division by zero if the message is only spaces
-			    // (though unlikely after cleaning)
-			    if (nonSpaceLength > 0 &&
-				(spaceCount * 100) / nonSpaceLength < 20) {
-			      //score -= 20;
-			    } else if (nonSpaceLength > 0) {
-			      score += 20;
-			    }
-
-			    this.DebugPrint({msg: `score CheckForSpaces() : ${score}`});
-			    return score;
-			  };
-
-			  const CheckForSpaceInChunk = (message) => {
-			    let score = 0;
-			    for (let i = 0; i < message.length; i += 32) {
-			      let chunk = message.slice(i, i + 32);
-			      if (!chunk.includes(" ")) {
-				//score -= 20;
-			      }
-			    }
-			    this.DebugPrint({msg: `score CheckForSpaceInChunk : ${score}`});
-			    return score;
-			  };
-
-			  // 2. SCORING EXECUTION
-
-			  let score = 0;
-
-			  const funcs = [
-			    CheckPunctuation,
-			    CheckTrigrams,
-			    //CheckForRepeats,
-			    CheckForCaps,
-			    CheckForSpaces,
-			    CheckForSpaceInChunk,
-			  ];
-
-			  for (const func of funcs) {
-			    let funcScore;
-
-			    if (func.constructor.name == 'AsyncFunction') {
-			      funcScore = await func(message);
-			    } else {
-			      funcScore = func(message);
-			    }
-
-			    score += funcScore;
-
-			    if (this.#state.config.debug == true) {
-			      this.DebugPrint({msg: `score eval at function call : ${score}`});
-			    }
-			  }
-
-			  return score;
-			}
 
 
 
@@ -3139,7 +3507,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 			
 			cmdDiv.innerHTML = `
 			    <div><strong>${cmd.command}</strong></div>
-			    <div style="font-size:0.8em; opacity:0.9; overflow-wrap:break-word;">${JSON.stringify(cmd.params)}</div>
+			    <div style="font-size:0.8em; filter:opacity(0.9); overflow-wrap:break-word;">${JSON.stringify(cmd.params)}</div>
 			`;
 			
 			if (typeof cmd.func === 'function') {
@@ -3188,7 +3556,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 			commandCellDiv.appendChild(cmdDiv);
 		    });
 		} else {
-		    commandCellDiv.innerHTML = '<span style="opacity:0.5;">-</span>';
+		    commandCellDiv.innerHTML = '<span style="filter:opacity(0.5);">-</span>';
 		}
 
 		tr.innerHTML = `
@@ -3650,6 +4018,7 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 					case("z"):
 					case(' '):
 					case("'"):
+					case('?'):
 						//formattedMessage[i] = formattedMessage[i];
 						break;
 				}
@@ -3678,6 +4047,23 @@ FindUserFromChannelIdAndReturnUuid(searchChannelId = undefined) {
 		let cmd;
 
 		try{
+			/* 
+				clip: {
+					version: 1,
+					command: "clip",
+					audio: null,
+					eventHtml: null,
+					flags: [
+						{ flag: ['l'], value: 1, description: "approximate duration of the clip in minutes", range: { min: 0.1, max: 10 } },
+					],
+					func: 'ProcessClipCommand', //function to call when triggered
+					AuthNeeded: { owner: false, admin: false, mod: false, trused: false
+					},
+					cost: 0,
+					state: {},
+					errInfo: {err: null, errMsg: null},
+				},
+			 */
 			cmd = this.templates.messageCommand;
 		}
 		catch(err){
@@ -3983,2393 +4369,88 @@ ProcessTtsCommand(processedMsg) {
     return cmd;
 }
 
-	GenerateBannedWordsConfig() {
-		this.DebugPrint({msg: "GENERATING BLACKLIST UI"});
-		
-		let container = this.CHE({
-		    type: 'div', 
-		    id: "blacklist-config",
-		    style: "border: var(--tib_border); border-radius: var(--tib_border-radius); padding: 0.5rem;"
-		});
-
-		let fileInputLabel = this.CHE({type:'label', innerText:"add banned words as a .csv or .json, feel free to drag and drop"});
-		fileInputLabel.style.color = "white";
-		container.append(fileInputLabel);
-		let fileInput = this.CHE({type:"input", inputType:"file"});
-		fileInput.addEventListener('change', (event) => {
-		    this.LoadBannedWords(event);
-		});
-		container.append(fileInput);
-
-		let inputContainer = this.CHE({
-		    type: 'div',
-		    style: "display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;"
-		});
-
-		let inputLabel = this.CHE({
-		    type: 'label',
-		    innerText: "Add New Banned Word",
-		    attributes: { for: 'banned-word-input' },
-		    style: "font-size: 0.8rem; color: white; font-weight: bold;"
-		});
-
-		let inputRow = this.CHE({ type: 'div', style: "display: flex; gap: 5px;" });
-
-		let wordInput = this.CHE({
-		    type: 'input',
-		    id: 'banned-word-input',
-		    attributes: { placeholder: "e.g. spam_link" },
-		    style: "flex-grow: 1;"
-		});
-
-		let addBtn = this.CHE({
-		    type: 'button',
-		    innerText: "add word",
-		    attributes: { type: 'button', placeholder: 'Add' },
-		    onClick: () => {
-			const val = wordInput.value.trim();
-			if (val) {
-			    this.AddBannedWord(val);
-			    wordInput.value = "";
-			    this.UpdateBannedWordsList();
-			}
-		    }
-		});
-
-		wordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
-
-		inputRow.append(wordInput, addBtn);
-		inputContainer.append(inputLabel, inputRow);
-		container.appendChild(inputContainer);
-
-		// 3. View Section (List)
-		let viewContainer = this.CHE({ type: 'details', id: 'blacklist-details' });
-		viewContainer.open = true;
-
-		let viewSummary = this.CHE({ 
-		    type: 'summary', 
-		    innerText: " Banned Words Database", 
-		    style: "cursor: pointer; font-weight: bold; color: #aaa;" 
-		});
-		
-		let list = this.CHE({ 
-		    type: "ul", 
-		    id: "banned-words-display-list",
-		    style: "list-style: none; padding: 10px 0; margin: 0; display: flex; flex-direction: column; gap: 5px;" 
-		});
-
-		viewContainer.append(viewSummary, list);
-		container.appendChild(viewContainer);
-
-		setTimeout(() => this.UpdateBannedWordsList(), 0);
-		
-		return container;
-	    }
-
-	    /**
-	     * Re-renders the list of banned words based on the current bannedWordsArray state.
-	     */
-	UpdateBannedWordsList() {
-		if(document == undefined){this.DebugPrint({msg: "no document, impossible to have list to update"}); return;}
-	    const listElement = document.getElementById("banned-words-display-list");
-	    if (!listElement) return;
-
-	    // Clear existing list
-	    listElement.innerHTML = "";
-
-	    const words = this.#state.bannedWordsArray; 
-	    
-	    // Safety check: if words isn't iterable, exit early
-	    if (!words) return;
-
-	    this.DebugPrint("updating banned words display from banned words array", this.#state.bannedWordsArray);
-	    for (let i = 0; i < words.length; i++) {
-		const wordData = words[i];
-		
-		// Handle both simple string arrays or objects with hit counts
-		const word = typeof wordData === 'string' ? wordData : wordData.word;
-		const hits = wordData.hitCount || 0;
-
-		const li = this.CHE({
-		    type: 'li',
-		    style: "display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding: 5px;"
-		});
-
-		// Left side: Word and Hit Tally
-		const labelContainer = this.CHE({ 
-		    type: 'div', 
-		    style: "display: flex; gap: 10px; align-items: center;" 
-		});
-
-		// Label for the word itself
-		const wordSpan = this.CHE({ 
-		    type: 'span', 
-		    innerText: word, 
-		    style: "font-weight: bold; color: var(--color-text);" 
-		});
-
-		// Label for the tally/hits
-		const hitTally = this.CHE({ 
-		    type: 'span', 
-		    innerText: `${hits} hits`,
-		    style: "font-size: 0.75rem; color: #888; background: #222; padding: 2px 6px; border-radius: 4px;"
-		});
-
-		labelContainer.appendChild(wordSpan);
-		if (hits > 0) labelContainer.appendChild(hitTally);
-
-		// Right side: Remove Button
-		const removeBtn = this.CHE({
-		    type: 'span',
-		    innerText: "❌",
-		    style: "cursor: pointer; padding: 5px;",
-		    onClick: () => {
-			// Assuming your TrieTree removal logic
-			this.RemoveBannedWord(word);
-			this.UpdateBannedWordsList();
-		    }
-		});
-
-		li.appendChild(labelContainer);
-		li.appendChild(removeBtn);
-		listElement.appendChild(li);
-	    }
-	}
-
 	/**
 	 * Generates the Control Bar UI for Saving, Loading, and Monitoring.
 	 * @param {HTMLElement} container - The element to attach the control bar to.
 	 */
-	GenerateControlBarUI(container) {
-		if(document == undefined){this.DebugPrint({msg: "no document, cannot append a control bar ui"}); return}
-		let controlContainer = this.CHE({type: 'div'})
-		this.DebugPrint("GENERATING CONTROL BAR UI");
-	    // 1. Main Wrapper
-	    const footer = document.createElement('div');
-	    footer.style.cssText = `
-		background-color: #033; 
-		border-radius: 1.4rem; 
-		height: auto; 
-		position: relative; 
-		bottom: 0px; 
-		display: flex; 
-		flex-direction: row;
-		margin-top: 20px;
-		flex-wrap: wrap;
-		gap: 1rem;
-	    `;
 
-	    // Helper to create the column containers
-	    const createColumn = () => {
-		const col = document.createElement('div');
-		col.style.cssText = `
-		    height: 100%; 
-		    /*width: 16rem; */
-		    padding: calc(var(--tib_padding) * 4); 
-		    display: flex; 
-		    flex-direction: column; 
-		    gap: 10px;
-		`;
-		return col;
-	    };
+	PushToUnprocessedQueue(u_msg){
+		/*
+		unprocessed_message_v1: {
+			version : 1,
+			apiVersion : 3, // youtube,
+			data : null,
+			dateTime : null,
+			platform : null,
+			failedProcessingAt : null,
+		},
+		*/
 
-	    // Helper to create buttons
-	    const createBtn = (imageLink, altText, bgColor, onClick) => {
-		const btn = document.createElement('button');
-		if(imageLink == undefined){
-			btn.type = "button";
-			btn.value = altText;
-			btn.style.cssText = `
-			    background-color: ${bgColor}; 
-			    color: black; 
-			    user-select: none; 
-			    cursor: pointer; 
-			    font-weight: bold; 
-			    border: none; 
-			    padding: 5px; 
-			    border-radius: 4px;
-			`;
-			btn.onclick = onClick;
-			return btn;
-		}
+		if(u_msg.version == null){this.DebugPrint({
+			msg: "cannot push message to unprocessed queue,",
+			val: u_msg,
+			err: "no version number",
+			t: "error"
+		});}
+		if(u_msg.apiVersion == null){this.DebugPrint({
+			msg: "cannot push message to unprocessed queue,",
+			val: u_msg,
+			err: "no api version",
+			t: "error"
+		});}
+		if(u_msg.data == null){this.DebugPrint({
+			msg: "cannot push message to unprocessed queue,",
+			val: u_msg,
+			err: "no data",
+			t: "error"
+		});}
+		if(u_msg.dateTime == null){dateTime == Date.now()}
+		if(u_msg.platform == null){this.DebugPrint({
+			msg: "cannot push message to unprocessed queue,",
+			val: u_msg,
+			err: "no datetime",
+			t: "error"
+		});}
+		if(u_msg.platform == null){this.DebugPrint({
+			msg: "cannot push message to unprocessed queue,",
+			val: u_msg,
+			err: "no datetime",
+			t: "error"
+		});}
 
-		const img = document.createElement('img');
-		btn.type = "button";
-		img.src = imageLink;
-		img.alt = altText;
-		img.style.userSelect = "none";
-		img.width = "256";
-		img.height= "256";
-		img.style.maxHeight = "100%";
-		img.style.maxWidth = "100%";
-		img.style.height = "3rem";
-		img.style.width = "3rem";
-		img.style.minHeight = "1rem";
-		img.style.minWidth = "1rem";
-		btn.style.cssText = `
-		    background-color: ${bgColor}; 
-		    color: black; 
-		    user-select: none; 
-		    cursor: pointer; 
-		    font-weight: bold; 
-		    border: none; 
-		    padding: 5px; 
-		    border-radius: 4px;
-		`;
-		btn.onclick = onClick;
-		btn.append(img);
-
-		return btn;
-	    };
-
-	    let buttonsContainer = document.createElement("div");
-		buttonsContainer.style = "width:100%;";
-		    let IDs = [
-			"startMonitorMessages",
-			"startTts",
-			"startEventMonitor",
-			"stopMonitorMessages",
-			"stopTts",
-			"stopEventMonitor",
-		    ];
-		    let startButtons = document.createElement("div");
-			startButtons.style = `
-				display:flex;
-				flex-direction:row;
-			`;
-			    let activeStartButtonStyle = `
-					background-color: #0f0;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			    let inactiveStartButtonStyle = `
-					background-color: #030;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			let subStartButtons = document.createElement("div");
-			subStartButtons.style = `
-				display: flex;
-				flex-direction: column;
-			`;
-				let startMonitorMessages = document.createElement("button");
-				startMonitorMessages.innerText = "startMonitorMessages";
-				startMonitorMessages.id = IDs[0];
-				startMonitorMessages.style = inactiveStartButtonStyle;
-				startMonitorMessages.onclick = () => {
-					let elem = document.getElementById(IDs[0]);
-					let counterElem = document.getElementById(IDs[0+3]);
-					elem.style = activeStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStartButton");
-					    mainStart.style = activeStartButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStopButton");
-					    mainStop.style = inactiveStopButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					counterElem.style = inactiveStopButtonStyle;
-					console.log("startMonitorMessages clicked");
-					window.Cockatiel.StartMonitoringMessages();
-				}
-				let startTts = document.createElement("button");
-				startTts.innerText = "startTts";
-				startTts.id = IDs[1];
-				startTts.style = inactiveStartButtonStyle;
-				startTts.onclick = () => {
-					let elem = document.getElementById(IDs[1]);
-					let counterElem = document.getElementById(IDs[1+3]);
-					elem.style = activeStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStartButton");
-					    mainStart.style = activeStartButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStopButton");
-					    mainStop.style = inactiveStopButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					counterElem.style = inactiveStopButtonStyle;
-					console.log("startTts clicked");
-					window.Cockatiel.StartTts();
-				}
-				let startEventMonitor = document.createElement("button");
-				startEventMonitor.innerText = "startEventMonitor";
-				startEventMonitor.id = IDs[2];
-				startEventMonitor.style = inactiveStartButtonStyle;
-				startEventMonitor.onclick = () => {
-					let elem = document.getElementById(IDs[2]);
-					let counterElem = document.getElementById(IDs[2+3]);
-					elem.style = activeStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[0]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[1]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[2]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStartButton");
-					    mainStart.style = activeStartButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStopButton");
-					    mainStop.style = inactiveStopButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					counterElem.style = inactiveStopButtonStyle;
-					console.log("startEventMonitor clicked");
-					window.Cockatiel.StartEventMonitor();
-				}
-			subStartButtons.append(startMonitorMessages, startTts, startEventMonitor);
-
-			let startButton = document.createElement("button");
-			startButton.style = inactiveStartButtonStyle; 
-			startButton.style.height = "4.5rem";
-			startButton.innerText = "start cockatiel";
-			startButton.id = "cockatielStartButton";
-			startButton.onclick = () => {
-				window.Cockatiel.StartMonitoringMessages();
-				window.Cockatiel.StartTts();
-				window.Cockatiel.StartEventMonitor();	
-
-				document.getElementById(IDs[0]).style = activeStartButtonStyle;
-				document.getElementById(IDs[0]).setAttribute("isActive", true);
-				document.getElementById(IDs[1]).style = activeStartButtonStyle;
-				document.getElementById(IDs[1]).setAttribute("isActive", true);
-				document.getElementById(IDs[2]).style = activeStartButtonStyle;
-				document.getElementById(IDs[2]).setAttribute("isActive", true);
-				document.getElementById(IDs[3]).style = inactiveStopButtonStyle;
-				document.getElementById(IDs[3]).setAttribute("isActive", false);
-				document.getElementById(IDs[4]).style = inactiveStopButtonStyle;
-				document.getElementById(IDs[4]).setAttribute("isActive", false);
-				document.getElementById(IDs[5]).style = inactiveStopButtonStyle;
-				document.getElementById(IDs[5]).setAttribute("isActive", false);
-			        document.getElementById("cockatielStartButton").style = activeStartButtonStyle + "; height:4.5rem;";
-			        document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem;";
-			};
-		    startButtons.append(subStartButtons, startButton);
-		    let stopButtons = document.createElement("div");
-			let activeStopButtonStyle = `
-					background-color: #f00;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			let inactiveStopButtonStyle = `
-					background-color: #600;
-					color: #fff; 
-					height:1.5rem;
-					width:12rem;
-				`;
-			stopButtons.style = `
-					display:flex;
-					flex-direction:row;
-				`;
-			let subStopButtons = document.createElement("div");
-			subStopButtons.style = `
-				display: flex;
-				flex-direction: column;
-			`;
-				let stopMonitorMessages = document.createElement("button");
-				stopMonitorMessages.innerText = "stopMonitorMessages";
-				stopMonitorMessages.id = IDs[3];
-				stopMonitorMessages.style = activeStopButtonStyle;
-				stopMonitorMessages.onclick = () => {
-					let elem = document.getElementById(IDs[3]);
-					let counterElem = document.getElementById(IDs[3-3]);
-					elem.style = activeStopButtonStyle;
-					counterElem.style = inactiveStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStopButton");
-					    mainStart.style = activeStopButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStartButton");
-					    mainStop.style = inactiveStartButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					console.log("stopMonitorMessages clicked");
-					window.Cockatiel.StopMonitoringMessages();
-				}
-				let stopTts = document.createElement("button");
-				stopTts.innerText = "stopTts";
-				stopTts.id = IDs[4];
-				stopTts.style = activeStopButtonStyle;
-				stopTts.onclick = () => {
-					let elem = document.getElementById(IDs[4]);
-					let counterElem = document.getElementById(IDs[4-3]);
-					elem.style = activeStopButtonStyle;
-					counterElem.style = inactiveStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStopButton");
-					    mainStart.style = activeStopButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStartButton");
-					    mainStop.style = inactiveStartButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					console.log("stopTts clicked");
-					window.Cockatiel.StopTts();
-				}
-				let stopEventMonitor = document.createElement("button");
-				stopEventMonitor.innerText = "stopEventMonitor";
-				stopEventMonitor.id = IDs[5];
-				stopEventMonitor.style = activeStopButtonStyle;
-				stopEventMonitor.onclick = () => {
-					let elem = document.getElementById(IDs[5]);
-					let counterElem = document.getElementById(IDs[5-3]);
-					elem.style = activeStopButtonStyle;
-					counterElem.style = inactiveStartButtonStyle;
-					elem.setAttribute("isActive", true);
-					counterElem.setAttribute("isActive", false);
-					if (
-					    document.getElementById(IDs[3]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[4]).getAttribute("isActive") === "true" 
-					    && document.getElementById(IDs[5]).getAttribute("isActive") === "true"
-					) {
-					    // If all three sub-start buttons are active, make the main Start button active
-					    let mainStart = document.getElementById("cockatielStopButton");
-					    mainStart.style = activeStopButtonStyle;
-					    mainStart.style.height = "4.5rem";
-					    
-					    // Also reset the main Stop button to inactive
-					    let mainStop = document.getElementById("cockatielStartButton");
-					    mainStop.style = inactiveStartButtonStyle;
-					    mainStop.style.height = "4.5rem";
-					} else {
-					    // Fallback if one or more sub-start buttons are still inactive
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle;
-					    document.getElementById("cockatielStartButton").style.height = "4.5rem";
-
-					    document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-					    document.getElementById("cockatielStopButton").style = inactiveStopButtonStyle + "; height:4.5rem";
-					}
-					console.log("stopEventMonitor clicked");
-					window.Cockatiel.StopEventMonitor();
-				}
-			subStopButtons.append(stopMonitorMessages, stopTts, stopEventMonitor);
-			// main MonitoringStop()
-			let stopButton = document.createElement("button");
-			stopButton.id = "cockatielStopButton";
-			stopButton.innerText = "stop cockatiel";
-			stopButton.style = activeStopButtonStyle; 
-			stopButton.style.height = "4.5rem";
-			stopButton.onclick = () => {
-				window.Cockatiel.StopMonitoringMessages();
-				window.Cockatiel.StopTts();
-				window.Cockatiel.StopEventMonitor();
-				
-				
-				document.getElementById(IDs[0]).style = inactiveStartButtonStyle;
-				document.getElementById(IDs[0]).setAttribute("isActive", false);
-				document.getElementById(IDs[1]).style = inactiveStartButtonStyle;
-				document.getElementById(IDs[1]).setAttribute("isActive", false);
-				document.getElementById(IDs[2]).style = inactiveStartButtonStyle;
-				document.getElementById(IDs[2]).setAttribute("isActive", false);
-				document.getElementById(IDs[3]).style = activeStopButtonStyle;
-				document.getElementById(IDs[3]).setAttribute("isActive", true);
-				document.getElementById(IDs[4]).style = activeStopButtonStyle;
-				document.getElementById(IDs[4]).setAttribute("isActive", true);
-				document.getElementById(IDs[5]).style = activeStopButtonStyle;
-				document.getElementById(IDs[5]).setAttribute("isActive", true);
-			        document.getElementById("cockatielStartButton").style = inactiveStartButtonStyle + "; height:4.5rem";
-			        document.getElementById("cockatielStopButton").style = activeStopButtonStyle + "; height:4.5rem";
-			};
-		    stopButtons.append(subStopButtons, stopButton);
-		buttonsContainer.append(startButtons, stopButtons);
-
-		//status guide
-		let guide = document.createElement("ul");
-			//offline
-			let gray = document.createElement("li");
-			    gray.innerText = "nothing has been done yet";	
-			    gray.style = "color: lightgray;"
-			//tests
-			let blue = document.createElement("li");
-			    blue.innerText = "all checks passed, good to go!";	
-			    blue.style = "color: lightblue;"
-			//live
-			let purple = document.createElement("li");
-			    purple.innerText = "currently live and using";	
-			    purple.style = "color: lavender;"
-			//errors
-			let yellow = document.createElement("li");
-			    yellow.innerText = "minor issue, but is still operating!";	
-			    yellow.style = "color: lightyellow;"
-			let red = document.createElement("li");
-			    red.innerText = "critical issue, unable to get messages";	
-			    red.style = "color: pink;"
-			guide.append(gray, blue, purple, yellow, red);
-		buttonsContainer.append(guide);
-		//status notifiers
-		let grid_label = document.createElement("label");
-		grid_label.innerText = "platform status's:";
-		let grid = document.createElement("div");
-		grid.style = `
-			display:grid-template-columns(auto-fit, minmax(1.5rem, 1fr));
-			background-color: #000;
-		`;
-		    grid.style.padding = "1rem";
-		    grid.style.margin = "1rem";
-
-		function createStatusNotifier(platform, platformController) {
-		    let container = document.createElement("div");
-		    container.style.display = "flex"; // Helpful for alignment
-		    container.style.alignItems = "center";
-		    container.style.gap = "0.8rem";
-		    container.style.padding = "1rem";
-
-		    let icon_container = document.createElement("div");
-		    let icon = document.createElement("img");
-		    
-		    // Use integers for width/height properties
-		    icon.width = 32;
-		    icon.height = 32;
-
-		    switch(platform) {
-			case ("twitch"):
-			    icon.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Twitch_icon_2012.svg/1280px-Twitch_icon_2012.svg.png";
-			    break;
-			case ("youtube"):
-			    icon.src = "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/3840px-YouTube_full-color_icon_%282017%29.svg.png";
-			    break;
-			default:
-			    return null; // Return null instead of undefined for cleaner grid appending
-		    }
-
-		    icon_container.append(icon);
-		    container.append(icon_container);
-
-		    let stat_icon = document.createElement("div");
-		    stat_icon.style = `
-			width: 1rem;
-			height: 1rem;
-			border-radius: 100%;
-			background-color: #555555; 
-		    `;
-		switch(platform){
-			case("twitch"):
-				platformController.AddStartListener((() => (stat_icon.style.backgroundColor = "#00ff00")));
-				platformController.AddStopListener((() => (stat_icon.style.backgroundColor = "#555555")));
-				platformController.AddWarnListener((() => (stat_icon.style.backgroundColor = "#FFFF00")));
-				platformController.AddErrorListener((() => (stat_icon.style.backgroundColor = "#ff0000")));
-				// this.twitch.AddStatusListener(); THIS IS FOR THE NEXT PART
-				break;
-			case("youtube"):
-				
-				break;
-		}
-		    
-		    container.append(stat_icon);
-		    return container;
-		}
-
-		// When appending, filter out any null returns from the default case
-		const twitchNotifier = createStatusNotifier("twitch", this.twitch);
-		const youtubeNotifier = createStatusNotifier("youtube", this.yt);
-
-		if (twitchNotifier) grid.append(twitchNotifier);
-		if (youtubeNotifier) grid.append(youtubeNotifier);
-
-		buttonsContainer.append(grid_label, grid);
-
-
-	    //call next tts button
-	    const callTtsColumn = createColumn();
-	    const callTtsBtn = createBtn("../assets/call_tts_message.png", "Call next TTs Message", "#88f", async () => {
-		    this.FindOldestUnreadTtsAndCall();
-	    });
-	    callTtsColumn.append(callTtsBtn);
-	    //footer.append();
-		
-	    //call next tts button
-	    const callLoopColumn = createColumn();
-	    const callLoopBtn = createBtn("../assets/call_tts_message.png", "call loop (ie process unprocessed queue)", "#f00", async () => {
-		    this.#DaLoop();
-	    });
-	    callLoopColumn.append(callLoopBtn);
-
-	    // --- COLUMN 3: STATE (Export/Import) ---
-	    const exportInportColumn = createColumn();
-
-
-	    const exportBtn = createBtn("../assets/export_settings.png", "Export Settings", "#ff0", () => {
-	    // 1. Get the JSON string from your class
-	    const data = window.Cockatiel.ExportState();
-	    
-	    // 2. Create a Blob (Binary Large Object) with the data
-	    const blob = new Blob([data], { type: "application/json" });
-	    
-	    // 3. Create a temporary anchor (<a>) element
-	    const url = URL.createObjectURL(blob);
-	    const link = document.createElement("a");
-	    
-	    // 4. Set the filename and the target URL
-	    link.href = url;
-	    link.download = "cockatiel_settings.json";
-	    
-	    // 5. Trigger the download and clean up
-	    document.body.appendChild(link);
-	    link.click();
-	    document.body.removeChild(link);
-	    URL.revokeObjectURL(url); // Free up memory
-	});
-
-
-
-	    const importLabel = document.createElement('label');
-	    importLabel.innerText = "Import settings from file";
-	    importLabel.style.cssText = "color: white; font-size: 0.8rem; margin-top: 5px;";
-
-	    const fileInput = document.createElement('input');
-	    fileInput.id = "state_input";
-	    fileInput.type = "file";
-	    fileInput.style.backgroundColor = "#f0f";
-	    fileInput.addEventListener('change', (event) => {
-	        this.ImportState(event);
-	    });
-
-		//save/load inputs
-	    const saveLoadColumn = createColumn(); 
-	    const saveBtn = createBtn("../assets/save_inputs.png", "save all inputs", "#0f0", () => {
-		let inputs = document.getElementsByTagName('input');
-		for (let x of inputs) {
-		    if (x.id && x.type != 'button' && x.type != 'file') {
-			localStorage.setItem(x.id, x.value);
-		    }
-		}
-		console.log("All inputs saved to LocalStorage.");
-	    });
-	    saveBtn.innerText = "save inputs";
-
-	    const loadBtn = createBtn("../assets/load_inputs.png", "load all inputs", "#ff0", async () => {
-		console.log("Loading values from LocalStorage...");
-		let inputs = document.getElementsByTagName("input");
-		for (let x of inputs) {
-		    if (x.id && x.type !== "button" && x.type !== "file") {
-			let savedValue = localStorage.getItem(String(x.id));
-			if (savedValue !== null) {
-			    x.value = savedValue;
-			}
-		    }
-		}
-		if (window.Cockatiel && window.Cockatiel.yt) {
-		    await window.Cockatiel.yt.LoadValuesFromLocalStorage();
-		}
-	    });
-	    loadBtn.innerText = "load inputs";
-
-	    saveLoadColumn.append(saveBtn, loadBtn);
-
-	    footer.append(
-		    buttonsContainer,
-		    callTtsColumn,
-		callLoopColumn,
-		    exportBtn,
-		    saveLoadColumn,
-		    fileInput,
-	    );
-
-	    controlContainer.appendChild(footer);
-
-	    //tests 	
-		let tests = document.createElement("details");
-		tests.style = "color:white;";
-		let summary = document.createElement("summary");
-		summary.innerText = "youtube test events";
-		tests.append(summary);
-
-		// superChatEvent - message
-		let superChatEventMessages = [
-			{
-				"version": 1,
-				"apiVersion": 3,
-				"platform": "YouTube",
-				"data": {
-					"kind": "youtube#liveChatMessage",
-					"etag": "cyISaLoRJzops1Dhjhwp5ineYeI",
-					"id": "LCC.EhwKGkNLanpxY2J1dnBNREZRbkN3Z1FkVGhZVVJB",
-					"snippet": {
-						"type": "superChatEvent",
-						"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
-						"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
-						"publishedAt": "2026-03-27T00:52:12.560546+00:00",
-						"hasDisplayContent": true,
-						"displayMessage": "CA$2.00 from @vulbyte: \"IS A TEST OF THE YOUTUBE API WITH A MESSAGE\"",
-						"superChatDetails": {
-							"amountMicros": "2000000",
-							"currency": "CAD",
-							"amountDisplayString": "CA$2.00",
-							"userComment": "HERE IS A TEST OF THE YOUTUBE API WITH A MESSAGE",
-							"tier": 2
-						}
-					},
-					"authorDetails": {
-						"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
-						"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
-						"displayName": "@vulbyte",
-						"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
-						"isVerified": false,
-						"isChatOwner": true,
-						"isChatSponsor": false,
-						"isChatModerator": false
-					}
-				},
-				"receivedAt": 1774572732560
-			},
-			{ //donation with no message
-				    "version": 1,
-				    "apiVersion": 3,
-				    "platform": "YouTube",
-				    "data": {
-					"kind": "youtube#liveChatMessage",
-					"etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
-					"id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
-					"snippet": {
-					    "type": "superChatEvent",
-					    "liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
-					    "authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
-					    "publishedAt": "2026-03-26T21:07:12.021491+00:00",
-					    "hasDisplayContent": true,
-					    "displayMessage": "CA$1.00 from @vulbyte",
-					    "superChatDetails": {
-						"amountMicros": "1000000",
-						"currency": "CAD",
-						"amountDisplayString": "CA$1.00",
-						"tier": 1
-					    }
-					},
-					"authorDetails": {
-					    "channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
-					    "channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
-					    "displayName": "@vulbyte",
-					    "profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
-					    "isVerified": false,
-					    "isChatOwner": true,
-					    "isChatSponsor": false,
-					    "isChatModerator": false
-					}
-				    },
-				    "receivedAt": 1774559232021
-				}
-			];
-		    /*
-		    --scoreColor1000plus: #E62117;
-		    --scoreColor500plus: #E91E63;
-		    --scoreColor100plus: #FFCA28;
-		    --scoreColor50plus: #1DE9B6;
-		    --scoreColor20plus: #00E5FF;
-		    --scoreColor0plus: #1E88E5;
-		    --scoreColorBelow0: #0000E5;
-		    */
-		let superChatTest = document.createElement("button");
-		superChatTest.innerText =  'test "superChatEvent" message';
-		superChatTest.style = `
-			background-color: "#1E88E5";
-			color: "#fff";
-		`;
-		superChatTest.onclick = () => {
-			this.yt.ProcessYoutubeV3Data_v1(superChatEventMessages[
-				Math.floor(Math.random()*superChatEventMessages.length)
-			]);
-		};
-
-		tests.append(superChatTest);	
-
-		let mock = this.CreateMockYoutubeMessageUI();
-		tests.append(mock);
-
-		let testMessageInput = document.createElement("div");
-			let messageInput = document.createElement("input");
-			messageInput.type = "text";
-			messageInput.id = String("youtubeTestInput" + String(crypto.randomUUID()));
-			let messageTester = document.createElement("button");
-			messageTester.innerText = "send a test message";
-			messageTester.onclick = () => {
-				let mockHtml = "";
-				console.warn(mockHtml);
-			};	
-			testMessageInput.append(messageInput, messageTester);
-		tests.append(testMessageInput);
-
-		controlContainer.append(tests);
-	    return controlContainer;
+		this.#state.unprocessed_queue.push(u_msg);
 	}
 
-	ModifyUserPoints(targetUuid, amount) {
-	    // 1. Safety check for UUID
-	    if (!targetUuid) {
-		throw new Error("ModifyUserPoints failed: targetUuid is null or undefined");
-	    }
+	async PlaySound(input = {
+		soundfile: null,
+		volumne: null,
+		pitch: null,
+		rate: null,
+	}){
+		// 1. Create the Audio Context (The central hub)
+		const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-	    // 2. Direct lookup using the UUID as the key
-	    // This replaces the 'for' loop entirely
-	    let user = this.#state.users[targetUuid];
+		// 2. Load the file as an ArrayBuffer (requires a fetch operation)
+		fetch(input.soundfile)
+		  .then(response => response.arrayBuffer()) // Get the raw binary data
+		  .then(arrayBuffer => {
+		    // 3. Decode the buffer into an AudioBuffer (The actual playable sound data)
+		    audioContext.decodeAudioData(arrayBuffer)
+		      .then(audioBuffer => {
+			// 4. Create a source node from the buffer
+			const source = audioContext.createBufferSource();
+			source.buffer = audioBuffer;
 
-	    if (user) {
-		// 3. Update the points
-		// We use || 0 to handle users who might not have a points property yet
-		user.points = (user.points || 0) + amount;
-		
-		this.DebugPrint({
-		    msg: `Adjusted @${user.username || 'Unknown'} by ${amount}. New total: ${user.points}`,
-		    val: user
-		});
+			// 5. Connect the source to the speakers (destination)
+			source.connect(audioContext.destination);
 
-		// 4. Update UI to reflect the new points balance
-		this.UpdateUserDisplay();
-		return true;
-	    } else {
-		// 5. Handle user not found
-		this.DebugPrint({
-		    msg: `Warning: No user found with UUID ${targetUuid}`,
-		    type: "warn"
-		});
-		return false;
-	    }
+			// 6. Start playback!
+			source.start(0); // Start playing immediately
+		      })
+		      .catch(err => console.error('Error decoding audio:', err));
+		  })
+		  .catch(err => console.error('Error fetching audio:', err));
 	}
-
-	GenerateUserManagement(parentId = "user-display-list") {
-	    this.DebugPrint("Generating user management item");
-	    if (typeof document === 'undefined') return;
-
-	    let listElement = document.getElementById(parentId);
-	    let listContainer;
-
-	    // 1. Create structure if it doesn't exist
-	    if (!listElement) {
-		this.DebugPrint("No user management id found, creating structure");
-		
-		// Note: 'details' not 'detail' (HTML tag is <details>)
-		listContainer = this.CHE({ type: 'details', id: parentId + "-container" });
-		const listSummary = this.CHE({ 
-			type: 'summary', 
-			innerText: "User Details", 
-			/*style: "color: #ffffff;"*/
-		});
-		listElement = this.CHE({ 
-			type: 'div', 
-			id: parentId, 
-			/*style: "color: #ffffff;" */
-		});
-
-		listContainer.appendChild(listSummary);
-		listContainer.appendChild(listElement); // Attach the list to the container!
-	    }
-
-	    // 2. Clear existing list
-	    listElement.innerHTML = "";
-
-	    // Always return the top-level element created/found
-	    return listContainer; //|| document.getElementById(parentId + "-container");
-	}	
-
-UpdateUserDisplay() {
-    if (typeof document === 'undefined') return;
-
-    const listElement = document.getElementById("user-display-list");
-    if (!listElement) return;
-
-    // 1. Convert Object to Array and Sort
-    const userMap = this.#state.users || {};
-    // Get the values (user objects) so we can actually sort them
-    let userList = Object.values(userMap);
-
-    if (userList.length > 1) {
-        userList.sort((a, b) => 
-            (a.username || "").localeCompare(b.username || "", undefined, { sensitivity: 'base' })
-        );
-    }
-
-    // 2. Clear the list only after we know we have data to draw
-    listElement.innerHTML = "";
-
-    // 3. Loop through the sorted array
-    for (const u of userList) {
-        // --- PRE-CALCULATIONS (Your CS color logic is great, keeping it) ---
-        let cs = u.conduct_score || 0;
-        /*let csColor = "#fff";*/
-        if (cs < 0) {
-            csColor = `rgb(255, ${Math.max(0, 255 + (cs * 51))}, ${Math.max(0, 255 + (cs * 51))})`;
-            if (cs <= -5) csColor = "#f00";
-        } else if (cs > 0) {
-            csColor = `rgb(${Math.max(0, 255 - (cs * 51))}, 255, ${Math.max(0, 255 - (cs * 51))})`;
-            if (cs >= 5) csColor = "#0f0";cock
-        }
-
-        const details = this.CHE({
-            type: 'details',
-            style: "border-bottom: 1px solid #333; font-family: monospace; font-size: 0.75rem; /*color: #ccc;*/"
-        });
-
-        const summary = this.CHE({
-            type: 'summary',
-            style: "display: flex; align-items: center; padding: 6px; cursor: pointer; gap: 8px; outline: none; list-style: none;"
-        });
-
-        // Identity Block (Simplified for brevity, but matches your logic)
-        const identity = this.CHE({ type: 'div', style: "display: flex; gap: 5px; width: 160px; align-items: center; flex-shrink: 0;" });
-        const flags = [
-            { cond: u.isChatAdmin, col: '#f44', char: 'A', desc: 'Admin' },
-            { cond: u.isChatModerator, col: '#5b5', char: 'M', desc: 'Moderator' },
-            { cond: u.isSponser, col: '#0af', char: 'S', desc: 'Sponsor' },
-            { cond: u.isVerified, col: '#ff0', char: 'V', desc: 'Verified' }
-        ].map(f => f.cond ? `<span title="${f.desc}" style="color:${f.col}; font-weight:bold;">${f.char}</span>` : '').join(' ');
-
-	    //console.warn(u);
-
-// 1. Create a "Primitive" copy of the icon string right now
-const currentIcon = u.icon ? String(u.icon) : null;
-
-// 2. Validate the string content specifically
-const isValidIcon = currentIcon && currentIcon !== "undefined" && currentIcon !== "null";
-
-// 3. Build the tag using the isolated variable
-const userIcon = isValidIcon 
-    ? `<img src="${currentIcon}" style="width:24px; height:24px; border-radius:50%; display:block;" referrerpolicy="no-referrer">` 
-    : `<span style="font-size:20px;">👤</span>`;
-
-	identity.innerHTML = `
-	    <span>${userIcon}</span>
-	    <div style="overflow:hidden;">
-		<div style="font-weight:bold; /*color:#fff;*/">${u.username || "???"}</div>
-		<div style="font-size:0.6rem;">${flags}</div>
-	    </div>`;
-
-        // Standing Block
-        const standing = this.CHE({ type: 'div', style: "display: flex; gap: 8px; width: 220px; flex-shrink: 0; border-left: 1px solid #444; padding-left: 8px;" });
-        standing.innerHTML = `
-            <span title="Points">PTS:<b style="color:#0ff;">${u.points}</b></span>
-            <span title="Conduct Score">CS:<b style="color:${csColor};">${cs}</b></span>
-            <span title="Bans" style="color:#f44;">B:<b>${(u.ttsBans || []).length}/${(u.channelBans || []).length}</b></span>
-        `;
-
-        // Metrics Block
-        const metrics = this.CHE({ type: 'div', style: "display: flex; gap: 10px; flex-grow: 1; border-left: 1px solid #444; padding-left: 8px;" });
-        const c = u.commendments || { community: [], engagement: [], support: [] };
-        const m = u.misconduct || { discrimination: [], harassment: [], spam: [], integrity: [] };
-        metrics.innerHTML = `
-            <span style="color:#5f5;">C:${c.community.length}/${c.engagement.length}/${c.support.length}</span> | 
-            <span style="color:#f55;">M:${m.discrimination.length}/${m.harassment.length}/${m.spam.length}/${m.integrity.length}</span>
-        `;
-
-        summary.append(identity, standing, metrics);
-
-        // Actions Panel
-        const actions = this.CHE({
-            type: 'div',
-            style: "display: flex; gap: 10px; align-items: center; padding: 10px; background: #1a1a1a; border-top: 1px solid #444; justify-content: flex-end;"
-        });
-
-        const ptsIn = this.CHE({ 
-            type: 'input', 
-            attributes: { type: 'number', value: '100' }, 
-            style: "width: 5rem; background: #000; color: #0f0; border: 1px solid #555; padding: 4px; font-weight: bold;" 
-        });
-
-        const giveBtn = this.CHE({ 
-            type: 'div', 
-            innerText: 'GIVE POINTS', 
-            style: "background:#ff0; color:black; padding: 5px 10px; cursor:pointer; font-weight:bold;",
-            // Use arrow function to preserve 'this' context
-            onClick: () => {
-                const amount = parseInt(ptsIn.value);
-                if (!isNaN(amount)) { 
-                    this.ModifyUserPoints(u.uuid, amount); 
-                    this.UpdateUserDisplay(); 
-                }
-            }
-        });
-
-        actions.append(ptsIn, giveBtn);
-        details.append(summary, actions);
-        listElement.appendChild(details);
-    }
-}
-
-	/*PushToSubWindow(window_key, htmlString) {
-	    if(document == undefined){this.DebugPrint({msg: "cannot push to sub window, no document"}); return;}
-	    const targetWin = this.#state.subWindows[window_key];
-	    if (!targetWin || targetWin.closed) return;
-
-	    const viewport = targetWin.document.getElementById(`${window_key}-viewport`);
-	    if (!viewport) return;
-
-	    // Use insertAdjacentHTML to turn the string into real DOM elements
-	    viewport.insertAdjacentHTML('beforeend', htmlString);
-
-	    // Keep it scrolled to the bottom
-	    viewport.scrollTop = viewport.scrollHeight;
-	}*/
-
-	CreateSubWindow(args = {
-	    key: undefined,
-	    height: undefined,
-	    width: undefined,
-	    html: undefined,
-	    background: "black",
-	    color: "white",
-	    script: undefined,
-	    style: undefined,
-	    stylesheet: undefined,
-	}) {
-	    try {
-		if (typeof document === 'undefined') {
-		    this.DebugPrint({ msg: "no document, cannot create sub windows" });
-		    return;
-		}
-	    } catch (err) {
-		this.DebugPrint({ msg: "document not found", error: err });
-		return;
-	    }
-
-	    const existingWin = this.subWindows[args.key];
-	    if (existingWin && !existingWin.closed) {
-		existingWin.focus();
-		return;
-	    }
-
-	    const features = `width=${args.width},height=${args.height},popup=yes`;
-	    const newWin = window.open("", `win_${args.key}`, features);
-	    this.subWindows[args.key] = newWin;
-
-	    const doc = newWin.document;
-	    doc.title = `${args.key}`;
-
-	    // 1. Setup Styles
-	    doc.body.style.cssText = `
-		background:${args.background}; 
-		color:${args.color}; 
-		height:100vh;
-		margin:0; 
-		overflow:hidden; 
-		padding:0; 
-	    `;
-
-	    // override append style sheet
-	    if (args.style) {
-		const styleTag = doc.createElement('style');
-		styleTag.id = `style-${args.key}`;
-		styleTag.textContent = args.style;
-		doc.head.appendChild(styleTag);
-	    }
-
-		let linkTag; 
-		if (args.stylesheet) {
-		    // Fix 1: Use the variable directly, not as a string "args.stylesheet"
-		    // Fix 2: Assign to the existing let variable instead of redeclaring const
-		    linkTag = doc.createElement('link');
-		    linkTag.rel = 'stylesheet';
-		    linkTag.type = 'text/css';
-		    linkTag.href = args.stylesheet; 
-
-		    doc.head.appendChild(linkTag);
-		    this.DebugPrint({ msg: `External stylesheet linked: ${args.stylesheet}` });
-		}
-
-	// 2. Setup HTML Structure
-	if(args.html != undefined){	
-		doc.body.innerHTML = args.html;
-	}
-	else{
-		doc.body.innerHTML = `
-	<div id="${args.key}-viewport" style="
-	    width: 100%; 
-	    height: 100vh; 
-	    overflow-y: auto; 
-	    overflow-x: hidden; 
-	    display: flex; 
-	    flex-direction: column; /* Normal flow: top to bottom */
-	    justify-content: flex-start; 
-	    gap: 12px;
-	    padding: 1rem;
-	    box-sizing: border-box;
-	    scroll-behavior: smooth; /* Makes the auto-scroll look nice */
-	"></div>
-	`;
-		// 3. Inject the Script
-		if (args.script) {
-			const scriptEl = doc.createElement("script");
-			scriptEl.type = "text/javascript";
-
-			// We wrap the script to ensure it has access to the viewport immediately
-			scriptEl.textContent = `
-		    (function() {
-			console.log("Sub-window '${args.key}' initialized.");
-			${args.script}
-		    })();
-		`;
-
-			doc.body.appendChild(scriptEl);
-		}
-	}
-	}
-
-	async GetTrigramsFromFile() {
-		let data
-	    try {
-		const response = await fetch('./trigrams.json');
-		data = await response.json();
-	    } catch (err) {
-		this.DebugPrint({msg: "Browser: Failed to fetch trigrams.json", type: "err", error: err});
-		return
-	    }
-	
-		// ERR: this file cannot be got
-		// return data 
-		return ["hel"];
-	}
-
-	CreateMessageHtml(p_msg, messageId) {
-	    // 1. Get User (Fixed property name to userUuid)
-	    let user = this.GetUserFromUuid(p_msg.userUuid || p_msg.uuid);
-
-	    // 2. Safely extract user info
-	    let icon = user?.icon || "/content/stream_utils/tib_stuff/default_icon.png";
-	    let username = user?.username || "Unknown User";
-
-	    let commendments = {
-		community: user?.stats?.community || 0,
-		engagement: user?.stats?.engagement || 0,
-		support: user?.stats?.support || 0,
-		rep: user?.stats?.rep || 0,
-	    };
-
-	    // 3. Extract Command and Message
-	    let commandStr = "";
-	    let displayMessage = p_msg.rawMessage || "";
-
-	    try {
-		const commandKeys = Object.keys(p_msg.commands);
-		if (commandKeys.length > 0) {
-		    const firstKey = commandKeys[0];
-		    commandStr = firstKey; // e.g., "tts" or "vote"
-		    displayMessage = p_msg.commands[firstKey].message || p_msg.processedMessage || p_msg.rawMessage;
-		}
-	    } catch (err) {
-		this.DebugPrint({ msg: "Error parsing commands", val: p_msg, err: err });
-	    }
-
-	    // 4. RETURN the template literal
-	    return `
-			<div class="chatMessageContainer" id="${messageId}">
-				<link rel="stylesheet" href="./stylesheets/chatMessage-modernMinimal.css">
-				<div class="chatUserBubble">
-					<div class="chatBubbleTailContainer">
-						<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src="/content/stream_utils/tib_stuff/whispy_tail.png"></div>
-					</div>
-					<div class="chatUserInfo" style="background-color:${
-		user.styling.chatMessageContainer.chatUserBubble.chatUserInfo.styling.backgroundColor
-					};">
-						<div class="chatUserImageContainer"><img class="chatUserImage" alt="" src="${icon}"></div>		
-						<div class="chatUserStats">
-							<div class="chatUsername">${username}</div>		
-							<div class="chatUserCommendations">
-								C: ${commendments.community}, 
-								E: ${commendments.engagement}, 
-								S: ${commendments.support}, 
-								R: ${commendments.rep}
-							</div>
-						</div>
-					</div>
-				</div>
-				<div class="chatMessageBubble">
-					<div class="chatCommandContainer">
-						<div class="chatCommand">${commandStr}</div>
-					</div>
-					<div class="chatMessage">${displayMessage}</div>
-				</div>
-			</div>
-		`;
-	}
-
-	CreateDonationHtml(p_msg, messageId) {
-		console.warn(JSON.stringify(p_msg));
-	    // 1. Get User (Fixed property name to userUuid)
-	    let user = this.GetUserFromUuid(p_msg.userUuid || p_msg.uuid);
-
-	    // 2. Safely extract user info
-	    let icon = user?.icon || "/content/stream_utils/tib_stuff/default_icon.png";
-	    let username = user?.username || "Unknown User";
-
-	    let commendments = {
-		community: user?.stats?.community || 0,
-		engagement: user?.stats?.engagement || 0,
-		support: user?.stats?.support || 0,
-		rep: user?.stats?.rep || 0,
-	    };
-
-	    // 3. Extract Command and Message
-	    let commandStr = "";
-	    let displayMessage = p_msg.rawMessage || "";
-
-	    // 4. RETURN the template literal
-	    return `
-		<div class="chatMessageContainer donor-neon" id="${messageId}" style="
-			font-size: 1.6rem;
-		    position: relative;
-		    padding: 0.3rem;
-		    background: linear-gradient(-90deg, #ffff00, #ff00ff, #00ffff, #ffff00);
-		    background-size: 200% 200%;
-		    animation: gradientMove 4s linear infinite;
-		    border-radius: 0.7rem;
-		    margin: 0.3rem 0.15rem;
-		    max-width:60rem;
-		">
-		    <style>
-			@keyframes gradientMove {
-			    0% { background-position: 0% 50%; }
-			    100% { background-position: 200% 50%; }
-			}
-		    </style>
-		    
-		    <div style="background: #000; border-radius: 0.0rem; padding: 0.5rem;">
-			<div style="display:flex; align-items: center; margin: 0.5rem;">
-			    <img src="${icon}" alt="" style="width:3rem !important; height:3rem !important; border-radius: 100%; box-shadow: 0 0 0.7rem #00ffff;">
-			    <div style="margin-left: 0.6rem;">
-				<span style="color: #00ffff; font-weight: 900; display:block;">
-					${p_msg.username}
-				</span>
-				<span style="color: #ff00ff;">
-					donation amount:
-				</span>
-				<span style="color: #ffff00;">
-					$${p_msg.donationAmount}
-				</span>
-			    </div>
-			</div>
-			<div style="color: #fff; font-family: sans-serif; letter-spacing: 0.1rem;">
-			    ${p_msg.processedMessage}
-			</div>
-		    </div>
-		</div>
-		`;
-	}
-
-	PushMessageToChatWindow(processedMsg) {
-	    if (!processedMsg) return;
-
-	    const win = this.subWindows[this.#state.windows.chat.key];
-	    if (!win || win.closed) {
-		this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
-		return;
-	    }
-
-	    const msgHTML = this.CreateMessageHtml(processedMsg, processedMsg.messageId);
-
-	    win.postMessage({ 
-		type: 'new_chat_msg', 
-		payload: { html: msgHTML } 
-	    }, "*");
-	}
-
-	PushDonationToChatWindow(processedMsg) {
-	    if (!processedMsg) return;
-
-
-	    const win = this.subWindows[this.#state.windows.chat.key];
-	    if (!win || win.closed) {
-		this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
-		return;
-	    }
-
-	let msgHTML = this.CreateDonationHtml(processedMsg);
-
-	    win.postMessage({ 
-		type: 'new_chat_msg', 
-		payload: { html: msgHTML } 
-	    }, "*");
-	}
-
-	PushSystemNotificaitonToChatWindow(strang) {
-	    if(!strang){
-		this.DebugPrint({msg: "strang is undefined, cannot print", type: 't'});
-		return false;
-	    }
-
-	    const win = /*structuredClone*/(this.subWindows[this.#state.windows.chat.key]);
-	    if (!win || win.closed) {
-		this.DebugPrint({ msg: "Sub-window unavailable", type: "w" });
-		return false;
-	    }
-
-	    let html = `
-		    <div style="
-		    	border: 0.2em solid #0ff;
-		    	border-radius:3rem;
-			background-color: #022;
-			color: #0ff;
-			font-family: helvetica, ariel, sans-serif;
-			padding: 0.8rem;
-		    ">
-			${strang}	
-		    </div>
-		`
-
-	    win.postMessage({ 
-		type: 'new_chat_msg', 
-		payload: { html: html } 
-	    }, "*");
-
-	    return true;
-	}
-
-	InitTimers(){
-		this.#state.timers = {
-			GetMessagesTimer: new IntTimer({
-				name: "GetMessagesTimer",
-				timeoutDuration: 15,
-			}),
-			ReadTtsTimer: new IntTimer({
-				name: "ReadTtsTimer",
-				timeoutDuration: 15,
-			}),
-			EventDisplayTimer: new IntTimer({
-				autoStart: true,
-				name: "EventDisplayTimer",
-				timeoutDuration: this.#state.windows.events.updateDelay,
-				emitOnStart: false, // if true, will emit when started
-				debug: true,
-			}),
-		};
-
-		this.#state.timers.GetMessagesTimer.AddTimeoutListener(() => this.#DaLoop()); 
-	}
-
-	/**
-	 * Generates a TTS Voice Tester UI that interfaces with window.Cockatiel.CallTts.
-	 * @returns {HTMLElement} The container element.
-	 */
-	CreateTtsVoiceTester() {
-	    const container = document.createElement("div");
-	    container.style = `
-		font-family: sans-serif; 
-		padding: 20px; 
-		background: #1a1a1a; 
-		color: #eee; 
-		border-radius: 12px; 
-		border: 1px solid #333; 
-		max-width: 90%;
-		margin:auto;
-	    `;
-
-	    // --- 1. Top Controls (Text, Pitch, Rate) ---
-	    const controlsGrid = document.createElement("div");
-	    controlsGrid.style = `
-		display: grid; 
-		grid-template-columns: 2fr 1fr 1fr; 
-		gap: 15px;
-		margin-bottom: 20px; 
-		align-items: end;
-	    `;
-
-	    const textGroup = document.createElement("div");
-	    textGroup.innerHTML = `<label style="
-		display:block; 
-		margin-bottom:5px; 
-		font-size:0.8rem; 
-		color:#888;
-	    ">Test Message</label>`;
-	    const testInput = document.createElement("input");
-	    testInput.value = "Testing the Cockatiel TTS system.";
-	    testInput.style = `
-		width:100%; 
-		padding:8px; 
-		/*background:#222; */
-		border:1px solid #444; 
-		/*color:#fff;*/
-		border-radius:4px; 
-		box-sizing: border-box;
-	    `;
-	    textGroup.appendChild(testInput);
-
-	// --- Pitch Group ---
-	const pitchGroup = document.createElement("div");
-	pitchGroup.innerHTML = `<label id="p-val" style="
-		display:block; 
-		margin-bottom:5px; 
-		font-size:0.8rem;
-		color:#888;
-	">Pitch: ${this.#state.commands.tts.flags.p.value}</label>`;
-
-	const pitchInput = document.createElement("input");
-	pitchInput.type = "range"; 
-	pitchInput.min = "0"; 
-	pitchInput.max = "2"; 
-	pitchInput.step = "0.1"; 
-	pitchInput.value = this.#state.commands.tts.flags.p.value;
-
-	pitchInput.oninput = () => {
-	    // 1. Update the UI Label
-	    document.getElementById("p-val").innerText = `Pitch: ${pitchInput.value}`;
-	    // 2. Update the Config State
-	    this.#state.commands.tts.flags.p.value = Number(pitchInput.value);
-	};
-	pitchGroup.appendChild(pitchInput);
-
-
-	// --- Rate Group ---
-	const rateGroup = document.createElement("div");
-	rateGroup.innerHTML = `<label id="r-val" style="
-		display:block; 
-		margin-bottom:5px;
-		font-size:0.8rem;
-		color:#888;
-	">Rate: ${this.#state.commands.tts.flags.r.value}</label>`;
-
-	const rateInput = document.createElement("input");
-	rateInput.type = "range"; 
-	rateInput.min = "0.1"; 
-	rateInput.max = "3"; 
-	rateInput.step = "0.1"; 
-	rateInput.value = this.#state.commands.tts.flags.r.value;
-
-	rateInput.oninput = () => {
-	    // 1. Update the UI Label
-	    document.getElementById("r-val").innerText = `Rate: ${rateInput.value}`;
-	    // 2. Update the Config State
-	    this.#state.commands.tts.flags.r.value = Number(rateInput.value);
-	};
-	rateGroup.appendChild(rateInput);
-
-	    controlsGrid.append(textGroup, pitchGroup, rateGroup);
-	    container.appendChild(controlsGrid);
-
-	    // --- 2. Table Setup ---
-	    const tableContainer = document.createElement("div");
-	    tableContainer.style = `
-		max-height: 400px;
-		overflow-y: auto;
-		border: 1px solid #333;
-		border-radius: 6px;
-	    `;
-	    const table = document.createElement("table");
-	    table.style = `
-		width: 100%; 
-		border-collapse: collapse;
-		background: #252525;
-		font-size: 0.9rem;
-	    `;
-	    
-	    const tbody = document.createElement("tbody");
-	    table.innerHTML = `
-	    <thead style="
-		background:#333;
-		position:sticky;
-		top:0;
-		z-index:1;
-	    ">
-	        <tr>
-		    <th style="
-			padding:10px;
-			text-align:left
-			;">ID
-		    </th>
-		    <th style="
-		    	text-align:left;
-		    ">
-		    	Voice
-		    </th>
-		    <th>
-		    	Lang
-		    </th>
-		    <th style="
-		    	text-align:center;
-		    ">
-			Action
-		    </th>
-		</tr>
-	    </thead>`;
-
-	    // --- 3. Voice Loading Logic ---
-	    const refreshVoices = () => {
-		const voices = window.speechSynthesis.getVoices();
-		const currentDefaultIdx = this.#state.commands.tts.flags.v.value;
-		tbody.innerHTML = "";
-
-		voices.forEach((voice, index) => {
-		    const isDefault = index === currentDefaultIdx;
-		    const row = document.createElement("tr");
-		    row.style.borderBottom = "1px solid #333";
-		    
-		    // Highlight logic
-		    if (isDefault) {
-			row.style.backgroundColor = "rgba(255, 0, 100, 0.15)";
-		    }
-
-		    row.innerHTML = `
-			<td style="padding:10px; color:${isDefault ? '#ff0064' : '#666'}; font-weight:${isDefault ? 'bold' : 'normal'};">${index}</td>
-			<td style="color:${isDefault ? '#ff0064' : '#4db8ff'}; font-weight:bold;">${voice.name} ${isDefault ? '(DEFAULT)' : ''}</td>
-			<td style="color:#888;">${voice.lang}</td>
-			<td style="padding:10px; text-align:center; display:flex; gap:5px; justify-content:center;"></td>
-		    `;
-
-		    // Test Button
-		    const btnTest = document.createElement("button");
-		    btnTest.innerText = "▶ Test";
-		    btnTest.style = "cursor:pointer; background:#28a745; color:#fff; border:none; padding:5px 8px; border-radius:4px; font-weight:bold; font-size:0.75rem;";
-		    
-		    btnTest.onclick = async () => {
-			const mockMessage = {
-			    commands: {
-				tts: {
-				    isValid: true,
-				    message: testInput.value,
-				    flags: { v: index, p: pitchInput.value, r: rateInput.value }
-				}
-			    },
-			    state: { isRead: false }
-			};
-			if (window.Cockatiel?.CallTts) await window.Cockatiel.CallTts(mockMessage);
-		    };
-
-		    // Set Default Button
-		    const btnDefault = document.createElement("button");
-		    btnDefault.innerText = "Set Default";
-		    btnDefault.style = `cursor:pointer; background:${isDefault ? '#666' : '#ff0064'}; color:#fff; border:none; padding:5px 8px; border-radius:4px; font-weight:bold; font-size:0.75rem;`;
-		    btnDefault.disabled = isDefault;
-
-		    btnDefault.onclick = () => {
-			// Update your class state
-			this.#state.commands.tts.flags.v.value = index;
-			this.#state.commands.tts.flags.p.value = pitchInput.value;
-			this.#state.commands.tts.flags.r.value = rateInput.value;
-			
-			// Refresh table to move highlight
-			refreshVoices();
-			console.log(`Default set to: ${voice.name} (Index: ${index})`);
-		    };
-
-		    const actionCell = row.querySelector('td:last-child');
-		    actionCell.appendChild(btnTest);
-		    actionCell.appendChild(btnDefault);
-		    tbody.appendChild(row);
-		});
-	    };
-
-	    window.speechSynthesis.onvoiceschanged = refreshVoices;
-	    refreshVoices();
-
-	    table.appendChild(tbody);
-	    tableContainer.appendChild(table);
-	    container.appendChild(tableContainer);
-
-	    return container;
-	}
-
-	/**
-	 * Generates a Mock YouTube Message Creator UI.
-	 * @param {Function} onMessageCreated - Callback function that receives the generated JSON object.
-	 * @returns {HTMLElement} The container element.
-	 */
-	CreateMockYoutubeMessageUI(onMessageCreated) {
-	    const container = document.createElement("div");
-	    container.style = `
-		font-family: sans-serif; padding: 1.2rem; background: #282828; 
-		color: #fff; border-radius: 0.5rem; border: 0,1rem solid #444; max-width: 60rem;
-	    `;
-
-	    const title = document.createElement("h4");
-	    title.innerText = "YouTube API Message Simulator";
-	    title.style.margin = "0 0 0.6rem 0";
-
-	    const input = document.createElement("input");
-	    input.type = "text";
-	    input.placeholder = "Type a message to simulate...";
-	    input.style = `
-		width: 100%; padding: 0.7rem; background: #121212; border: 0.1rem solid #ff0000; 
-		color: #fff; border-radius: 0.2rem; box-sizing: border-box; margin-bottom: 0.6rem;
-	    `;
-
-	    const btn = document.createElement("button");
-	    btn.innerText = "Generate & Inject Message";
-	    btn.style = `
-		cursor: pointer; width: 100%; padding: 0.6rem; background: #ff0000; 
-		color: white; border: none; border-radius: 0.2rem; font-weight: bold;
-	    `;
-
-	    btn.onclick = () => {
-		const text = input.value || "Default Test Message";
-		
-		// Construct the specific YouTube API structure
-		const mockYoutubeResponse = {
-		    "kind": "youtube#liveChatMessage",
-		    "etag": "generated_" + Math.random().toString(36).substring(7),
-		    "id": "LCC." + btoa(Date.now().toString()),
-		    "snippet": {
-			"type": "textMessageEvent",
-			"liveChatId": "Cg0KCzhlUFk0ellmX0tj",
-			"authorChannelId": "UCiYflTancqoI-CvKoixE2Fw",
-			"publishedAt": new Date().toISOString(),
-			"hasDisplayContent": true,
-			"displayMessage": text, // Injected input
-			"textMessageDetails": {
-			    "messageText": text // Injected input
-			}
-		    },
-		    "authorDetails": {
-			"channelId": "asdf1234asdf1234",
-			"channelUrl": "http://www.youtube.com/channel/test",
-			"displayName": "TestUser",
-			"profileImageUrl": "/content/stream_utils/tib_stuff/default_icon.png",
-			"isVerified": false,
-			"isChatOwner": false,
-			"isChatSponsor": false,
-			"isChatModerator": false,
-		    }
-		};
-
-		console.log("Simulated YouTube Message:", mockYoutubeResponse);
-	
-		if (typeof onMessageCreated === "function") {
-		    onMessageCreated(mockYoutubeResponse);
-		}
-
-		this.ParseAndAddYouTubeV3MessagesToUnprocessedQueue(mockYoutubeResponse);
-		this.ProcessUnprocessedQueue(mockYoutubeResponse);
-
-		input.value = ""; // Clear input after use
-	    };
-
-	    container.append(title, input, btn);
-	    return container;
-	}
-
-	GenerateUi(){
-		this.DebugPrint({msg: "generating ui for the first time"});
-		let settingsContainer;
-		let id_container = structuredClone(this.#state.windows.main.insertId);
-		try{
-			settingsContainer = document.getElementById(id_container);
-			if(
-				settingsContainer == null 
-				|| settingsContainer == undefined){
-				this.DebugPrint({msg: "no container"});
-				settingsContainer = this.CHE({
-					type: 'div', 
-					id: "cockatiel_settings_container"
-				});
-			}
-			// else: container already got, no need to change anything
-			settingsContainer.style = `
-				/*background-color: #000000;*/
-				border: 0.2rem solid white;
-					borderRadius: 1rem;
-				/*color: #000;*/
-				padding: 1rem;
-				margin:auto;
-				width: 90%;
-					max-width: 60rem;
-			`;
-		}
-		catch(err){
-			this.DebugPrint({
-				msg: "err tryiing to get parent, likely lack of element so creating then continuing", 
-				error: err,
-				type: e,
-			});
-			settingsContainer = this.CHE({
-				type: 'div', 
-				id: "cockatiel_settings_container"
-			});
-		}// Ensure all subwindows are closed if the main app is closed or refreshed
-
-		try{
-			let ttsSettingsContainer = document.createElement("details");
-				let ttsSettingsLabel = document.createElement("summary");
-					ttsSettingsLabel.innerText = "tts settings";
-					ttsSettingsLabel.style.color = "white";
-				ttsSettingsContainer.append(ttsSettingsLabel);
-				let ttsPreview = this.CreateTtsVoiceTester();
-				ttsSettingsContainer.append(ttsPreview);
-			settingsContainer.append(ttsSettingsContainer);
-		}
-		catch(err){
-			this.DebugPrint({msg:"cannot generate Tts preview"});
-		}
-
-		try{
-			let bannedWordsList = this.GenerateBannedWordsConfig();
-			this.DebugPrint({msg: "bannedWordsList:", val: String(bannedWordsList)});
-			settingsContainer.appendChild(bannedWordsList);
-			this.UpdateBannedWordsList();
-		}
-		catch(err){
-		    console.error("cannot GenerateBannedWordsConfig", err, err?.stack);
-		}
-
-		try{
-			if(!settingsContainer){
-				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
-			}
-			let controlBar = this.GenerateControlBarUI();
-			//console.warn(controlBar);
-			settingsContainer.appendChild(controlBar);
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot cannot GenerateControlBarUI", type:'e', err: err});
-		}
-
-		try {
-			if(!settingsContainer){
-				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
-			}
-			let twitchConfig = this.twitch.buildInterface();
-			settingsContainer.appendChild(twitchConfig);
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot cannot GenerateControlBarUI", type:'e', err: err});
-		}
-
-		try{
-			if(!settingsContainer){
-				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
-			}
-			let ytConfig = this.yt.GenerateYoutubeConfigUI();
-			settingsContainer.appendChild(ytConfig);
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot cannot GenerateControlBarUI", type:'e', err: err});
-		}
-
-		try{
-			if(!settingsContainer){
-				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
-			}
-			let userManagement = this.GenerateUserManagement();
-			settingsContainer.appendChild(userManagement);
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot cannot GenerateUserManagement", type:'e', err: err});
-		}
-
-		try{
-			if(!settingsContainer){
-				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
-			}
-
-			let logger = document.createElement("details");
-			let loggerTitle = document.createElement("summary");
-			loggerTitle.innerText = "logs";
-			logger.innerText = "here's any/all logs the user would care about. \nthis is mainly for you, the user to understand what's happening. if you need debugging support please select 'export state' and that will be a much better help\n\n"
-			logger.append(loggerTitle);
-
-			function loggerAppend(data){
-				if(data != null){
-					if(data.err){
-						if(data.err.message || data.err.msg){
-							let err = document.createElement("details");
-							err.innerText = data.details || data;
-								let sum = document.createElement("summary");
-								sum.innerText = err.message;
-							logger.append(err);
-						}
-					}
-					else{
-						let container = document.createElement("div");
-						container.innerText = data;
-						logger.append(container);
-					}
-				}
-			}
-
-			if(this.yt){
-				this.yt.AddStatusListener(loggerAppend);
-			}
-			if(this.twitch){
-				this.twitch.AddStatusListener(loggerAppend);
-			}
-
-			settingsContainer.appendChild(logger);
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot append settings container to document", err: err, type: "err"});
-		}
-
-		try{
-			if(!settingsContainer){
-				this.DebugPrint({msg: "no settings container, cannot create items", type:'t'});
-			}
-			document.body.appendChild(settingsContainer);
-		}
-		catch(err){
-			this.DebugPrint({msg: "cannot append settings container to document", err: err, type: "err"});
-		}
-	}
-
-	GenerateChatWindow(){
-		try{
-			const chatSettings = structuredClone(this.#state.windows.chat);
-			const chatStyle = ``;
-
-			this.CreateSubWindow({
-			    ...chatSettings,
-			    stylesheet: structuredClone(this.#state.windows.chat.defaultStylesheet), 
-			    script: `
-			    window.addEventListener("message", (event) => {
-				const { type, payload } = event.data;
-				
-				if (type === 'new_chat_msg' && payload.html) {
-				    const view = document.getElementById("${chatSettings.key}-viewport");
-				    const target = view || document.body;
-
-				    const temp = document.createElement('div');
-				    temp.innerHTML = payload.html;
-				    const newElement = temp.firstElementChild;
-
-				    // 1. Initial State (Hidden to the right or just faded)
-				    //newElement.style.opacity = '0';
-				    newElement.style.height = '0px';
-				    newElement.style.transform = 'translateX(20px)'; // Small nudge from right
-				    newElement.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'; // Adding a slight bounce
-				    newElement.style.padding = '0px';
-				    newElement.style.margin = '0px';
-				    
-				    target.appendChild(newElement);
-
-				    // 2. Animate In
-				    setTimeout(() => {
-					view.scrollTo(0, view.scrollHeight);
-					newElement.style.opacity = '1';
-					newElement.style.transform = 'translateX(0)';
-					newElement.style.height = 'auto';
-					    newElement.style.padding = 'inherit';
-					    newElement.style.margin = 'inherit';
-				    }, 10);
-
-				    // 3. Self-Destruct Timer (Slide to Left)
-				    const duration = ${chatSettings.messageDisplayDuration || 5} * 1000;
-				    setTimeout(() => {
-					if (newElement) {
-					    // Slide off to the left
-					    newElement.style.transition = 'all 0.6s ease-in'; 
-					    //newElement.style.opacity = '0';
-					    newElement.style.height = '0px';
-					    newElement.style.transform = 'translateX(-120%)'; // Push it off-screen to the left
-					    newElement.style.padding = '0px';
-					    newElement.style.margin = '0px';
-					    
-					    // Wait for the animation to finish before removing from DOM
-					    setTimeout(() => {
-						newElement.remove();
-						// Optional: if the removal causes a "jump", you can animate 
-						// the height to 0 here as well.
-					    }, 600);
-					}
-				    }, duration);
-				}
-			    });
-			    `
-			});
-		}
-
-		catch(err){
-			this.DebugPrint({msg: "could not create chat window", type: "err"});
-		}
-	}
-
-	GenerateEventsWindow(){
-		try{
-			//this.PushToSubWindow("chatMonitor", this.RenderStandbyHTML());
-			let eventWindowSettings = structuredClone(this.#state.windows.events);
-// Inside GenerateEventsWindow() function, focusing on the 'script' string:
-
-this.CreateSubWindow({
-    ...eventWindowSettings,
-    script: `
-        window.addEventListener("htmlUpdate", (event) => {
-            console.log("html update received!!!");
-            const { type, payload } = event.data;
-
-            if(event.type !== "htmlUpdate"){ // Use strict comparison for strings
-                console.log({msg: "invalid event passed", val: event});
-                return;
-            }
-            
-            // *** THE FIX IS HERE ***
-            // You must specify WHICH element to update. 
-            // Assuming you want to target an element with the ID 'monitor-content'
-            const targetElement = document.getElementById('monitor-content');
-            
-            if(targetElement){
-                targetElement.innerHTML = payload; // Use innerHTML correctly
-            } else {
-                console.error("Error: Target element for HTML update not found.");
-            }
-        });
-    `,
-    html: `
-        <div id="monitor-content">
-            <div style="display: flex; justify-content:space-evenly; flex-direction:column; height: 100%; margin: auto; font-family: helvetica, sans-serif, ariel;">
-                <div style="max-width:60rem; width:80%; color:white; padding: 2rem;">event monitor has yet to be started, do so to turn cockatiel on</div>
-                <img style="max-width:60%; margin:auto;" src="../assets/off_tib.png">
-            </div>
-        </div>
-    `,
-});
-
-
-			this.#state.timers.EventDisplayTimer.AddTickListener((()=>{console.log("tick from event display manager")}));
-			this.#state.timers.EventDisplayTimer.AddTimeoutListener((()=>{console.log("time'd out eventdisplaytimer")}));
-			this.#state.timers.EventDisplayTimer.AddTimeoutListener((()=>{this.EventDisplayManager()}));
-		}
-		catch(err){
-			this.DebugPrint({msg: "could not add test messages", type: "err", err: err});
-		}
-	}
-
-	RunSubWindowTest1(){
-		this.DebugPrint({msg: "running RunSubWindowTest1()"});
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest1");
-		try{
-		this.DebugPrint({msg:"adding testUser"});
-			const test_message = {
-				    "channelId": "asdf1234zxcv5689",
-				    "commands": {},
-				    "messageId": "LCC.EhwKGkNNLVB2TkdCNVpJREZlZkJ3Z1FkNExJQzZR",
-				    "platform": "youtube",
-				    "processedMessage": "HELLO SMALLSVILLE",
-				    "rawMessage": "HELLO SMALLSVILLE",
-				    "receivedAt": 1771485470330,
-				    "score": -100,
-				    "state": {},
-				    "streamOrigin": "Cg0KC3JHN3ZGN3BjVlBZKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILckc3dkY3cGNWUFk",
-				    "channelOrigin": "1234qwer4678asdf",
-				    "userUuid": "88d515ca-531b-45fc-a24b-a65eeb76996d",
-				    "username": "testUser",
-				    "version": 1,
-			}
-			try{
-				this.CreateUserFromFlags(test_message);
-			}
-			catch(error){
-				this.DebugPrint({
-					msg: "RunSubWindowTest1 failed", 
-					val: test_message, 
-					type: "e", 
-					err: error,
-				});
-			}
-			this.DebugPrint({msg: "RunSubWindowTest1 pass"});
-		}
-		catch(err){
-			this.DebugPrint({msg: "could not add user to users", type: "err", err: err});
-		}
-	}
-
-	RunSubWindowTest2() {
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest2");
-	    this.DebugPrint({ msg: "1. Entering RunSubWindowTest2", type: "l" });
-
-	    try {
-		const chatSettings = this.#state.windows.chat;
-		this.DebugPrint({ msg: "2. Chat Settings Found", val: chatSettings });
-
-		if (!chatSettings) {
-		    this.DebugPrint({ msg: "FAIL: chatSettings is undefined in state", type: "e" });
-		    return;
-		}
-
-		const win = this.subWindows[chatSettings.key];
-		this.DebugPrint({ msg: "3. Target Window Object", val: win ? "Window Found" : "Window Null" });
-
-		if (!win || win.closed) {
-		    this.DebugPrint({ msg: "4. FAIL: Window reference not found or window was closed", type: "w" });
-		    return;
-		}
-
-		this.DebugPrint({ msg: "5. Success: Sending postMessage now..." });
-		
-		// This triggers the listener you injected in CreateSubWindow
-		win.postMessage({ 
-		    type: 'new_chat_msg', 
-		    payload: { html: "<div style='color: #0bd;'>Cockatiel started! </div>" } 
-		}, "*");
-
-	    } catch (err) {
-		this.DebugPrint({ msg: "CRITICAL ERROR in RunSubWindowTest2", type: "err", err: err });
-	    }
-	}
-
-	RunSubWindowTest3() {
-	    this.DebugPrint({ msg: "running RunSubWindowTest3", type: "l" });
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest3");
-		try{
-			const user = this.#state.users[Object.keys(this.#state.users)[0]];
-			const p_msg = {
-				version: 1,
-				username: "test_user",
-				userUuid: user.uuid, 
-				streamOrigin: "youtube", //what streamid via the platform the message came from
-				channelOrigin: "1234qwer5678asdf",
-				receivedAt: Date.now(),
-				commands: [],
-				processedMessage: "",
-				platform: "",
-				rawMessage: "!vote -y",
-				messageId: "",
-				score: "",
-				state: {}
-			};
-	
-			this.PushMessageToChatWindow(p_msg);
-		}
-		catch(err){
-	    		this.DebugPrint({ msg: "ERROR running RunSubWindowTest3", type: "e", err:err });
-		}
-
-	}
-
-	RunSubWindowTest4(){
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest4");
-		const html = `
-			<div class="chatMessageContainer">
-				<div class="chatUserBubble">
-					<div class="chatBubbleTailContainer">
-						<div class="chatBubbleTailContainer"><img class="chatBubbleTail" alt="" src=""></div>
-					</div>
-					<div class="chatUserInfo">
-						<div class="chatUserImageContainer"><img class="chatUserImage" alt="chatUserImage" src=""></div>		
-						<div class="chatUserStats">
-							<div class="chatUsername">@usernameUSERNAMEusernameUSERNAME</div>		
-							<div class="chatUserCommendations">community: 1, engagement: 5, support: 2, rep: 8</div>
-						</div>
-					</div>
-				</div>
-				<div class="chatMessageBubble">
-					<div class="chatCommandContainer">
-						<div class="chatCommand">!tts -v 69 -p 1.9 -r 0.8 </div>
-					</div>
-					<div class="chatMessage">
-					Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Aenean commodo ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem. Nulla consequat massa quis enim. Donec pede justo, fringilla vel, aliquet nec, vulputate.
-					</div>
-				</div>
-			</div>
-		`
-	    this.subWindows[this.#state.windows.chat.key].postMessage({ 
-		type: 'new_chat_msg', 
-		payload: { html: html } 
-	    }, "*");
-	}
-
-	async RunSubWindowTest5(){
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest5");
-		this.DebugPrint({msg: "Running RunSubWindowTest5"});
-		this.DebugPrint({msg: "attempting to create user from unprocessedMsg"});
-		let val = {
-		    "version": 1,
-		    "apiVersion": 3,
-		    "platform": "YouTube",
-		    "data": {
-			"kind": "youtube#liveChatMessage",
-			"etag": "w3nSofTpFw3me4dFSjvLF3BmC44",
-			"id": "LCC.EhwKGkNJNkhtNlM5bVpNREZSRVlyUVlkc25zejhB",
-			"snippet": {
-			    "type": "textMessageEvent",
-			    "liveChatId": "Cg0KCzhlUFk0ellmX0tjKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILOGVQWTR6WWZfS2M",
-			    "authorChannelId": "UCiYflTancqoI-CvKoixE2Fw",
-			    "publishedAt": "2026-03-12T04:03:07.947947+00:00",
-			    "hasDisplayContent": true,
-			    "displayMessage": "I'm still calling this the worst run",
-			    "textMessageDetails": {
-				"messageText": "I'm still calling this the worst run"
-			    }
-			},
-			"authorDetails": {
-			    "channelId": "asdf1234asdf1234",
-			    "channelUrl": "http://www.youtube.com/channel/UCiYflTancqoI-CvKoixasdf",
-			    "displayName": "TestAccount2",
-			    "profileImageUrl": "",
-			    "isVerified": false,
-			    "isChatOwner": false,
-			    "isChatSponsor": false,
-			    "isChatModerator": true
-			}
-		    },
-		    "receivedAt": 1773288187947
-		} 
-		let msg = await this.yt.ProcessYoutubeV3Data_v1(val);
-		this.SafeAddToEventTimeline(msg);
-
-
-	//	this.Process
-
-		//this.CreateUserFromFlags(val);
-	}
-
-	RunSubWindowTest6(){
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest6");
-		let val = {
-		    "version": 1,
-		    "apiVersion": 3,
-		    "platform": "YouTube",
-		    "data": {
-			"kind": "youtube#liveChatMessage",
-			"etag": "w3nSofTpFw3me4dFSjvLF3BmC44",
-			"id": "LCC.EhwKGkNJNkhtNlM5bVpNREZSRVlyUVlkc25zejhB",
-			"snippet": {
-			    "type": "textMessageEvent",
-			    "liveChatId": "Cg0KCzhlUFk0ellmX0tjKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILOGVQWTR6WWZfS2M",
-			    "authorChannelId": "UCiYflTancqoI-CvKoixE2Fw",
-			    "publishedAt": "2026-03-12T04:03:07.947947+00:00",
-			    "hasDisplayContent": true,
-			    "displayMessage": "!help aaaaaaaaa",
-			    "textMessageDetails": {
-				"messageText": "!help aaaaaaaaa"
-			    }
-			},
-			"authorDetails": {
-			    "channelId": "UCiYflTancqoI-CvKoixE2Fw",
-			    "channelUrl": "http://www.youtube.com/channel/UCiYflTancqoI-CvKoixE2Fw",
-			    "displayName": "@BluWalled",
-			    "prof}ileImageUrl": "https://yt3.ggpht.com/2Z--UpGm0bLVlXExSiev6a9J2c883R0jYx68fPwYAx6vmg1gIdzymYmnfiQ08-hfUgVqPOzIWlQ=s88-c-k-c0x00ffffff-no-rj",
-			    "isVerified": false,
-			    "isChatOwner": false,
-			    "isChatSponsor": false,
-			    "isChatModerator": true
-			}
-		    },
-		    "receivedAt": 1773288187947
-		} 
-		this.yt.ProcessYoutubeV3Data_v1(val);
-	}
-	
-	RunSubWindowTest7(){
-		this.DebugPrint({msg: "running RunSubWindowTest7()"});
-		this.PushSystemNotificaitonToChatWindow("running RunSubWindowTest7");
-		try{
-		this.DebugPrint({msg:"adding testUser"});
-			const test_message = {
-				    "channelId": "asdf1234zxcv5689",
-				    "commands": {},
-				    "messageId": "LCC.EhwKGkNNLVB2TkdCNVpJREZlZkJ3Z1FkNExJQzZR",
-				    "platform": "youtube",
-				    "processedMessage": "tts assignment test to verify all is working",
-				    "raw": "!tts -v 50 -p 2 -r 1 tts assignment test to verify all is working",
-				    "receivedAt": 1771485470330,
-				    "score": -100,
-				    "state": {},
-				    "streamOrigin": "Cg0KC3JHN3ZGN3BjVlBZKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILckc3dkY3cGNWUFk",
-				    "channelOrigin": "1234qwer4678asdf",
-				    "userUuid": "88d515ca-531b-45fc-a24b-a65eeb76996d",
-				    "username": "testUser",
-				    "version": 1,
-			}
-			try{
-				//this.yt.ProcessYoutubeV3Data_v1(test_message);
-				this.SafeAddToEventTimeline(test_message);
-			}
-			catch(error){
-				this.DebugPrint({
-					msg: "RunSubWindowTest7 failed", 
-					val: test_message, 
-					type: "e", 
-					err: error,
-				});
-			}
-			this.DebugPrint({msg: "RunSubWindowTest7 pass"});
-		}
-		catch(err){
-			this.DebugPrint({msg: "could not add user to users", type: "err", err: err});
-		}
-	}
-
-	AttachHandleUnloadLogic(){
-		try{
-			// Ensure all subwindows are closed if the main app is closed or refreshed
-			window.addEventListener('unload', () => {
-			    if (this.subWindows) {
-				Object.values(this.subWindows).forEach(win => {
-				    if (win && !win.closed) {
-					win.close();
-				    }
-				});
-			    }
-			});
-		}
-		catch(err){
-			this.DebugPrint({msg:"no window to append listerners", error:err})
-		}
-	}
-
-	AddTtsTimeoutListeners() {
-	    this.DebugPrint({msg: "initing tts timeout listener"});
-	    // Ensure the timer exists before trying to add a listener
-	    if (!this.#state.timers?.ReadTtsTimer) {
-		this.DebugPrint({ msg: "TTS Timer not initialized!" });
-		return;
-	    }
-
-// Add a private property to your class to track status
-// #isTtsBusy = false;
-
-	this.#state.timers.ReadTtsTimer.AddTimeoutListener(async () => {
-	    // 1. Check if we are already speaking. If so, skip this tick.
-	    if (this.#isTtsBusy) {
-		this.DebugPrint({ msg: "TTS is busy, skipping this tick." });
-		return;
-	    }
-
-	    try {
-		this.DebugPrint({ msg: "attempting to read oldest tts" });
-		
-		// 2. Set the lock
-		this.#isTtsBusy = true;
-
-		// 3. Await the full execution of find and call
-		// This ensures readAt is updated and speech is finished
-		await this.FindOldestUnreadTtsAndCall();
-
-	    } catch (err) {
-		this.DebugPrint({ msg: "Error in ReadTtsTimer listener", error: err, type: 'e' });
-	    } finally {
-		// 4. Release the lock regardless of success or failure
-		this.#isTtsBusy = false;
-	    }
-	});	
-	}
-
-	async Init(){
-		if (this.#hasInited) return; // Stop if already running
-		this.#hasInited = true;
-
-		this.InitTimers();
-		this.AddTtsTimeoutListeners();
-
-		this.GenerateUi();
-		this.GenerateChatWindow();
-		this.GenerateEventsWindow();
-
-		this.RunSubWindowTest1();
-		this.RunSubWindowTest2();
-		this.RunSubWindowTest3();
-		this.RunSubWindowTest4();
-		await this.RunSubWindowTest5();
-		this.RunSubWindowTest6();
-		this.RunSubWindowTest7();
-
-		//this.#state.timers.EventDisplayTimer.Start();
-	    	//this.#state.timers.ReadTtsTimer.Start();
-
-		this.AttachHandleUnloadLogic()
-	}
-
-	/*
-	 * WE CANNOT DELETE THIS AS SOME MADLAD (@Cunningstuntsinc) dropped a 50 banger (thankies ily)*
-                                                        .=.@@                   
-                                             .@..      .@@.@#@                  
-                                             @@.@.     .@@.@@@.                 
-                                             @@.-..   @.*@..@@.                 
-                                             @@#...  ....@.+@@@+                
-                                            @@.@.@#@@.@.@@.*@@@..               
-                                            .@.@.@=..@@@@@..@@@..               
-                                            @@..@@--+*..@..@@@@@.               
-                                       ......@@...@@....-@@..#...@@.            
-                             @.#.....-@(@@@@=.@@..@.@@@@.@%@.-..@@.@@@.          
-                             ..:.@@@@......@@@....@@%.........@.@@@=@@@         
-                              .........@@..@#@.++........=@@.@@@@#%%#+@.        
-                                   ............=======.@@#..@%+##%%%%#@@.       
-                                       ....+==========..#.@@%%@@@@@@@@@@.       
-                                          .....======..@.@+*#%@@@........       
-                                           .@@..====..*@.@#@@@@.@.@@@@@..       
-                                           .%.@......@@@@@@@.@@@@@.@@@@@@.      
-                            .@.=@@@@.    .....@@@@@@@.@%%%@.@@@@.@@@@@@@@@@.    
- ...@.@@.                    .........@@..@@@@@@.....@@%%+@@@@.@@@@@@@@@@@@.    
-  ........@@@.                  .:.*=....@@.@-@.@@@@@@%@@@@@@.@.@%%#@@@@@%@.    
-      .......@@@                 ..++*++..@@@@@@@@@.@@%@.@+@@@@@@@@%%%%%%%@.    
-         .+%...@@@                 ...*++..@@@.@@@.@@%@@@@.@@@@@.@@%%%%%@@@@    
-          .=%+...@@.                 ...*+.@@@@@@.@@@@@.@.@@#@...@%@@@@@@@@@    
-            ..*+..@@@                @@.+@=...@%@@@@....@@@@%@@.@@@@@@#%@@@.    
-             ...--.@%%#@@           ..@@.......@@@@@@@@@@.@%%@@@@@@@@@@#%@@.    
-                ...@@@@@.@#@.       @@@@@@@@@@@@@@%.@@@@@@@%%@.@..@@@@@@@@..    
-                   .@..@@@@@@@%#@. .@@@@@...@..........@@@@@@@@@@@@.@@@@@@..    
-                      ....@@@@@%@@@@@@@#@.:...@.@....==...@@@@@@@@@@@@@#@@.     
-                        .....@@@@@@@%#@%@@.%...@.@.@@..@@=.....@@@@@@@@@@.@     
-                           .....@@@@@%%%@@..@.........=...%=@#............      
-                              ......@@@@@@.  .@@=.@@@@.@@.@..-@@@@%+++%:.       
-                                  ........   ........:....@.@=....@@:...        
-                                             ..@.@@.@:@@.......@@....           
-                                            +@@@@@...@..@@..@..@@@@@@.          
-                                           .@.@%@@@@@@@@...@@.........          
-                                           @@@@@@.@@@.@@.@@....@.@.@:@.         
-                                          .@...@@@@.@@.@@@@@@@.@.@@...@         
-                                         @@@@@@@.@@@.@@@@....@.@......@.        
-                                         .@@@..@@@.@@.@@@.@.@@..@@.@@@@..       
-
-	 */
 
 	constructor(){/* DO NOT ADD STUFF HERE, IT WILL CORRUPT TESTING STATE */}
 }

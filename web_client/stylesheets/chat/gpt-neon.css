@@ -1,0 +1,108 @@
+.chatMessageContainer {
+	display: relative;
+	flex-shrink: 0;
+	font-family: Inter, system-ui, sans-serif;
+	padding-bottom: 2rem;
+
+	.chatUserBubble {
+		display: flex;
+		flex-direction: row;
+		height: 3.5em;
+		filter: drop-shadow(0 0 10px rgba(0,255,255,0.25));
+
+		.chatUserInfo {
+			background:
+				linear-gradient(
+					135deg,
+					rgba(0,255,255,0.2),
+					rgba(255,0,255,0.15)
+				);
+
+			backdrop-filter: blur(20px);
+			border: 1px solid rgba(255,255,255,0.1);
+
+			border-radius: 2rem;
+			border-bottom-left-radius: 0.2rem;
+
+			color: white;
+			display: flex;
+			align-items: center;
+			padding: 0.3rem 0.6rem;
+
+			box-shadow:
+				0 0 20px rgba(0,255,255,0.15),
+				inset 0 0 15px rgba(255,255,255,0.03);
+
+			.chatUserImageContainer {
+				background:
+					linear-gradient(135deg,#00ffff,#ff00ff);
+
+				padding: 2px;
+				border-radius: 100%;
+
+				.chatUserImage {
+					border-radius: 100%;
+					width: 3rem;
+					height: 3rem;
+					object-fit: cover;
+					background: #111;
+				}
+			}
+
+			.chatUserStats {
+				padding-left: 0.7rem;
+
+				.chatUsername {
+					font-weight: 700;
+					letter-spacing: 0.04em;
+					text-shadow: 0 0 8px cyan;
+				}
+
+				.chatUserCommendations {
+					font-size: 1.2rem;
+					color: #00ffff;
+				}
+			}
+		}
+	}
+
+	.chatMessageBubble {
+		margin-left: 1.4rem;
+		width: 20rem;
+
+		background:
+			linear-gradient(
+				180deg,
+				rgba(18,18,24,0.95),
+				rgba(8,8,12,0.98)
+			);
+
+		border: 1px solid rgba(0,255,255,0.12);
+
+		border-radius: 1.5rem;
+		border-top-left-radius: 0.3rem;
+
+		padding: 1rem;
+
+		color: #f2f2f2;
+
+		box-shadow:
+			0 0 25px rgba(0,255,255,0.08);
+
+		.chatCommand {
+			background: rgba(0,255,255,0.1);
+			border: 1px solid rgba(0,255,255,0.3);
+			color: #00ffff;
+
+			padding: 0.35rem 0.8rem;
+			border-radius: 999px;
+
+			font-family: monospace;
+		}
+
+		.chatMessage {
+			line-height: 1.5;
+			color: rgba(255,255,255,0.92);
+		}
+	}
+}

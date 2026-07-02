@@ -1,34 +1,95 @@
 import {DebugPrint} from "./DebugPrint.mjs";
+import {IntTimer} from  "./intTimer.mjs";
+import {Result} from "./result.mjs";
 
-export class YoutubeV3 {
+export class Youtube {
 	#isInited = false;
 
+	Init(){}
+
 	isReady(){
-		
-	}
+	    return (
+		    !!this.#config.liveChatId 
+		    && !!this.#config.apiKey
+		    && this.#config.isEnabled
+	    );
+	}	
+
 
 	DPrint(data){
+		window.Cockatiel.DebugPrint(data);
+		if(String(typeof(data)).toLowerCase() == 'object'){
+			data = JSON.stringify(data, null, 4);
+		}
 		this.EmitStatus(data);
-		DebugPrint(data);
 	}
-	config = {
+	#config = {
 		apiKey: undefined,		
 		channelName: undefined,		
 		channelId: undefined,
 		broadcastId: undefined,		
 		broadcastStartedAt: undefined,
+		isEnabled: false, //manually toggle on
 		liveChatId: undefined,		
 		pageCount: undefined, // TODO: is this used?
 		nextPageToken: undefined,
-
 		debug: true,
 		autoAssignToConfig: true,
 		preserveMessages: true,
 		messages: [],
 	}
 	GetConfig(){
-		return this.config;
+		return this.#config;
 	}
+	UpdateConfig(input){
+		if(typeof(input) != "object"){
+			this.DPrint({msg:"could not update config, type is not an object", type: "e"});
+		}	
+		this.DPrint({msg: `updating youtube config values: ${JSON.stringify(input, null, 2)}`})
+
+		let inputKeys = Object.keys(input);
+		for(let i = 0; i < inputKeys.length; ++i){
+			if(this.#config[inputKeys[i]] != undefined){
+				this.DPrint({msg: `updating value ${input[inputKeys[i]]} for key: ${inputKeys[i]}`});
+				this.#config[inputKeys[i]] = input[inputKeys[i]];
+			}
+		}
+	}
+
+
+    constructor(configMap = null) {
+	let keys = Object.keys(window.Cockatiel.templates.platformSettings);
+	let overrideGlobalFlags = new Array(keys.length);	
+	this.DPrint({
+		msg: `generating inputs for the following keys for youtubeStuff`,
+		val: keys,
+	})
+	let key, val;
+	for(let i = 0; i < keys.length; ++i){
+		/* at time of writing the withins are:
+		css: null,
+		notificationSound: null,
+		overrideGlobal: false,
+		*/
+		key = keys[i];	
+		val = Object.keys(window.Cockatiel.templates.platformSettings);
+		let toggle = `youtube-${key}-${key}Override`;
+		let input = `youtube-${key}-${key}OverrideValue`;
+
+		overrideGlobalFlags.push(toggle);
+		overrideGlobalFlags.push(input);
+	}
+	    
+    	this.#config = {
+		...this.#config,
+		//...window.Cockatiel.templates.platformSettings,
+		...overrideGlobalFlags
+	} 
+
+        if (configMap) {
+            this.updateConfig(configMap);
+        }
+    }
 
 	// Listener Arrays
     #start_listeners = [];  // when starts
@@ -95,9 +156,10 @@ export class YoutubeV3 {
         queue.forEach(callback => {
             try {
                 callback(data);
-            } catch (err) {
-                console.error("Listener Callback Error:", err);
-            }
+            } 
+	    catch (err) {
+		    console.error("yt_emit "+ err);
+	    }
         });
     }
     EmitStart(data){
@@ -133,7 +195,7 @@ export class YoutubeV3 {
 
 	async LoadValuesFromLocalStorage() {    
 	    this.DPrint("LoadingValuesFromLocalStorage");
-	    const keys = Object.keys(this.config);
+	    const keys = Object.keys(this.#config);
 	    this.DPrint("attenpting to get values for: ", keys);
 
 	    let key, val;
@@ -143,12 +205,12 @@ export class YoutubeV3 {
 		    this.DPrint("getting value for: " + key);
 		    
 		    // Use the actual key name: in the storage string
-		    val = localStorage.getItem("youtube-config-" + key); 
+		    val = localStorage.getItem("youtube-#config-" + key); 
 		    this.DPrint(`value of ${key} is: `, val);
 
 		    // Only update config if the value actually exists in localStorage
 		    if (val !== null) {
-			this.config[key] = val;
+			this.#config[key] = val;
 		    } else {
 			this.DPrint(`No saved value found for ${key}`);
 		    }
@@ -161,8 +223,8 @@ export class YoutubeV3 {
 	}
 
 	async getChannelId(
-		apiKey = this.config.apiKey, 
-		handle = this.config.channelName
+		apiKey = this.#config.apiKey, 
+		handle = this.#config.channelName
 	) {
 		this.DPrint("getting channel id");
 		// formatting the inputs
@@ -181,7 +243,7 @@ export class YoutubeV3 {
 
 				this.DPrint(`Channel ID: ${channelId}`);
 
-				if(this.config.autoAssignToConfig){this.config.channelId = channelId;}
+				if(this.#config.autoAssignToConfig){this.#config.channelId = channelId;}
 
 				return channelId;
 			} else {
@@ -196,8 +258,8 @@ export class YoutubeV3 {
 
 	async getLiveAndUpcoming(apiKey, channelId) {
 		this.DPrint("getting live and upcoming messages");
-		const _apiKey = apiKey || this.config.apiKey;
-		const _channelId = channelId || this.config.channelId;
+		const _apiKey = apiKey || this.#config.apiKey;
+		const _channelId = channelId || this.#config.channelId;
 		const statuses = ['live', 'upcoming'];
 		let allBroadcasts = [];
 
@@ -228,7 +290,7 @@ export class YoutubeV3 {
 		return allBroadcasts;
 	}
 
-	async getLiveChatId(apiKey = this.config.apiKey, videoId = this.config.broadcastId) {
+	async getLiveChatId(apiKey = this.#config.apiKey, videoId = this.#config.broadcastId) {
 		this.DPrint("getting live chat id");
 	    // 1. Define the base URL
 	    const baseUrl = `https://www.googleapis.com/youtube/v3/videos`;
@@ -255,9 +317,9 @@ export class YoutubeV3 {
 		console.log("YouTube Data:", data);
 		
 		// Extract the chat ID
-		this.config.liveChatId = data.items?.[0]?.liveStreamingDetails?.activeLiveChatId;
-		console.log("liveChatId: ", this.config.liveChatId);
-		return this.config.liveChatId;
+		this.#config.liveChatId = data.items?.[0]?.liveStreamingDetails?.activeLiveChatId;
+		console.log("liveChatId: ", this.#config.liveChatId);
+		return this.#config.liveChatId;
 	    } catch (error) {
 		console.error("Fetch Error:", error);
 		this.EmitWarn(error);
@@ -266,10 +328,10 @@ export class YoutubeV3 {
 	}
 	/*
 	async getChatMessages(
-		ChatId = this.config.liveChatId, 
-		pageToken = this.config.nextPageToken
+		ChatId = this.#config.liveChatId, 
+		pageToken = this.#config.nextPageToken
 	) {
-		const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${ChatId}&part=snippet,authorDetails&maxResults=200${pageToken ? `&pageToken=${pageToken}` : ''}&key=${this.config.apiKey}`;
+		const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${ChatId}&part=snippet,authorDetails&maxResults=200${pageToken ? `&pageToken=${pageToken}` : ''}&key=${this.#config.apiKey}`;
 		DebugPrint("getting chat messages", url);
 
 		const response = await fetch(url);
@@ -280,10 +342,10 @@ export class YoutubeV3 {
 
 		if(
 			data == undefined
-			&& this.config.debug == true
+			&& this.#config.debug == true
 		){
 			DebugPrint(`no new messages received, for testing purposes removing pageToken(${pageToken}) and trying again in 2 seconds`);
-			this.config.pageToken = undefined;
+			this.#config.pageToken = undefined;
 			SetTimeout(async () => {
 				response = await fetch(url);
 				data = await response.json();
@@ -293,10 +355,10 @@ export class YoutubeV3 {
 			}, 2000);
 		}
 
-		this.config.nextPageToken = data.nextPageToken;
-		if(this.config.preserveMessages){
+		this.#config.nextPageToken = data.nextPageToken;
+		if(this.#config.preserveMessages){
 			for(let i = 0; i < data.items.length; ++i){
-				this.config.messages.push(data.items[i]); // this is very very wrong lol
+				this.#config.messages.push(data.items[i]); // this is very very wrong lol
 			}
 		}
 		DebugPrint("returning data from getChatMessages(): ", data);
@@ -306,11 +368,11 @@ export class YoutubeV3 {
 
 	
 	async getChatMessages(chatId, token) {
-	    // 1. Prioritize the passed token, fallback to config
-	    const activeChatId = chatId || this.config.liveChatId;
-	    const activeToken = token || this.config.nextPageToken;
+	    // 1. Prioritize the passed token, fallback to #config
+	    const activeChatId = chatId || this.#config.liveChatId;
+	    const activeToken = token || this.#config.nextPageToken;
 
-	    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails&maxResults=200${activeToken ? `&pageToken=${activeToken}` : ''}&key=${this.config.apiKey}`;
+	    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails&maxResults=200${activeToken ? `&pageToken=${activeToken}` : ''}&key=${this.#config.apiKey}`;
 	    
 	    this.DPrint("Fetching URL: " + url);
 
@@ -324,7 +386,7 @@ export class YoutubeV3 {
 
 	    // 2. Update the token for the next call
 	    if (data.nextPageToken) {
-		this.config.nextPageToken = data.nextPageToken;
+		this.#config.nextPageToken = data.nextPageToken;
 		this.DPrint("Updated Token to: " + data.nextPageToken);
 	    }
 
@@ -336,11 +398,11 @@ export class YoutubeV3 {
 
 	/*
 	async getChatMessages(chatId, token) {
-	    // 1. Prioritize the passed token, fallback to config
-	    const activeChatId = chatId || this.config.liveChatId;
-	    const activeToken = token || this.config.nextPageToken;
+	    // 1. Prioritize the passed token, fallback to #config
+	    const activeChatId = chatId || this.#config.liveChatId;
+	    const activeToken = token || this.#config.nextPageToken;
 
-	    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails&maxResults=200${activeToken ? `&pageToken=${activeToken}` : ''}&key=${this.config.apiKey}`;
+	    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails&maxResults=200${activeToken ? `&pageToken=${activeToken}` : ''}&key=${this.#config.apiKey}`;
 	    
 	    DebugPrint("Fetching URL: " + url);
 
@@ -353,7 +415,7 @@ export class YoutubeV3 {
 
 	    // 2. Update the token for the next call
 	    if (data.nextPageToken) {
-		this.config.nextPageToken = data.nextPageToken;
+		this.#config.nextPageToken = data.nextPageToken;
 		DebugPrint("Updated Token to: " + data.nextPageToken);
 	    }
 
@@ -361,7 +423,7 @@ export class YoutubeV3 {
 	}
 	*/
 
-	async getStreamStartUnix(videoId = this.config.broadcastId, apiKey = this.config.apiKey) {
+	async getStreamStartUnix(videoId = this.#config.broadcastId, apiKey = this.#config.apiKey) {
 	    const url = `https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${videoId}&key=${apiKey}`;
 	    
 	    try {
@@ -377,7 +439,7 @@ export class YoutubeV3 {
 			const unixTimestamp = new Date(startTimeStr).getTime();
 			
 			this.DPrint(`Stream started at Unix: ${unixTimestamp}`);
-			this.config.broadcastStartedAt = unixTimestamp;
+			this.#config.broadcastStartedAt = unixTimestamp;
 			return unixTimestamp;
 		    }
 		}
@@ -426,9 +488,9 @@ export class YoutubeV3 {
 	async ProcessYoutubeV3Message(unprocessedMsg){
 	    try {
 		const rmo = unprocessedMsg.data;
-		const cockatiel = window.Cockatiel; // Reference the main controller
-		const state = cockatiel.GetState();
-		
+		const cockatiel = window.Cockatiel;
+		const state = cockatiel.GetState();	
+
 		DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
 		
 		// 1. Fix the template reference (assuming templates live on Cockatiel)
@@ -506,12 +568,14 @@ export class YoutubeV3 {
 		console.log({msg: "ProcessYoutubeV3SuperChatEvent received:", val: JSON.stringify(unprocessedMsg, null, 4)});
 	    try {
 		const rmo = unprocessedMsg.data;
-		const template = window.Cockatiel.GetTemplates().messages;
+		const cockatiel = window.Cockatiel; // Reference the main controller
+		const state = cockatiel.GetState();
 		
 		DebugPrint({msg: "rmo processed from ProcessYoutubeV3Data_v1():", val: rmo});
 		
 		// 1. Initialize message from template
-		let newMessage = template;
+		let newMessage = { ...template }; // or structuredClone(template)
+	//	let newMessage = template;
 		newMessage.version = 1;
 		newMessage.type = "message-monitized";
 		newMessage.platform = "youtube";
@@ -656,8 +720,41 @@ export class YoutubeV3 {
 		}
 	}
 
-	GenerateYoutubeConfigUI(){ //returns html element for the yt config
-		try{
+	/**
+	 * Parses a single raw YouTube Live Chat Message object and adds it to the 
+	 * standardized unprocessed message template.
+	 * @param {Object} rawMessage A single raw message object from the YouTube API 'items' array.
+	 * @returns {void}
+	 */
+	ParseYoutubeV3Message(rawMessage) {
+		let state = window.Cockatiel.GetState();
+	// Check if the input is a valid object
+	    this.DPrint({msg: "attempt to add message to unprocessed_queue:", rawMessage});
+	    if (!rawMessage || typeof rawMessage !== 'object' || !rawMessage.snippet) {
+	        console.warn("rawMessage is not an object, has no snippet, or undefined, skipping");
+	        return;
+	    }
+
+	    // Convert the ISO 8601 string to Unix time in milliseconds.
+	    const unixTimestampMs = new Date(rawMessage.snippet.publishedAt).getTime();
+
+	    // Create a new message object based on the class template
+	    let processedMessage = {
+		// Use a shallow copy of the template to avoid modifying the template itself
+		version : window.Cockatielg.templates.unprocessed_message_v1.version,
+		apiVersion : 3, // WARN: do not change this, if this needs to be changed make a new function
+		platform : "YouTube",
+		// Set dynamic/specific fields
+		data : rawMessage, // Store the entire raw message object
+		receivedAt: unixTimestampMs, // Unix time in milliseconds
+		failedProcessingAt : undefined, 
+	    };
+
+	    this.DPrint({msg: "Adding message to unprocessed_queue: ", processedMessage});
+	    return(processedMessage);
+	}
+
+	YoutubeWizardUI(){
 		if(document == undefined){this.DPrint({msg: "cannot create youtube config, returning "}); return;}
 		this.DPrint("GENERATING YOUTUBE CONFIG UI");
 	    const container = this.CHE({type: "div"});
@@ -673,7 +770,7 @@ export class YoutubeV3 {
 	    `;
 
 	    const summary = document.createElement('summary');
-	    summary.innerText = "youtube config";
+	    summary.innerText = "click here to select your stream (⚠️ DO NOT OPEN ON STREAM  ⚠️)";
 	    summary.style.cursor = "pointer";
 	    details.appendChild(summary);
 
@@ -754,8 +851,8 @@ export class YoutubeV3 {
 		    const channelName = document.getElementById("youtube-config-channelName").value;
 		    const apiKey = document.getElementById("youtube-config-apiKey").value;
 
-		    window.Cockatiel.yt.config.channelName = channelName;
-		    window.Cockatiel.yt.config.apiKey = apiKey;
+		    window.Cockatiel.yt.#config.channelName = channelName;
+		    window.Cockatiel.yt.#config.apiKey = apiKey;
 
 		    await window.Cockatiel.yt.getChannelId();
 		    const broadcasts = await window.Cockatiel.yt.getLiveAndUpcoming();
@@ -780,9 +877,9 @@ export class YoutubeV3 {
 			bs.appendChild(vi);
 
 			bs.onclick = async () => {
-			    window.Cockatiel.yt.config.broadcastId = b.id.videoId;
+			    window.Cockatiel.yt.#config.broadcastId = b.id.videoId;
 			    const startTimeStr = b.liveStreamingDetails?.actualStartTime;
-			    window.Cockatiel.yt.config.streamStartedAt = startTimeStr ? new Date(startTimeStr).getTime() : null;
+			    window.Cockatiel.yt.#config.streamStartedAt = startTimeStr ? new Date(startTimeStr).getTime() : null;
 
 			    document.getElementById("youtube-config-channelId").value = b.snippet.channelId;
 			    document.getElementById("youtube-config-broadcastId").value = b.id.videoId;
@@ -809,7 +906,211 @@ export class YoutubeV3 {
 
 	    container.appendChild(details);
 		return container;
-	}	
+	}
+
+	/**
+	 * Generates a Mock YouTube Message Creator UI.
+	 * @param {Function} onMessageCreated - Callback function that receives the generated JSON object.
+	 * @returns {HTMLElement} The container element.
+	 */
+	async CreateMockYoutubeMessageUI(onMessageCreated) {
+	    const container = document.createElement("div");
+	    container.style = `
+		font-family: sans-serif; padding: 1.2rem; background: #282828; 
+		color: #fff; border-radius: 0.5rem; border: 0,1rem solid #444; max-width: 60rem;
+	    `;
+
+	    const title = document.createElement("h4");
+	    title.innerText = "YouTube API Message Simulator";
+	    title.style.margin = "0 0 0.6rem 0";
+
+	    const input = document.createElement("input");
+	    input.type = "text";
+	    input.placeholder = "Type a message to simulate...";
+	    input.style = `
+		width: 100%; padding: 0.7rem; background: #121212; border: 0.1rem solid #ff0000; 
+		color: #fff; border-radius: 0.2rem; box-sizing: border-box; margin-bottom: 0.6rem;
+	    `;
+
+	    const btn = document.createElement("button");
+	    btn.innerText = "Generate & Inject Message";
+	    btn.style = `
+		cursor: pointer; width: 100%; padding: 0.6rem; background: #ff0000; 
+		color: white; border: none; border-radius: 0.2rem; font-weight: bold;
+	    `;
+
+	    btn.onclick = () => {
+		const text = input.value || "Default Test Message";
+		
+		// Construct the specific YouTube API structure
+		const mockYoutubeResponse = {
+		    "kind": "youtube#liveChatMessage",
+		    "etag": "generated_" + Math.random().toString(36).substring(7),
+		    "id": "LCC." + btoa(Date.now().toString()),
+		    "snippet": {
+			"type": "textMessageEvent",
+			"liveChatId": "Cg0KCzhlUFk0ellmX0tj",
+			"authorChannelId": "UCiYflTancqoI-CvKoixE2Fw",
+			"publishedAt": new Date().toISOString(),
+			"hasDisplayContent": true,
+			"displayMessage": text, // Injected input
+			"textMessageDetails": {
+			    "messageText": text // Injected input
+			}
+		    },
+		    "authorDetails": {
+			"channelId": "asdf1234asdf1234",
+			"channelUrl": "http://www.youtube.com/channel/test",
+			"displayName": "TestUser",
+			"profileImageUrl": "/content/stream_utils/tib_stuff/default_icon.png",
+			"isVerified": false,
+			"isChatOwner": false,
+			"isChatSponsor": false,
+			"isChatModerator": false,
+		    }
+		};
+
+		console.log("Simulated YouTube Message:", mockYoutubeResponse);
+	
+		if (typeof onMessageCreated === "function") {
+		    onMessageCreated(mockYoutubeResponse);
+		}
+
+		this.AddUnprocessedMessageToUnprocessedQueue( 
+			this.yt.ParseYoutubeV3Messages(mockYoutubeResponse)
+		)
+		this.ProcessUnprocessedQueue(mockYoutubeResponse);
+
+		input.value = ""; // Clear input after use
+	    };
+
+	    container.append(title, input, btn);
+	    return container;
+	}
+
+	YoutubeTests(){
+	    //tests 	
+		let tests = document.createElement("details");
+		tests.style = "color:white;";
+		let summary = document.createElement("summary");
+		summary.innerText = "youtube test events";
+		tests.append(summary);
+
+		// superChatEvent - message
+		let superChatEventMessages = [
+			{
+				"version": 1,
+				"apiVersion": 3,
+				"platform": "YouTube",
+				"data": {
+					"kind": "youtube#liveChatMessage",
+					"etag": "cyISaLoRJzops1Dhjhwp5ineYeI",
+					"id": "LCC.EhwKGkNLanpxY2J1dnBNREZRbkN3Z1FkVGhZVVJB",
+					"snippet": {
+						"type": "superChatEvent",
+						"liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+						"authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+						"publishedAt": "2026-03-27T00:52:12.560546+00:00",
+						"hasDisplayContent": true,
+						"displayMessage": "CA$2.00 from @vulbyte: \"IS A TEST OF THE YOUTUBE API WITH A MESSAGE\"",
+						"superChatDetails": {
+							"amountMicros": "2000000",
+							"currency": "CAD",
+							"amountDisplayString": "CA$2.00",
+							"userComment": "HERE IS A TEST OF THE YOUTUBE API WITH A MESSAGE",
+							"tier": 2
+						}
+					},
+					"authorDetails": {
+						"channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+						"channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+						"displayName": "@vulbyte",
+						"profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+						"isVerified": false,
+						"isChatOwner": true,
+						"isChatSponsor": false,
+						"isChatModerator": false
+					}
+				},
+				"receivedAt": 1774572732560
+			},
+			{ //donation with no message
+				    "version": 1,
+				    "apiVersion": 3,
+				    "platform": "YouTube",
+				    "data": {
+					"kind": "youtube#liveChatMessage",
+					"etag": "-mh60g2cUZ1R7_bp6EA76nY3uq0",
+					"id": "LCC.EhwKGkNOUEloTGU2dnBNREZmSEN3Z1FkR0lnaTlR",
+					"snippet": {
+					    "type": "superChatEvent",
+					    "liveChatId": "Cg0KC09FeE9LRGI0WnFzKicKGFVDS1ppZ0hiZ3BKRzlsZHhYTXFtaVpVZxILT0V4T0tEYjRacXM",
+					    "authorChannelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+					    "publishedAt": "2026-03-26T21:07:12.021491+00:00",
+					    "hasDisplayContent": true,
+					    "displayMessage": "CA$1.00 from @vulbyte",
+					    "superChatDetails": {
+						"amountMicros": "1000000",
+						"currency": "CAD",
+						"amountDisplayString": "CA$1.00",
+						"tier": 1
+					    }
+					},
+					"authorDetails": {
+					    "channelId": "UCKZigHbgpJG9ldxXMqmiZUg",
+					    "channelUrl": "http://www.youtube.com/channel/UCKZigHbgpJG9ldxXMqmiZUg",
+					    "displayName": "@vulbyte",
+					    "profileImageUrl": "https://yt3.ggpht.com/jrcU7ZjcLMBzCQbU6QMucPmC-cBiHOFrmTpDS9gDzUdH9FUTyzqgrkX9-rXzRh6Fac_HWWgNoEA=s88-c-k-c0x00ffffff-no-rj",
+					    "isVerified": false,
+					    "isChatOwner": true,
+					    "isChatSponsor": false,
+					    "isChatModerator": false
+					}
+				    },
+				    "receivedAt": 1774559232021
+				}
+			];
+		    /*
+		    --scoreColor1000plus: #E62117;
+		    --scoreColor500plus: #E91E63;
+		    --scoreColor100plus: #FFCA28;
+		    --scoreColor50plus: #1DE9B6;
+		    --scoreColor20plus: #00E5FF;
+		    --scoreColor0plus: #1E88E5;
+		    --scoreColorBelow0: #0000E5;
+		    */
+		let superChatTest = document.createElement("button");
+		superChatTest.innerText =  'test "superChatEvent" message';
+		superChatTest.style = `
+			background-color: "#1E88E5";
+			color: "#fff";
+		`;
+		superChatTest.onclick = () => {
+			this.yt.ProcessYoutubeV3Data_v1(superChatEventMessages[
+				Math.floor(Math.random()*superChatEventMessages.length)
+			]);
+		};
+
+		tests.append(superChatTest);	
+
+		let mock = this.CreateMockYoutubeMessageUI();
+		tests.append(mock);
+
+		let testMessageInput = document.createElement("div");
+			let messageInput = document.createElement("input");
+			messageInput.type = "text";
+			messageInput.id = String("youtubeTestInput" + String(crypto.randomUUID()));
+			let messageTester = document.createElement("button");
+			messageTester.innerText = "send a test message";
+			messageTester.onclick = () => {
+				let mockHtml = "";
+				console.warn(mockHtml);
+			};	
+			testMessageInput.append(messageInput, messageTester);
+		tests.append(testMessageInput);
+
+	    return tests;
+	}
 
 	// WARN: due to CORS and other stuff, this will have to be handled by the cpp local client when made.
 	/* 
@@ -818,7 +1119,7 @@ export class YoutubeV3 {
 	    const response = await gapi.client.youtube.liveChatMessages.insert({
 	      "part": ["snippet"],
 	      "resource": {
-		"snippet": {
+		"snippet": { 
 		  "liveChatId": this.config.liveChatId,
 		  "type": "textMessageEvent",
 		  "textMessageDetails": {
@@ -833,6 +1134,34 @@ export class YoutubeV3 {
 	  }
 	}
 	*/
+	GenerateUI(){ //returns html element for the yt config
+		try{
+			let tests = this.YoutubeTests()
+			console.log("tests", tests);
+			let ui = this.YoutubeWizardUI()
+			console.log("ui", ui);
+
+			let customThings = document.createElement("div");
+			customThings.append(tests, ui);
+			console.log("HEY NUMBNUTS: ", customThings);
+			console.log("HEY NUMBNUTS: ", customThings);
+
+			return Result.ok(window.Cockatiel.UITemplate(
+				`https://www.youtube.com/s/desktop/efb42404/img/favicon.ico`, 
+				"youtube",
+				window.Cockatiel.youtube,
+				(() => {
+					this.UpdateConfig({isEnabled: true});
+					this.DPrint({msg: "youtube enabled"});
+				}),
+				(() => {
+					this.UpdateConfig({isEnabled: false});
+					this.DPrint({msg: "youtube disabled"});
+				}),
+				customThings /* WHY IS THIS ERRORING */
+			));
+		}	
+
 		 catch(err){
 			this.EmitError(err);
 			 console.error("could not generate youtube ui: ", err);

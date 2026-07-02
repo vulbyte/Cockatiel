@@ -1,0 +1,174 @@
+/* ============================================================
+   CHAT BUBBLE STYLES — 6 Themes
+   Each theme scopes all its rules under a modifier class on
+   .chatMessageContainer so you can swap them at runtime:
+     <div class="chatMessageContainer theme-glass">
+   ============================================================ */
+
+
+/* ============================================================
+   BASE RESET (shared across all themes)
+   ============================================================ */
+.chatMessageContainer {
+  display: block;
+  position: relative;
+  flex-shrink: 0;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  padding-bottom: 2rem;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+.chatMessageContainer .chatUserBubble {
+  display: flex;
+  flex-direction: row;
+  height: 3.2em;
+}
+
+.chatMessageContainer .chatUserBubble .chatBubbleTailContainer {
+  display: flex;
+  flex-direction: column-reverse;
+  height: 100%;
+  filter: opacity(0);
+}
+
+.chatMessageContainer .chatUserBubble .chatBubbleTailContainer .chatBubbleTailContainer {
+  position: relative;
+  bottom: 0px;
+  width: 1.3rem;
+  height: 1.3rem;
+}
+
+.chatMessageContainer .chatUserBubble .chatUserInfo {
+  display: flex;
+  flex-direction: row;
+  padding: 0.2rem;
+}
+
+.chatMessageContainer .chatUserBubble .chatUserInfo .chatUserImageContainer {
+  border-radius: 100%;
+  height: 3rem;
+  width: 3rem;
+  transform: translateY(-0.1rem);
+}
+
+.chatMessageContainer .chatUserBubble .chatUserInfo .chatUserImageContainer .chatUserImage {
+  border-radius: 100%;
+  height: 3.2rem;
+  max-height: 90%;
+  width: 3.2rem;
+  max-width: 90%;
+  padding: 0.2rem;
+}
+
+.chatMessageContainer .chatUserBubble .chatUserInfo .chatUserStats {
+  padding-left: 0.5rem;
+}
+
+.chatMessageContainer .chatUserBubble .chatUserInfo .chatUserStats .chatUsername {
+  width: 17rem;
+  padding-right: 1rem;
+  font-weight: bolder;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chatMessageContainer .chatUserBubble .chatUserInfo .chatUserStats .chatUserCommendations {
+  font-size: 1.5rem;
+}
+
+.chatMessageContainer .chatMessageBubble {
+  padding: 1rem;
+  margin-left: 1.3rem;
+  width: 18rem;
+}
+
+.chatMessageContainer .chatMessageBubble .chatCommandContainer {
+  height: 1rem;
+  padding-bottom: 1rem;
+}
+
+.chatMessageContainer .chatMessageBubble .chatCommandContainer .chatCommand {
+  border-radius: 1rem;
+  font-size: 1.5rem;
+  padding: 0.2rem;
+  padding-left: 0.7rem;
+  height: min-content;
+  width: auto;
+}
+
+.chatMessageContainer .chatMessageBubble .chatMessage {
+  padding-top: 0.2rem;
+}
+
+/* ============================================================
+   THEME 5 — EDITORIAL
+   Serif font, left/right accent borders instead of bubble shapes.
+   Best on: journaling, writing, literary, or note-taking apps.
+   Usage: <div class="chatMessageContainer theme-editorial">
+   ============================================================ */
+
+.theme-editorial {
+  font-family: Georgia, 'Times New Roman', Times, serif;
+}
+
+.theme-editorial .chatUserBubble .chatUserInfo {
+  background-color: #FAEEDA;
+  border-radius: 0;
+  border-left: 3px solid #BA7517;
+  border-bottom-left-radius: 0;
+  color: #412402;
+  font-family: Georgia, 'Times New Roman', Times, serif;
+}
+
+.theme-editorial .chatUserBubble .chatUserInfo .chatUserImageContainer {
+  background-color: #FAC775;
+}
+
+.theme-editorial .chatUserBubble .chatUserInfo .chatUserStats .chatUsername {
+  color: #412402;
+  font-style: italic;
+}
+
+.theme-editorial .chatUserBubble .chatUserInfo .chatUserStats .chatUserCommendations {
+  color: #BA7517;
+}
+
+.theme-editorial .chatMessageBubble {
+  background-color: #FAEEDA;
+  border-radius: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-left: 3px solid #BA7517;
+  color: #412402;
+  font-family: Georgia, 'Times New Roman', Times, serif;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin-left: 1.3rem;
+}
+
+.theme-editorial .chatMessageBubble .chatCommandContainer .chatCommand {
+  background-color: #FAC775;
+  color: #412402;
+  font-family: Georgia, 'Times New Roman', Times, serif;
+  font-style: italic;
+  border-radius: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .theme-editorial .chatUserBubble .chatUserInfo,
+  .theme-editorial .chatMessageBubble {
+    background-color: #412402;
+    color: #FAEEDA;
+    border-left-color: #EF9F27;
+  }
+  .theme-editorial .chatUserBubble .chatUserInfo .chatUserImageContainer {
+    background-color: #633806;
+  }
+  .theme-editorial .chatMessageBubble .chatCommandContainer .chatCommand {
+    background-color: #633806;
+    color: #FAEEDA;
+  }
+}

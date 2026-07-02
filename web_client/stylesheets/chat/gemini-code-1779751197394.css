@@ -1,0 +1,4 @@
+.chatMessageContainer { background: #1a0b2e; padding: 20px; }
+.chatUserInfo { background: #3c1a63; color: white; padding: 5px; border-radius: 20px; }
+.chatMessageBubble { background: #2d1645; color: #e0e0e0; border-radius: 20px; border-top-left-radius: 0; padding: 15px; }
+.chatCommand { background: #ff00ff; color: #fff; padding: 2px 8px; border-radius: 5px; text-transform: uppercase; }
