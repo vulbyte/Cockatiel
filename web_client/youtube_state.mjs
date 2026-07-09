@@ -1,17 +1,58 @@
+import {BaseClass} from "./baseClass.mjs";
 import {DebugPrint} from "./DebugPrint.mjs";
 import {IntTimer} from  "./intTimer.mjs";
 import {Result} from "./result.mjs";
 
-export class Youtube {
+export class Youtube extends BaseClass {
+	static extraConfig = {
+		apiKey: undefined,		
+		broadcastId: undefined,		
+		broadcastStartedAt: undefined,
+		channelName: undefined,		
+		channelId: undefined,
+		color: "#ff0000",
+		title: "youtube",
+		iconLink: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/YouTube_full-color_icon_%282017%29.svg/1280px-YouTube_full-color_icon_%282017%29.svg.png",
+		isEnabled: false, //manually toggle on
+		liveChatId: undefined,		
+		pageCount: undefined, // TODO: is this used?
+		nextPageToken: undefined,
+		autoAssignToConfig: true,
+		preserveMessages: true,
+		messages: [],
+	}
+    constructor(){
+	super({
+		childClassName: new.target.name,
+		extraConfig: new.target.extraConfig,
+	});
+
+	let keys = Object.keys(window.Cockatiel.templates.platformSettings);
+	let overrideGlobalFlags = new Array(keys.length);	
+	this.DPrint({
+		msg: `generating inputs for the following keys for youtubeStuff`,
+		val: keys,
+	})
+	
+	    /*
+	     what are toggle and input?
+	let key, val;
+	for(let i = 0; i < keys.length; ++i){
+		overrideGlobalFlags.push(toggle);
+		overrideGlobalFlags.push(input);
+	}
+	*/	    
+    }
+
 	#isInited = false;
 
-	Init(){}
 
 	isReady(){
+		let config = this.GetConfigValue("*").value;
 	    return (
-		    !!this.#config.liveChatId 
-		    && !!this.#config.apiKey
-		    && this.#config.isEnabled
+		       !!config.liveChatId 
+		    && !!config.apiKey
+		    &&   config.isEnabled
 	    );
 	}	
 
@@ -23,73 +64,7 @@ export class Youtube {
 		}
 		this.EmitStatus(data);
 	}
-	#config = {
-		apiKey: undefined,		
-		channelName: undefined,		
-		channelId: undefined,
-		broadcastId: undefined,		
-		broadcastStartedAt: undefined,
-		isEnabled: false, //manually toggle on
-		liveChatId: undefined,		
-		pageCount: undefined, // TODO: is this used?
-		nextPageToken: undefined,
-		debug: true,
-		autoAssignToConfig: true,
-		preserveMessages: true,
-		messages: [],
-	}
-	GetConfig(){
-		return this.#config;
-	}
-	UpdateConfig(input){
-		if(typeof(input) != "object"){
-			this.DPrint({msg:"could not update config, type is not an object", type: "e"});
-		}	
-		this.DPrint({msg: `updating youtube config values: ${JSON.stringify(input, null, 2)}`})
 
-		let inputKeys = Object.keys(input);
-		for(let i = 0; i < inputKeys.length; ++i){
-			if(this.#config[inputKeys[i]] != undefined){
-				this.DPrint({msg: `updating value ${input[inputKeys[i]]} for key: ${inputKeys[i]}`});
-				this.#config[inputKeys[i]] = input[inputKeys[i]];
-			}
-		}
-	}
-
-
-    constructor(configMap = null) {
-	let keys = Object.keys(window.Cockatiel.templates.platformSettings);
-	let overrideGlobalFlags = new Array(keys.length);	
-	this.DPrint({
-		msg: `generating inputs for the following keys for youtubeStuff`,
-		val: keys,
-	})
-	let key, val;
-	for(let i = 0; i < keys.length; ++i){
-		/* at time of writing the withins are:
-		css: null,
-		notificationSound: null,
-		overrideGlobal: false,
-		*/
-		key = keys[i];	
-		val = Object.keys(window.Cockatiel.templates.platformSettings);
-		let toggle = `youtube-${key}-${key}Override`;
-		let input = `youtube-${key}-${key}OverrideValue`;
-
-		overrideGlobalFlags.push(toggle);
-		overrideGlobalFlags.push(input);
-	}
-	    
-    	this.#config = {
-		...this.#config,
-		//...window.Cockatiel.templates.platformSettings,
-		...overrideGlobalFlags
-	} 
-
-        if (configMap) {
-            this.updateConfig(configMap);
-        }
-    }
 
 	// Listener Arrays
     #start_listeners = [];  // when starts
@@ -194,8 +169,9 @@ export class Youtube {
     }
 
 	async LoadValuesFromLocalStorage() {    
+		let config = this.GetConfigValue("*").value;
 	    this.DPrint("LoadingValuesFromLocalStorage");
-	    const keys = Object.keys(this.#config);
+	    const keys = Object.keys(config);
 	    this.DPrint("attenpting to get values for: ", keys);
 
 	    let key, val;
@@ -205,12 +181,12 @@ export class Youtube {
 		    this.DPrint("getting value for: " + key);
 		    
 		    // Use the actual key name: in the storage string
-		    val = localStorage.getItem("youtube-#config-" + key); 
+		    val = localStorage.getItem("youtube-config-" + key); 
 		    this.DPrint(`value of ${key} is: `, val);
 
 		    // Only update config if the value actually exists in localStorage
 		    if (val !== null) {
-			this.#config[key] = val;
+			this.config[key] = val;
 		    } else {
 			this.DPrint(`No saved value found for ${key}`);
 		    }
@@ -223,9 +199,10 @@ export class Youtube {
 	}
 
 	async getChannelId(
-		apiKey = this.#config.apiKey, 
-		handle = this.#config.channelName
+		apiKey = this.GetConfigValue("apiKey").value, 
+		handle = this.GetConfigValue("channelName").value
 	) {
+		const config = this.GetConfigValue("*").value;
 		this.DPrint("getting channel id");
 		// formatting the inputs
 		apiKey = String(apiKey).trim();
@@ -243,7 +220,7 @@ export class Youtube {
 
 				this.DPrint(`Channel ID: ${channelId}`);
 
-				if(this.#config.autoAssignToConfig){this.#config.channelId = channelId;}
+				if(config.autoAssignToConfig){config.channelId = channelId;}
 
 				return channelId;
 			} else {
@@ -258,8 +235,8 @@ export class Youtube {
 
 	async getLiveAndUpcoming(apiKey, channelId) {
 		this.DPrint("getting live and upcoming messages");
-		const _apiKey = apiKey || this.#config.apiKey;
-		const _channelId = channelId || this.#config.channelId;
+		const _apiKey = apiKey || this.GetConfigValue("apiKey").value;
+		const _channelId = channelId || this.GetConfigValue("channelId").value;
 		const statuses = ['live', 'upcoming'];
 		let allBroadcasts = [];
 
@@ -290,7 +267,8 @@ export class Youtube {
 		return allBroadcasts;
 	}
 
-	async getLiveChatId(apiKey = this.#config.apiKey, videoId = this.#config.broadcastId) {
+	async getLiveChatId(apiKey = this.GetConfigValue("apiKey").value, videoId = this.GetConfigValue("broadcastId").value) {
+		const config = this.GetConfigValue("*").value;
 		this.DPrint("getting live chat id");
 	    // 1. Define the base URL
 	    const baseUrl = `https://www.googleapis.com/youtube/v3/videos`;
@@ -317,9 +295,9 @@ export class Youtube {
 		console.log("YouTube Data:", data);
 		
 		// Extract the chat ID
-		this.#config.liveChatId = data.items?.[0]?.liveStreamingDetails?.activeLiveChatId;
-		console.log("liveChatId: ", this.#config.liveChatId);
-		return this.#config.liveChatId;
+		config.liveChatId = data.items?.[0]?.liveStreamingDetails?.activeLiveChatId;
+		console.log("liveChatId: ", config.liveChatId);
+		return config.liveChatId;
 	    } catch (error) {
 		console.error("Fetch Error:", error);
 		this.EmitWarn(error);
@@ -368,11 +346,13 @@ export class Youtube {
 
 	
 	async getChatMessages(chatId, token) {
-	    // 1. Prioritize the passed token, fallback to #config
-	    const activeChatId = chatId || this.#config.liveChatId;
-	    const activeToken = token || this.#config.nextPageToken;
+		const config = this.GetConfigValue("*").value;
 
-	    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails&maxResults=200${activeToken ? `&pageToken=${activeToken}` : ''}&key=${this.#config.apiKey}`;
+	    // 1. Prioritize the passed token, fallback to #config
+	    const activeChatId = chatId || this.GetConfigValue("liveChatId").value;
+	    const activeToken = token || this.GetConfigValue("nextPageToken").value;
+
+	    const url = `https://www.googleapis.com/youtube/v3/liveChat/messages?liveChatId=${activeChatId}&part=snippet,authorDetails&maxResults=200${activeToken ? `&pageToken=${activeToken}` : ''}&key=${config.apiKey}`;
 	    
 	    this.DPrint("Fetching URL: " + url);
 
@@ -386,7 +366,7 @@ export class Youtube {
 
 	    // 2. Update the token for the next call
 	    if (data.nextPageToken) {
-		this.#config.nextPageToken = data.nextPageToken;
+		config.nextPageToken = data.nextPageToken;
 		this.DPrint("Updated Token to: " + data.nextPageToken);
 	    }
 
@@ -423,8 +403,12 @@ export class Youtube {
 	}
 	*/
 
-	async getStreamStartUnix(videoId = this.#config.broadcastId, apiKey = this.#config.apiKey) {
+	async getStreamStartUnix(
+		videoId = this.GetConfigValue("broadcastId").value, 
+		apiKey = this.GetConfigValue("apiKey").value
+	) {h
 	    const url = `https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${videoId}&key=${apiKey}`;
+		const config = this.GetConfigValue("*").value;
 	    
 	    try {
 		const response = await fetch(url);
@@ -439,7 +423,7 @@ export class Youtube {
 			const unixTimestamp = new Date(startTimeStr).getTime();
 			
 			this.DPrint(`Stream started at Unix: ${unixTimestamp}`);
-			this.#config.broadcastStartedAt = unixTimestamp;
+			this.config.broadcastStartedAt = unixTimestamp;
 			return unixTimestamp;
 		    }
 		}
@@ -851,8 +835,8 @@ export class Youtube {
 		    const channelName = document.getElementById("youtube-config-channelName").value;
 		    const apiKey = document.getElementById("youtube-config-apiKey").value;
 
-		    window.Cockatiel.yt.#config.channelName = channelName;
-		    window.Cockatiel.yt.#config.apiKey = apiKey;
+		    config.channelName = channelName;
+		    config.apiKey = apiKey;
 
 		    await window.Cockatiel.yt.getChannelId();
 		    const broadcasts = await window.Cockatiel.yt.getLiveAndUpcoming();
@@ -877,9 +861,9 @@ export class Youtube {
 			bs.appendChild(vi);
 
 			bs.onclick = async () => {
-			    window.Cockatiel.yt.#config.broadcastId = b.id.videoId;
+			    config.broadcastId = b.id.videoId;
 			    const startTimeStr = b.liveStreamingDetails?.actualStartTime;
-			    window.Cockatiel.yt.#config.streamStartedAt = startTimeStr ? new Date(startTimeStr).getTime() : null;
+			    this.SetConfigValue("streamStartedAt", startTimeStr ? new Date(startTimeStr).getTime() : null);
 
 			    document.getElementById("youtube-config-channelId").value = b.snippet.channelId;
 			    document.getElementById("youtube-config-broadcastId").value = b.id.videoId;
@@ -1149,7 +1133,7 @@ export class Youtube {
 			return Result.ok(window.Cockatiel.UITemplate(
 				`https://www.youtube.com/s/desktop/efb42404/img/favicon.ico`, 
 				"youtube",
-				window.Cockatiel.youtube,
+				window.Cockatiel.Youtube,
 				(() => {
 					this.UpdateConfig({isEnabled: true});
 					this.DPrint({msg: "youtube enabled"});
@@ -1165,6 +1149,7 @@ export class Youtube {
 		 catch(err){
 			this.EmitError(err);
 			 console.error("could not generate youtube ui: ", err);
+			 return Result.err(`could not generate YoutubeUI, ${err}`);
 		}
 	}
 }

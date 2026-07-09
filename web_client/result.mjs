@@ -17,9 +17,9 @@ export class Result {
    * @param {T} value 
    * @returns {Result<T, never>}
    */
-  static ok(value = undefined) {
-      if (value == undefined) {
-        return new Result(true, "no value given", null, new Error().stack);
+  static ok(value = "thisValueShouldNeverBeSeenAndIfItIsThere'sAnError") {
+      if(value ==  "thisValueShouldNeverBeSeenAndIfItIsThere'sAnError"){
+        return new Result(true, "thisValueShouldNeverBeSeenAndIfItIsThere'sAnError", null, new Error().stack);
       }
       console.log("Result.ok(", value, ")");
       // Also fixed a bug here where it returned "no value given" instead of the value

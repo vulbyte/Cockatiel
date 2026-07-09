@@ -1,8 +1,21 @@
+import {BaseClass} from "./baseClass.mjs";
 import {Result} from "./result.mjs";
 
 
 // DO NOT REMOVE ANYTHING FROM THE TIMELINE EVER, THE TIMELINE SHOULD BE CONSIDERED A SOURCE OF TRUTH
-export class Timeline{
+export class Timeline extends BaseClass{
+	static extraConfig = {
+		color: "#fff",
+		title: "timeline settings",
+	};
+	constructor(){
+		super({
+			childClassName: new.target.name,
+			extraConfig: new.target.extraConfig
+		});
+	};
+
+
 	// never access directly, use the get/add functions to ensure timeline state
 	#timeline = new Array(1024); //a good small size for testing, let GC take over after
 
@@ -157,5 +170,12 @@ export class Timeline{
 		catch(err) {
 			return Result.err(`could not push object to timeline: ${err}`);
 		}
+	}
+
+	GenerateUI(){	
+		let phDiv = document.createElement("div");
+		phDiv.innerText = "timeline UI to go here";
+		
+		return Result.ok(phDiv);
 	}
 }

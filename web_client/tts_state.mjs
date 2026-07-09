@@ -1,35 +1,40 @@
+import {BaseClass} from "./baseClass.mjs";
+
 import {DebugPrint} from "./DebugPrint.mjs";
 import {IntTimer} from  "./intTimer.mjs";
 import {Result} from "./result.mjs";
 
-export class TtsManager {
-    #isBusy = false;
-    #queue = [];
-
-	Init(){}
-
-    isBusy(){
-	return this.#isBusy;
-    }
-
-    config = {
-        useAi: true,
-        aiEndpoint: "http://127.0.0.1:5002/api/tts", 
-        volume: 1.0,
-        rate: 1.0,  
-        pitch: 1.0  
-    };
-
+export class TtsManager extends BaseClass {
+	static extraConfig = {
+		useAi: true,
+		aiEndpoint: "http://127.0.0.1:5002/api/tts", 
+		volume: 1.0,
+		rate: 1.0,  
+		pitch: 1.0,
+		color: "#0ff",
+		title: "tts manager",
+	    };
     constructor(configMap = null) {
-        if (configMap) {
-            Object.assign(this.config, configMap);
-        }
-        
+
+	super({
+		childClassName: new.target.name,
+		extraConfig: new.target.extraConfig,
+	});
+ 
         // Pre-load voices for the fallback to ensure they are ready
         if (window.speechSynthesis) {
             window.speechSynthesis.getVoices();
         }
     }
+
+    #isBusy = false;
+    #queue = [];
+
+    isBusy(){
+	return this.#isBusy;
+    }
+
+
 
     // ==========================================
     // LISTENERS
@@ -138,7 +143,7 @@ export class TtsManager {
     // TTS LOGIC
     // ==========================================
     isAiReady() {
-        return this.config.useAi && !!this.config.aiEndpoint;
+        return this.GetConfigValue('useAi').value && this.GetConfigValue('aiEndpoint').value;
     }
 
     // Public method to add text to the speaking queue
@@ -538,7 +543,7 @@ export class TtsManager {
     async #PlayAiTts(text) {
         return new Promise(async (resolve) => {
             try {
-                const url = `${this.config.aiEndpoint}?text=${encodeURIComponent(text)}`;
+                const url = `${this.GetConfigValue("aiEndpoint").value}?text=${encodeURIComponent(text)}`;
                 const response = await fetch(url);
 
                 if (!response.ok) {
@@ -550,7 +555,7 @@ export class TtsManager {
                 const audioUrl = URL.createObjectURL(audioBlob);
                 const audio = new Audio(audioUrl);
 
-                audio.volume = this.config.volume;
+                audio.volume = this.GetConfigValue("volume").value;
 
                 audio.onended = () => {
                     URL.revokeObjectURL(audioUrl); // Clean up memory
@@ -583,9 +588,9 @@ export class TtsManager {
             }
 
             const utterance = new SpeechSynthesisUtterance(text);
-            utterance.volume = this.config.volume;
-            utterance.rate = this.config.rate;
-            utterance.pitch = this.config.pitch;
+            utterance.volume = this.GetConfigValue("volume").value;
+            utterance.rate =   this.GetConfigValue("rate").value;
+            utterance.pitch =  this.GetConfigValue("pitch").value;
 
             utterance.onend = () => resolve(true);
             utterance.onerror = (e) => {
@@ -633,14 +638,17 @@ export class TtsManager {
             return row;
         };
 
+	    let config = this.GetConfigValue("*").value;
+	    
+
         // 1. Checkbox: Use AI
         const useAiInput = document.createElement("input");
         useAiInput.type = "checkbox";
-        useAiInput.checked = this.config.useAi;
+        useAiInput.checked = config.useAi;
         useAiInput.style.flex = "0"; // Override flex for checkbox
         useAiInput.onchange = (e) => {
-            this.config.useAi = e.target.checked;
-            this.EmitStatus(`Config updated: useAi = ${this.config.useAi}`);
+            this.SetConfigValue('useAi', e.target.checked);
+            this.EmitStatus(`Config updated: useAi = ${this.SetConfigValue('useAi')}`);
         };
         
         const checkboxRow = document.createElement("div");
@@ -657,11 +665,11 @@ export class TtsManager {
         // 2. Input: AI Endpoint
         const endpointInput = document.createElement("input");
         endpointInput.type = "text";
-        endpointInput.value = this.config.aiEndpoint;
+        endpointInput.value = this.GetConfigValue("aiEndpoint").value;
         endpointInput.placeholder = "http://127.0.0.1:5002/api/tts";
         endpointInput.onchange = (e) => {
-            this.config.aiEndpoint = e.target.value;
-            this.EmitStatus(`Config updated: aiEndpoint = ${this.config.aiEndpoint}`);
+            this.SetConfigValue("aiEndpoint", e.target.value);
+            this.EmitStatus(`Config updated: aiEndpoint = ${this.GetConfigValue("aiEndpoint").value}`);
         };
         container.appendChild(createRow("API Endpoint URL:", endpointInput));
 
@@ -671,10 +679,10 @@ export class TtsManager {
         volumeInput.min = "0";
         volumeInput.max = "1";
         volumeInput.step = "0.05";
-        volumeInput.value = this.config.volume;
+        volumeInput.value = config.volume;
         volumeInput.onchange = (e) => {
-            this.config.volume = parseFloat(e.target.value);
-            this.EmitStatus(`Config updated: volume = ${this.config.volume}`);
+            config.volume = parseFloat(e.target.value);
+            this.EmitStatus(`Config updated: volume = ${config.volume}`);
         };
         container.appendChild(createRow("Master Volume:", volumeInput));
 
@@ -684,10 +692,10 @@ export class TtsManager {
         rateInput.min = "0.1";
         rateInput.max = "2";
         rateInput.step = "0.1";
-        rateInput.value = this.config.rate;
+        rateInput.value = config.rate;
         rateInput.onchange = (e) => {
-            this.config.rate = parseFloat(e.target.value);
-            this.EmitStatus(`Config updated: rate = ${this.config.rate}`);
+            config.rate = parseFloat(e.target.value);
+            this.EmitStatus(`Config updated: rate = ${config.rate}`);
         };
         container.appendChild(createRow("Fallback Rate:", rateInput));
 
@@ -697,10 +705,10 @@ export class TtsManager {
         pitchInput.min = "0";
         pitchInput.max = "2";
         pitchInput.step = "0.1";
-        pitchInput.value = this.config.pitch;
+        pitchInput.value = config.pitch;
         pitchInput.onchange = (e) => {
-            this.config.pitch = parseFloat(e.target.value);
-            this.EmitStatus(`Config updated: pitch = ${this.config.pitch}`);
+            config.pitch = parseFloat(e.target.value);
+            this.EmitStatus(`Config updated: pitch = ${config.pitch}`);
         };
         container.appendChild(createRow("Fallback Pitch:", pitchInput));
 

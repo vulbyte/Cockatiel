@@ -1,22 +1,26 @@
+import {BaseClass} from "./baseClass.mjs";
 import {IntTimer} from  "./intTimer.mjs";
+import { Result } from "./result.mjs";
 
-export class ChatManager{
-	config = {
+export class ChatManager extends BaseClass {
+	static extraConfig = {
 		key: "chatDisplay",
 		height: 800,
 		width: 420,  // this was an accident lol
 		background: "#0f0",
-		color: "#000",
+		color: "#00ffff",
+		title: "chat manager",
 		messageDisplayDuration: 30,
 		displayRateVariation: {min: 1.1, max: 5}, // min and max values for when to add the next message to chat display
 		defaultStylesheet: "/stylesheets/chat/claud-bold_block.css", 
 	}
-	//"./stylesheets/chatMessage-modernMinimal.css",
-	
-	chatWindow;
-	
-	Init(){
+	constructor(){
+		super({
+			childClassName: new.target.name,
+			extraConfig: new.target.extraConfig,
+		});
 	}
+	chatWindow;
 
 	CreatePopOut(){
 		this.chatWindow = window.open(
@@ -42,7 +46,11 @@ export class ChatManager{
 	}
 
 	GenerateUI(){
+		let phDiv = document.createElement("div");
+		phDiv.innerText = "chat manager UI to go here";
+
 		
+		return Result.ok(phDiv);
 	}
 }
 	

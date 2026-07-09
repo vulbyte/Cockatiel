@@ -1,13 +1,25 @@
+import {BaseClass} from "./baseClass.mjs";
 import {Result} from "./result.mjs";
 
-export class UserManager{
+export class UserManager extends BaseClass {
+	static extraConfig = {
+		color: `#ff00ff`,
+		title: `user Manager`,
+	};
+	constructor(){
+		super({
+			childClassName: new.target.name,
+			extraConfig: new.target.extraConfig,
+		});
+	}
+
 	#users = new Array(128);
-
-	Init(){}
-
 	GetUsers(){
 		return this.#users;
 	}
+
+	name = "userManager"; //no spaces!
+
 
 	DebugPrint(input){
 		window.Cockatiel.DebugPrint(input);

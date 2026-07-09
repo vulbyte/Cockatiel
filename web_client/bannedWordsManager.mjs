@@ -1,52 +1,29 @@
-import {DebugPrint} from "./DebugPrint.mjs"
+import {BaseClass} from "./baseClass.mjs";
+import {DebugPrint} from "./DebugPrint.mjs";
 import {TrieTree} from  "./trie_tree.mjs";
 import {Result} from "./result.mjs";
 
-export class BannedWordsManager{
+export class BannedWordsManager extends BaseClass {
+	static extraConfig = {
+		color: `#ff00ff`,
+		title: `banned Words Manager`,
+	};
+	constructor(){
+		super({
+			childClassName: new.target.name,
+			extraConfig: new.target.extraConfig,
+		});
+	}
+
 	//array is for archivalness
 	bannedWordsArray = [];
 	//trie is for quick lookups
 	BannedWordsTrie = new TrieTree();
 
-	Init(){
-		
-	}
-
 	DebugPrint(input){
 		window.Cockatiel.DebugPrint(input);
 	}
 
-	CHE(args = {}) {
-	    try {
-		if (!args.type) args.type = "div";
-
-		let elem = document.createElement(args.type);
-
-		if(args.inputType) elem.type = args.inputType;
-
-		if (args.class) elem.className = args.class;
-		if (args.id) elem.id = args.id;
-		if (args.innerHTML) elem.innerHTML = args.innerHTML;
-		if (args.innerText) elem.innerText = args.innerText;
-		if (args.style) elem.style.cssText = args.style;
-
-		if (args.attributes) {
-		    for (const [key, value] of Object.entries(args.attributes)) {
-			elem.setAttribute(key, value);
-		    }
-		}
-
-		if (args.onClick) {
-		    elem.addEventListener("click", args.onClick);
-		}
-
-		return elem;
-	    }
-	    catch (err) {
-		console.error("CHE failed", err);
-		return null;
-	    }
-	}
 
 	GenerateUI() {
 		this.DebugPrint({msg: "GENERATING BLACKLIST UI"});
@@ -128,7 +105,7 @@ export class BannedWordsManager{
 
 		setTimeout(() => this.UpdateBannedWordsList(), 0);
 		
-		return container;
+		return Result.ok(container);
 	    }
 
 

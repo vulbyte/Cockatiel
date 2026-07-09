@@ -1,21 +1,61 @@
+import { BaseClass } from "./baseClass.mjs";
 import {IntTimer} from  "./intTimer.mjs";
+import { Result } from "./result.mjs";
 
-export class EventsManager {
-	constructor(){}
-
-	Init(){}
-
-	config = {
+export class EventsManager extends BaseClass {
+	static extraConfig = {
 		cycle_rate: 7,
 		window: {
 			key: "eventDisplay",
 			height: 300,
 			width: 400, 
 			background: "#000",
-			color: undefined,	
 			defaultStylesheet: "",
-		}
+		},
+		title: "events manager",
+		color: "#ffff00",	
 	};
+	constructor(){
+		super({
+			childClassName: new.target.name,
+			extraConfig: new.target.extraConfig,
+		});
+	}
+
+	name = "eventsManager"; //no spaces!
+	SaveConfig(){
+		try{
+		console.log(`attempting to save config for ${this.name}`);
+	    localStorage.setItem(
+		    `${this.name}_config`, 
+		    JSON.stringify(structuredClone(this.GetConfigValue("*")))
+	    );
+		console.log(`saved ${this.name}`);
+		}
+		catch(err){
+			console.err(`could not save cockatiel item: ${this.name}`);
+		}
+	}
+	Init(){
+		name = this.name;
+		const savedData = localStorage.getItem(`${name}_config`);	
+		if (savedData) {
+		    try {
+			// Parse the string back into an object
+			const parsed = JSON.parse(savedData);	
+			// Merge the loaded data into the existing config
+			// This preserves defaults if new settings are added later
+			this.SetConfigValue({ ...parsed });	
+			console.log(`${name} config loaded successfully`);
+		    } catch (err) {
+			console.error(`Failed to parse ${name} config:`, err);
+		    }
+		}
+		window.Cockatiel.addSaveListener(() => {this.SaveConfig()});
+		window.addEventListener('beforeunload', () => {this.SaveConfig()});	
+		return Result.ok(`${name} was successfully inited`)
+	}
+
 
 	stateSettingsTemplate = {
 			audioQueue: null,
@@ -46,6 +86,13 @@ export class EventsManager {
 	}
 	GenerateEventHandleWindow(){
 
+	}
+
+	GenerateUI(){
+		let phDiv = document.createElement("div");
+		phDiv.innerText = "event manager UI to go here";
+		
+		return Result.ok(phDiv);
 	}
 }
 

@@ -1,9 +1,30 @@
+import {BaseClass} from "./baseClass.mjs";
 import {DebugPrint} from "./DebugPrint.mjs";
 import {IntTimer} from  "./intTimer.mjs";
 import {Result} from "./result.mjs";
 
-export class Twitch {
-	Init(){}
+export class Twitch extends BaseClass {
+    static extraConfig = {
+        channel: null,
+	color: "#6441a5",
+    	title: "twitch",
+	iconLink: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/20/Twitch_icon_2012.svg/250px-Twitch_icon_2012.svg.png",
+        token: null, 
+        nick: null, 
+        active: false,
+        GenerateUiContainer: null, // Target DOM element or ID
+	//twitchConfig
+    };
+    constructor(configMap){
+		super({
+			childClassName: new.target.name,
+			extraConfig: new.target.extraConfig,
+		});
+
+        if (configMap) {
+            this.updateConfig(configMap);
+        }
+    }
 
 	DPrint(data){
 		window.Cockatiel.DebugPrint(data);
@@ -12,47 +33,10 @@ export class Twitch {
 	
 	#twitchSocket = null;
 	#isListening = false;
-    // Configuration defaults
-    #config = {
-        channel: null,
-        token: null, 
-        nick: null, 
-        active: false,
-        GenerateUiContainer: null, // Target DOM element or ID
-	//twitchConfig
-    };
 
-    GetConfig(){
-    	return this.#config;
-    }
-
-UpdateConfig(input){
-	if(typeof(input) != "object"){
-		this.DPrint({msg:"could not update config, type is not an object", type: "e"});
-	}	
-	this.DPrint({msg: `updating twitch config values: ${JSON.stringify(input, null, 2)}`});
-
-	let inputKeys = Object.keys(input);
-	for(let i = 0; i < inputKeys.length; ++i){
-		if(this.#config[inputKeys[i]] != undefined){
-			this.DPrint({msg: `updating value ${input[inputKeys[i]]} for key: ${inputKeys[i]}`});
-			this.#config[inputKeys[i]] = input[inputKeys[i]];
-		}
-	}
-}
 
     #socket = null;
 
-    constructor(configMap = null) {
-    	this.#config = {
-		...this.#config,
-		...window.Cockatiel.templates.platformsettings
-	} 
-
-        if (configMap) {
-            this.updateConfig(configMap);
-        }
-    }
 
 // Listener Arrays
     #start_listeners = [];  // when starts
@@ -140,48 +124,9 @@ UpdateConfig(input){
 	    this.#emit(this.#status_listeners, data);
     }
 
-    /**
-     * Updates internal config. 
-     * If GenerateUiContainer is set, it triggers the UI build.
-     */
-    updateConfig(configMap) {
-        const entries = configMap instanceof Map ? configMap.entries() : Object.entries(configMap);
-        let needsReconnect = false;
-
-        for (const [key, value] of entries) {
-            if (key in this.#config) {
-                if (this.#config[key] !== value && (key === 'channel' || key === 'token')) {
-                    needsReconnect = true;
-                }
-                this.#config[key] = value;
-            }
-        }
-
-        // Trigger UI generation if a container is provided
-        if (this.config.GenerateUiContainer) {
-		return window.Cockatiel.UITemplate(
-				`https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Twitch_Glitch_Logo_Purple.svg/250px-Twitch_Glitch_Logo_Purple.svg.png`, 
-				"twitch",
-				window.Cockatiel.twitch,
-				(() => {
-					this.UpdateConfig({isEnabled: true})
-					this.DPrint({msg: "twitch enabled"});
-				}),
-				(() => {
-					this.UpdateConfig({isEnabled: false})
-					this.DPrint({msg: "twitch disabled"});
-				}),
-				//extra html	
-		);
-            //this.buildInterface();
-        }
-
-        if (needsReconnect && this.#config.active) {
-            this.connect();
-        }
-    }
-
 	buildInterface() {
+		let config = this.GetConfigValue("*").value;
+
 	    const fragment = document.createDocumentFragment();
 
 	    let c = document.createElement("div");
@@ -189,7 +134,7 @@ UpdateConfig(input){
 	    s.innerText = "twitch config settings";
 	    c.appendChild(s);
 
-	    Object.keys(this.#config).forEach(key => {
+	    Object.keys(config).forEach(key => {
 		if (key === 'GenerateUiContainer' || key === 'active') return;
 
 		const wrapper = document.createElement('div');
@@ -349,7 +294,7 @@ fragment.appendChild(c);
 		return Result.ok(window.Cockatiel.UITemplate(
 			`https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Twitch_Glitch_Logo_Purple.svg/250px-Twitch_Glitch_Logo_Purple.svg.png`, 
 			"twitch",
-			window.Cockatiel.twitch,
+			window.Cockatiel.Twitch,
 			(() => {this.UpdateConfig({isEnabled: true})}),
 			(() => {this.UpdateConfig({isEnabled: false})}),
 			(() => {
@@ -408,15 +353,15 @@ fragment.appendChild(c);
         this.#socket.onopen = () => {
             // When connecting, we pull the LATEST values from the DOM inputs 
             // if they exist, or fallback to the config object.
-            const channel = document.getElementById('twitch-config-channel')?.value || this.#config.channel;
-            const token = document.getElementById('twitch-config-token')?.value || this.#config.token;
-            const nick = document.getElementById('twitch-config-nick')?.value || this.#config.nick;
+            const channel = document.getElementById('twitch-config-channel')?.value || config.channel;
+            const token = document.getElementById('twitch-config-token')?.value || config.token;
+            const nick = document.getElementById('twitch-config-nick')?.value || config.nick;
 
             this.#socket.send(`PASS ${token}`);
             this.#socket.send(`NICK ${nick}`);
             this.#socket.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
             this.#socket.send(`JOIN #${channel}`);
-            this.#config.active = true;
+            config.active = true;
             console.log(`Twitch Connection Attempt: ${channel}`);
         };
 
@@ -759,7 +704,7 @@ fragment.appendChild(c);
 		p_msg.receivedAt = r_msg.dateTime;
 		p_msg.score = window.Cockatiel.ScoreMessage(r_msg.message);
 		p_msg.state = {};
-		p_msg.streamOrigin = `twitch.tv/${String(this.#config.nick)}`; //what streamid via the platform the message came from
+		p_msg.streamOrigin = `twitch.tv/${String(config.nick)}`; //what streamid via the platform the message came from
 		p_msg.type = "message-unmonitized" ;//must be selected from: templates.message_types[i]
 		p_msg.username = r_msg.username;
 

@@ -2226,26 +2226,27 @@ export class Cockatiel {
 
 
 	const TC = class TitleClass extends BaseClass {
-	    extraConfig = {
+	    #config = {
 		color: "#000000",
 		title: "Cockatiel - by vulbyte",
 	    };
-	    constructor() {
-			super({
-				childClassName: new.target.name,
-				extraConfig: new.target.extraConfig,
-			});
+	    
+	    // Define the name for your storage key
+	    name = "title_container";
+
+	    constructor(initialConfig = {}) {
+		// Merge defaults with any provided initial config
+		this.#config = { ...this.#config, ...initialConfig };
 	    }
 
-
 	    Save() {
-		localStorage.setItem(`${new.target.name}_config`, JSON.stringify(this.GetConfigValue("*")));
+		localStorage.setItem(`${this.name}_config`, JSON.stringify(this.#config));
 	    }
 	};
 
 	const titlePlatform = new TC({
 	    title: "Cockatiel - By Vulbyte",
-	    color: '#' + Math.floor(Math.random()*8*255*3).toString(16).padStart(6, '0'),
+	    color: '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0'),
 	});
 
 	let titalContainerFinal = this.CreateCockatielDragableChild({
