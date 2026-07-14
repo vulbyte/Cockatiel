@@ -1,268 +1,496 @@
 import {BaseClass} from "./baseClass.mjs";
 import {DebugPrint} from "./DebugPrint.mjs";
-import {TrieTree} from  "./trie_tree.mjs";
+import {TrieTree} from "./trie_tree.mjs";
 import {Result} from "./result.mjs";
 
 export class BannedWordsManager extends BaseClass {
-	static extraConfig = {
-		color: `#ff00ff`,
-		title: `banned Words Manager`,
-	};
-	constructor(){
-		super({
-			childClassName: new.target.name,
-			extraConfig: new.target.extraConfig,
-		});
-	}
+    static extraConfig = {
+        color: `#ff00ff`,
+        title: `banned Words Manager`,
+        bannedWordsArray: [],
+        censorshipOptions: [
+            "censorByErasingEverything",
+            "censorWordWithChar",
+            "censorSentenceWithRandomSentence",
+        ],
+        censorType: 1, // index of censorshipOptions
+        censorChar: "*",
+        randomCensorWords: ["apple", "banana", "pear"], 
+        randomSentences: ["i shoved a whole bag of jelly beans up my ass."],
+    };
 
-	//array is for archivalness
-	bannedWordsArray = [];
-	//trie is for quick lookups
-	BannedWordsTrie = new TrieTree();
+    constructor() {
+        super({
+            childClassName: new.target.name,
+            extraConfig: new.target.extraConfig,
+        });
 
-	DebugPrint(input){
-		window.Cockatiel.DebugPrint(input);
-	}
+        this.BannedWordsTrie = new TrieTree();
+        this.UpdateBannedWordsTrie();
+    }
 
+    SafeGetBannedWordsArray() {
+        let bwa;
+        try {
+            bwa = this.GetConfigValue("bannedWordsArray");
+            if (bwa.isFailure) {
+                return Result.err(`could not get banned words array ${bwa}`);
+            }
+            bwa = bwa.value;
+            
+            if (bwa.constructor != Array) {
+                console.error(`BANNED WORDS ARRAY IS NOT AN ARRAY, SORRY BE WE NEED TO FORMAT THIS:  ${bwa}`);
+                bwa = new Array();
+            }
+            return Result.ok(bwa);
+        } catch(err) {
+            return Result.err(`error while trying to validate banned words array`);
+        }
+    }
 
-	GenerateUI() {
-		this.DebugPrint({msg: "GENERATING BLACKLIST UI"});
-		
-		let container = this.CHE({
-		    type: 'div', 
-		    id: "blacklist-config",
-		    style: "border: var(--tib_border); border-radius: var(--tib_border-radius); padding: 0.5rem;"
-		});
+    DebugPrint(input) {
+        if (window.Cockatiel && window.Cockatiel.DebugPrint) {
+            window.Cockatiel.DebugPrint(input);
+        }
+    }
 
-		let fileInputLabel = this.CHE({type:'label', innerText:"add banned words as a .csv or .json, feel free to drag and drop"});
-		fileInputLabel.style.color = "white";
-		container.append(fileInputLabel);
-		let fileInput = this.CHE({type:"input", inputType:"file"});
-		fileInput.addEventListener('change', (event) => {
-		    this.LoadBannedWords(event);
-		});
-		container.append(fileInput);
+    GenerateUI() {
+        this.DebugPrint({msg: "GENERATING BLACKLIST UI"});
+        
+        let container = this.CHE({
+            type: 'div', 
+            id: "blacklist-config",
+            style: "border: var(--tib_border); border-radius: var(--tib_border-radius); padding: 0.5rem;"
+        });
 
-		let inputContainer = this.CHE({
-		    type: 'div',
-		    style: "display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;"
-		});
+        // 1. File Upload Section
+        let fileInputLabel = this.CHE({type:'label', innerText:"Add banned words as a .csv or .json, feel free to drag and drop"});
+        fileInputLabel.style.color = "white";
+        container.append(fileInputLabel);
+        let fileInput = this.CHE({type:"input", inputType:"file"});
+        fileInput.addEventListener('change', (event) => {
+            this.LoadBannedWords(event);
+        });
+        container.append(fileInput);
 
-		let inputLabel = this.CHE({
-		    type: 'label',
-		    innerText: "Add New Banned Word",
-		    attributes: { for: 'banned-word-input' },
-		    style: "font-size: 0.8rem; color: white; font-weight: bold;"
-		});
+        // 2. Add New Banned Word Section
+        let inputContainer = this.CHE({
+            type: 'div',
+            style: "display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;"
+        });
 
-		let inputRow = this.CHE({ type: 'div', style: "display: flex; gap: 5px;" });
+        let inputLabel = this.CHE({
+            type: 'label',
+            innerText: "Add New Banned Word",
+            attributes: { for: 'banned-word-input' },
+            style: "font-size: 0.8rem; color: white; font-weight: bold;"
+        });
 
-		let wordInput = this.CHE({
-		    type: 'input',
-		    id: 'banned-word-input',
-		    attributes: { placeholder: "e.g. spam_link" },
-		    style: "flex-grow: 1;"
-		});
+        let inputRow = this.CHE({ type: 'div', style: "display: flex; gap: 5px;" });
 
-		let addBtn = this.CHE({
-		    type: 'button',
-		    innerText: "add word",
-		    attributes: { type: 'button', placeholder: 'Add' },
-		    onClick: () => {
-			const val = wordInput.value.trim();
-			if (val) {
-			    this.AddBannedWord(val);
-			    wordInput.value = "";
-			    this.UpdateBannedWordsList();
-			}
-		    }
-		});
+        let wordInput = this.CHE({
+            type: 'input',
+            id: 'banned-word-input',
+            attributes: { placeholder: "e.g. spam_link" },
+            style: "flex-grow: 1;"
+        });
 
-		wordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
+        let addBtn = this.CHE({
+            type: 'button',
+            innerText: "add word",
+            attributes: { type: 'button' },
+            onClick: () => {
+                const val = wordInput.value.trim();
+                if (val) {
+                    this.AddBannedWord(val);
+                    wordInput.value = "";
+                }
+            }
+        });
 
-		inputRow.append(wordInput, addBtn);
-		inputContainer.append(inputLabel, inputRow);
-		container.appendChild(inputContainer);
+        wordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
+        inputRow.append(wordInput, addBtn);
+        inputContainer.append(inputLabel, inputRow);
+        container.appendChild(inputContainer);
 
-		// 3. View Section (List)
-		let viewContainer = this.CHE({ type: 'details', id: 'blacklist-details' });
-		viewContainer.open = true;
+        // 3. View Section (List)
+        let viewContainer = this.CHE({ type: 'details', id: 'blacklist-details' });
+        viewContainer.open = true;
 
-		let viewSummary = this.CHE({ 
-		    type: 'summary', 
-		    innerText: " Banned Words Database", 
-		    style: "cursor: pointer; font-weight: bold; color: #aaa;" 
-		});
-		
-		let list = this.CHE({ 
-		    type: "ul", 
-		    id: "banned-words-display-list",
-		    style: "list-style: none; padding: 10px 0; margin: 0; display: flex; flex-direction: column; gap: 5px;" 
-		});
+        let viewSummary = this.CHE({ 
+            type: 'summary', 
+            innerText: " Banned Words Database", 
+            style: "cursor: pointer; font-weight: bold; color: #aaa;" 
+        });
+        
+        let list = this.CHE({ 
+            type: "ul", 
+            id: "banned-words-display-list",
+            style: "list-style: none; padding: 10px 0; margin: 0; display: flex; flex-direction: column; gap: 5px;" 
+        });
+        viewContainer.append(viewSummary, list);
+        container.appendChild(viewContainer);
 
-		viewContainer.append(viewSummary, list);
-		container.appendChild(viewContainer);
+        // 4. Replacement Words Section
+        let replacementContainer = this.CHE({ type: 'div', style: "margin-top: 15px; padding: 10px; border: 1px solid #444;" });
+        let replaceTitle = this.CHE({ type: 'h4', innerText: "Replacement Words (Pool)" });
+        
+        let replaceInput = this.CHE({ type: 'input', placeholder: "New replacement word..." });
+        let addReplaceBtn = this.CHE({ type: 'button', innerText: "Add", onClick: () => {
+            if (replaceInput.value.trim()) {
+                this.AddRandomWord(replaceInput.value.trim());
+                replaceInput.value = "";
+            }
+        }});
 
-		setTimeout(() => this.UpdateBannedWordsList(), 0);
-		
-		return Result.ok(container);
-	    }
+        let replaceList = this.CHE({ type: 'ul', id: 'replacement-words-list' });
+        replacementContainer.append(replaceTitle, replaceInput, addReplaceBtn, replaceList);
+        container.append(replacementContainer);
+        
+        // 5. Random Sentences Section
+        let sentenceContainer = this.CHE({ type: 'div', style: "margin-top: 15px; padding: 10px; border: 1px solid #444;" });
+        let sentenceTitle = this.CHE({ type: 'h4', innerText: "Random Sentences Pool" });
 
+        let sentenceInput = this.CHE({ type: 'input', placeholder: "New random sentence...", style: "width: 70%;" });
+        let addSentenceBtn = this.CHE({ type: 'button', innerText: "Add", onClick: () => {
+            if(sentenceInput.value.trim()){
+                this.AddRandomSentence(sentenceInput.value.trim());
+                sentenceInput.value = "";
+            }
+        }});
 
-	UpdateBannedWordsTrie(){
-		this.BannedWordsTrie = new TrieTree();
-		for(let i = 0; i < this.BannedWordsArray; ++i){
-			this.BannedWordsTrie.Add(this.bannedWordsArray[i]);
-		}
-	}
-	AddBannedWord(word = undefined){
-		this.DebugPrint({msg: "attepting to add banned word:", word});
-		if(word == undefined){throw new Error("word is undefined");}		
-		for(let i = 0; i < this.bannedWordsArray; ++i){
-			if(this.bannedWordsArray[i] == word){
-				this.DebugPrint({msg: "not adding word, word already in array"});
-				return
-			}
-		}
-		this.bannedWordsArray.push(word);
-		this.UpdateBannedWordsTrie();
-	}
-	RemoveBannedWord(word = undefined) {
-	    this.DebugPrint({msg: "attepting to add banned word:", word});
-	    if (word === undefined) { 
-		throw new Error("word is undefined"); 
-	    }
+        let sentenceList = this.CHE({ type: 'ul', id: 'sentence-pool-list' });
+        sentenceContainer.append(sentenceTitle, sentenceInput, addSentenceBtn, sentenceList);
+        container.append(sentenceContainer);
 
-	    // Ensure we are working with an array (fixes the += string bug)
-	    if (!Array.isArray(this.bannedWordsArray)) {
-		console.error("State Error: bannedWordsArray is not an array. Resetting...");
-		return;
-	    }
+        // 6. Settings Section (Censor Type & Char)
+        let settingsContainer = this.CHE({ type: 'div', style: "margin-top: 15px; padding: 10px; border: 1px solid #444;" });
+        
+        let typeLabel = this.CHE({ type: 'label', innerText: "Censor Mode: " });
+        let typeSelect = this.CHE({ type: 'select' });
 
-	    for (let i = 0; i < this.bannedWordsArray.length; ++i) {
-		if (this.bannedWordsArray[i] === word) {
-		    this.DebugPrint({msg: `Word "${word}" found, removing.`});
-		    
-		    // USE SPLICE TO MUTATE THE ARRAY
-		    this.bannedWordsArray.splice(i, 1);
-		    
-		    // Sync your TrieTree and UI
-		    this.UpdateBannedWordsTrie();
-		    this.UpdateBannedWordsList(); 
-		    return;
-		}
-	    }
-	}
+        const options = this.GetConfigValue("censorshipOptions").value;
+        let currentType = this.GetConfigValue("censorType").value;
+        
+        // Read fallback
+        if (currentType === null || typeof currentType !== 'number' || isNaN(currentType)) {
+            currentType = 1;
+        }
 
-	async LoadBannedWords(event = undefined, method = "add") {
-	    this.DebugPrint({msg: "LoadBannedWords(}) called"});
-	    if (!event) throw new Error("event is null");
+        // Fix: Explicitly force the numeric value onto the HTML element
+        options.forEach((opt, index) => {
+            let el = this.CHE({ type: 'option', innerText: opt });
+            el.value = index; // Explicitly set numeric string
+            if (currentType === index) el.selected = true;
+            typeSelect.append(el);
+        });
 
-	    let file = event.target.files[0];
-	    if (!file) {
-		this.DebugPrint({msg: "No file detected"});
-		return;
-	    }
+        // Fix: Use addEventListener and fetch value directly from the select element
+        typeSelect.addEventListener("change", () => {
+            const selectedIndex = parseInt(typeSelect.value, 10);
+            if (!isNaN(selectedIndex)) {
+                this.SetConfigValue("censorType", selectedIndex);
+                this.DebugPrint({msg: "Saved new Censor Mode: " + selectedIndex});
+            }
+        });
 
-	    let fileType = file.name.split(".").pop().toLowerCase(); // force lowercase to simplify greatly
-	    let data = []; 
+        let charLabel = this.CHE({ type: 'label', innerText: " Replace Char: " });
+        let charInput = this.CHE({ type: 'input', style: "width: 30px;" });
+        
+        // Fix: Explicitly bind the input value and event
+        const currentChar = this.GetConfigValue("censorChar").value;
+        charInput.value = currentChar || "*";
+        
+        charInput.addEventListener("input", (e) => {
+            this.SetConfigValue("censorChar", e.target.value);
+        });
 
-	    const text = await file.text(); 
+        settingsContainer.append(typeLabel, typeSelect, charLabel, charInput);
+        container.append(settingsContainer);
 
-	    if (fileType === "json") {
-		this.DebugPrint({msg: ".json found, attempting to parse"});
-		data = JSON.parse(text);
-		//verify is an array, if not throw error
-	    } else if (fileType === "csv") {
-		this.DebugPrint({msg: ".csv found, attempting to parse"});
-		data = text.split(/[,\n\r]+/).map(w => w.trim()).filter(w => w !== "");
-	    }
+        // Initial Populates
+        setTimeout(() => {
+            this.UpdateBannedWordsList();
+            this.UpdateReplacementList();
+            this.UpdateSentenceList();
+        }, 0); 
+        
+        return Result.ok(container);
+    }
 
-	    this().bannedWordsArray = [...this.bannedWordsArray, ...data];
+    UpdateGenericList(listElementId, dataArray, onRemoveCallback) {
+        const listElement = document.getElementById(listElementId);
+        if (!listElement) return;
 
-	    // Initialize the tree if it doesn't exist
-	    if (!this.bannedWordsTrie || method === "replace") {
-		this.DebugPrint({msg: method === "replace" ? "Replacing tree" : "Initializing new tree"});
-		this.bannedWordsTrie = new TrieTree();
-	    }
+        listElement.innerHTML = "";
 
-	    this.DebugPrint({msg: `Adding ${data.length} words to the Trie`}); 
-	    // Fill the tree with the new data
-	    this.UpdateBannedWordsTrie()
+        dataArray.forEach(item => {
+            const li = this.CHE({
+                type: 'li',
+                style: "display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid #333;"
+            });
 
-	    this.DebugPrint({msg: "Banned words Trie updated.", val: this.bannedWordsArray});
+            const span = this.CHE({ type: 'span', innerText: item });
+            const removeBtn = this.CHE({
+                type: 'span',
+                innerText: "❌",
+                style: "cursor: pointer; color: #ff5555;",
+                onClick: () => {
+                    onRemoveCallback(item);
+                }
+            });
 
-	    this.UpdateBannedWordsList();
-	    return this.bannedWordsArray;;
-	}
+            li.append(span, removeBtn);
+            listElement.append(li);
+        });
+    }
 
-	    /**
-	     * Re-renders the list of banned words based on the current bannedWordsArray state.
-	     */
-	UpdateBannedWordsList() {
-		if(document == undefined){this.DebugPrint({msg: "no document, impossible to have list to update"}); return;}
-	    const listElement = document.getElementById("banned-words-display-list");
-	    if (!listElement) return;
+    UpdateBannedWordsList() {
+        const result = this.SafeGetBannedWordsArray();
+        if (result.isFailure) return;
 
-	    // Clear existing list
-	    listElement.innerHTML = "";
+        this.UpdateGenericList(
+            "banned-words-display-list",
+            result.value,
+            (word) => this.RemoveBannedWord(word)
+        );
+    }
 
-	    const words = this.bannedWordsArray; 
-	    
-	    // Safety check: if words isn't iterable, exit early
-	    if (!words) return;
+    UpdateReplacementList() {
+        const config = this.GetConfigValue("*").value;
+        const list = config.randomCensorWords || [];
+        
+        this.UpdateGenericList(
+            "replacement-words-list", 
+            list, 
+            (word) => this.RemoveRandomWord(word)
+        );
+    }
 
-	    this.DebugPrint("updating banned words display from banned words array", this.bannedWordsArray);
-	    for (let i = 0; i < words.length; i++) {
-		const wordData = words[i];
-		
-		// Handle both simple string arrays or objects with hit counts
-		const word = typeof wordData === 'string' ? wordData : wordData.word;
-		const hits = wordData.hitCount || 0;
+    UpdateSentenceList() {
+        const config = this.GetConfigValue("*").value;
+        const list = config.randomSentences || [];
+        
+        this.UpdateGenericList(
+            "sentence-pool-list", 
+            list, 
+            (sentence) => this.RemoveRandomSentence(sentence)
+        );
+    }
 
-		const li = this.CHE({
-		    type: 'li',
-		    style: "display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding: 5px;"
-		});
+    UpdateBannedWordsTrie() {
+        let result = this.SafeGetBannedWordsArray();
+        if (result.isFailure) {
+            this.DebugPrint({ msg: "Update failed: could not get array" });
+            return;
+        }
+        
+        this.BannedWordsTrie = new TrieTree();
+        
+        let arr = result.value;
+        for (let i = 0; i < arr.length; i++) {
+            if (typeof arr[i] === 'string') {
+                this.BannedWordsTrie.Add(arr[i].toLowerCase());
+            }
+        }
+        this.DebugPrint({ msg: `Trie rebuilt with ${arr.length} words.` });
+    }
 
-		// Left side: Word and Hit Tally
-		const labelContainer = this.CHE({ 
-		    type: 'div', 
-		    style: "display: flex; gap: 10px; align-items: center;" 
-		});
+    AddBannedWord(word = undefined){
+        let bannedWordsArray = this.SafeGetBannedWordsArray();
+        if(bannedWordsArray.isFailure) return Result.err(`could not get bannedWordsArray ${bannedWordsArray}`);
+        
+        let arr = bannedWordsArray.value;
+        this.DebugPrint({msg: "attempting to add banned word:", word});
+        if(word == undefined) throw new Error("word is undefined");        
+        
+        if (arr.includes(word)) {
+            this.DebugPrint({msg: "not adding word, word already in array"});
+            return;
+        }
+        
+        arr.push(word);
+        this.SetConfigValue("bannedWordsArray", arr);
+        this.UpdateBannedWordsTrie();
+        this.UpdateBannedWordsList();
+    }
 
-		// Label for the word itself
-		const wordSpan = this.CHE({ 
-		    type: 'span', 
-		    innerText: word, 
-		    style: "font-weight: bold; color: var(--color-text);" 
-		});
+    RemoveBannedWord(word = undefined) {
+        let result = this.SafeGetBannedWordsArray();
+        if (result.isFailure) return result;
+        
+        let arr = result.value;
+        if (word === undefined) throw new Error("word is undefined");
 
-		// Label for the tally/hits
-		const hitTally = this.CHE({ 
-		    type: 'span', 
-		    innerText: `${hits} hits`,
-		    style: "font-size: 0.75rem; color: #888; background: #222; padding: 2px 6px; border-radius: 4px;"
-		});
+        const index = arr.indexOf(word);
+        if (index > -1) {
+            this.DebugPrint({ msg: `Word "${word}" found, removing.` });
+            arr.splice(index, 1);
+            this.SetConfigValue("bannedWordsArray", arr);
+            this.UpdateBannedWordsTrie();
+            this.UpdateBannedWordsList();
+        }
+    }
 
-		labelContainer.appendChild(wordSpan);
-		if (hits > 0) labelContainer.appendChild(hitTally);
+    async LoadBannedWords(event = undefined, method = "add") {
+        this.DebugPrint({msg: "LoadBannedWords() called"});
+        if (!event) throw new Error("event is null");
 
-		// Right side: Remove Button
-		const removeBtn = this.CHE({
-		    type: 'span',
-		    innerText: "❌",
-		    style: "cursor: pointer; padding: 5px;",
-		    onClick: () => {
-			// Assuming your TrieTree removal logic
-			this.RemoveBannedWord(word);
-			this.UpdateBannedWordsList();
-		    }
-		});
+        let file = event.target.files[0];
+        if (!file) {
+            this.DebugPrint({msg: "No file detected"});
+            return;
+        }
 
-		li.appendChild(labelContainer);
-		li.appendChild(removeBtn);
-		listElement.appendChild(li);
-	    }
-	}
+        let fileType = file.name.split(".").pop().toLowerCase(); 
+        let data = []; 
+        const text = await file.text(); 
+
+        if (fileType === "json") {
+            this.DebugPrint({msg: ".json found, attempting to parse"});
+            data = JSON.parse(text);
+        } else if (fileType === "csv") {
+            this.DebugPrint({msg: ".csv found, attempting to parse"});
+            data = text.split(/[,\n\r]+/).map(w => w.trim()).filter(w => w !== "");
+        }
+
+        this.SetConfigValue(
+            "bannedWordsArray",  
+            [...this.GetConfigValue("bannedWordsArray").value, ...data]
+        );
+
+        if (!this.BannedWordsTrie || method === "replace") {
+            this.DebugPrint({msg: method === "replace" ? "Replacing tree" : "Initializing new tree"});
+            this.BannedWordsTrie = new TrieTree();
+        }
+
+        this.DebugPrint({msg: `Adding ${data.length} words to the Trie`}); 
+        this.UpdateBannedWordsTrie();
+        this.UpdateBannedWordsList();
+        return this.SafeGetBannedWordsArray().value;
+    }
+
+    AddRandomWord(word) {
+        let config = this.GetConfigValue("*").value;
+        let list = config.randomCensorWords || [];
+        if (!list.includes(word)) {
+            list.push(word);
+            this.SetConfigValue("randomCensorWords", list);
+            this.UpdateReplacementList();
+        }
+    }
+
+    RemoveRandomWord(word) {
+        let config = this.GetConfigValue("*").value;
+        let list = config.randomCensorWords || [];
+        this.SetConfigValue("randomCensorWords", list.filter(w => w !== word));
+        this.UpdateReplacementList();
+    }
+
+    AddRandomSentence(sentence) {
+        let config = this.GetConfigValue("*").value;
+        let list = config.randomSentences || [];
+        if (!list.includes(sentence)) {
+            list.push(sentence);
+            this.SetConfigValue("randomSentences", list);
+            this.UpdateSentenceList();
+        }
+    }
+
+    RemoveRandomSentence(sentence) {
+        let config = this.GetConfigValue("*").value;
+        let list = config.randomSentences || [];
+        this.SetConfigValue("randomSentences", list.filter(s => s !== sentence));
+        this.UpdateSentenceList(); 
+    }
+
+    GetBannedRanges(input) {
+        const ranges = [];
+        const lowerInput = input.toLowerCase();
+        
+        for (let i = 0; i < input.length; i++) {
+            let matchLength = this.BannedWordsTrie.FindLongestMatch(lowerInput, i);
+            if (matchLength > 0) {
+                ranges.push([i, i + matchLength - 1]);
+                i += matchLength - 1; 
+            }
+        }
+        return ranges;
+    }
+
+    PerformWordCensorship(input, config) {
+        const ranges = this.GetBannedRanges(input);
+        if (ranges.length === 0) return Result.ok(input);
+
+        // Fallback for censorChar if it was deleted
+        const cChar = config.censorChar || "*";
+        
+        let output = "";
+        let lastIndex = 0;
+        for (const [start, end] of ranges) {
+            output += input.substring(lastIndex, start);
+            const match = input.substring(start, end + 1);
+            output += cChar.repeat(match.length);
+            lastIndex = end + 1;
+        }
+        output += input.substring(lastIndex);
+        return Result.ok(output);
+    }
+
+PerformSentenceCensorship(input, config) {
+        // Split by punctuation to separate sentences and keep the punctuation delimiters
+        const sentences = input.split(/([.!?]+(?:\s+|$))/);
+        
+        const processed = sentences.map((part, i) => {
+            if (i % 2 !== 0) return part; // This is the punctuation/spacing, skip checking
+            
+            // Use the same robust sub-string range checking as word censorship
+            const ranges = this.GetBannedRanges(part);
+
+            // If we found any banned ranges in this sentence, replace the whole thing
+            if (ranges.length > 0) {
+                const list = config.randomSentences || [];
+                return list.length > 0 ? list[Math.floor(Math.random() * list.length)] : part;
+            }
+            return part;
+        });
+        
+        return Result.ok(processed.join(""));
+    }
+
+    CensorString(input) {
+        if (!input || typeof input !== 'string') return Result.ok(input);
+        
+        const configResult = this.GetConfigValue("*");
+        if (configResult.isFailure) return Result.ok(input);
+        
+        const config = configResult.value;
+        
+        // Actively pull the latest censorType
+        const typeResult = this.GetConfigValue("censorType");
+        let rawType = typeResult.isSuccess ? typeResult.value : config.censorType;
+
+        let modeIndex = parseInt(rawType, 10);
+        
+        // Strict fallback to prevent errors
+        if (isNaN(modeIndex) || modeIndex < 0 || modeIndex >= config.censorshipOptions.length) {
+            modeIndex = 1; // Default to censorWordWithChar
+        }
+
+        const currentMode = config.censorshipOptions[modeIndex];
+
+        switch (currentMode) {
+            case "censorByErasingEverything":
+                return Result.ok("");
+
+            case "censorWordWithChar":
+                return this.PerformWordCensorship(input, config);
+
+            case "censorSentenceWithRandomSentence":
+                return this.PerformSentenceCensorship(input, config);
+
+            default:
+                return Result.ok(input);
+        }
+    }
 }

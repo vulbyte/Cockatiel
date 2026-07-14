@@ -94,7 +94,7 @@ export class Cockatiel {
   templates = {
 	config: {
 		color: "#069420",
-		title: "no title given",
+		title: "you can click these to rename them!",
 		isHidden: false,
 	},
 	    platformSettings: {

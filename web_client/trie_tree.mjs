@@ -34,6 +34,28 @@ export class TrieTree {
     return current.isEndOfWord;
   }
 
+	// Finds the longest banned word starting from the given index
+	// Returns the length of the match, or 0 if no match found
+	FindLongestMatch(text, startIndex) {
+	    let current = this.root;
+	    let longestMatchLength = 0;
+
+	    for (let i = startIndex; i < text.length; i++) {
+		const char = text[i];
+		// If the character isn't in the trie, stop
+		if (!current.children[char]) break; 
+		
+		current = current.children[char];
+		
+		// If this character completes a banned word, update the length
+		if (current.isEndOfWord) {
+		    longestMatchLength = i - startIndex + 1;
+		}
+	    }
+	    return longestMatchLength;
+	}
+
+
   // Removes a string (simplified version)
   Remove(word) {
     this._remove(this.root, word, 0);
