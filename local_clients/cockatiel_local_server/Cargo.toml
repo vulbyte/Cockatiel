@@ -1,0 +1,38 @@
+[package]
+name = "cockatiel_local_server"
+version = "0.1.0"
+edition = "2021"
+authors = ["vulbyte <vulbyt3@gmail.com>"]
+build = "./proto/build.rs"
+
+[dependencies]
+# Terminal colors
+colored = "3"
+
+vulb_lib = {path = "../vulb_lib"}
+
+# Networking and Async
+# Using "1" ensures you get the latest 1.x.x features and bug fixes
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+turso = "0.7.2"
+uuid = { version = "1.24.0", features = ["v7", "fast-rng"] }
+serde = "1.0.229"
+prost = "0.14.4"
+jsonwebtoken = "11.0.0"
+tokio-rustls = "0.26.4"
+serde_json = "1.0.151"
+prost-build = "0.14.4"
+
+[build-dependencies]
+prost-build = "0.14.4"
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
+[build]
+rustflags = ["-C", "target-cpu=native", "-A", "dead_code"]

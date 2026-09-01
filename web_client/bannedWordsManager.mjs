@@ -3,6 +3,8 @@ import {DebugPrint} from "./DebugPrint.mjs";
 import {TrieTree} from "./trie_tree.mjs";
 import {Result} from "./result.mjs";
 
+import {SocketManager} from "./socketManager.mjs";
+
 export class BannedWordsManager extends BaseClass {
     static extraConfig = {
         color: `#ff00ff`,
@@ -13,11 +15,17 @@ export class BannedWordsManager extends BaseClass {
             "censorWordWithChar",
             "censorSentenceWithRandomSentence",
         ],
-        censorType: 1, // index of censorshipOptions
+        censorType: 1, 
         censorChar: "*",
         randomCensorWords: ["apple", "banana", "pear"], 
         randomSentences: ["i shoved a whole bag of jelly beans up my ass."],
     };
+
+	//events:
+	ModuleConnectionListeners = []; 
+	ModuleDisconnectionListeners = [];
+	MessageListeners = [];
+	ErrorListeners = [];
 
     constructor() {
         super({
@@ -39,9 +47,36 @@ export class BannedWordsManager extends BaseClass {
             bwa = bwa.value;
             
             if (bwa.constructor != Array) {
-                console.error(`BANNED WORDS ARRAY IS NOT AN ARRAY, SORRY BE WE NEED TO FORMAT THIS:  ${bwa}`);
+                console.error(`BANNED WORDS ARRAY IS NOT AN ARRAY: ${bwa}`);
                 bwa = new Array();
             }
+
+            // MIGRATION & VALIDATION: Convert any legacy strings to objects
+            let needsSave = false;
+            bwa = bwa.map(item => {
+                if (typeof item === 'string') {
+                    needsSave = true;
+                    return { word: item, occurrences: 0 };
+                }
+                if (typeof item === 'object' && item !== null) {
+                    // Fallback to capture user's initial spelling or missing key
+                    if (item.occurrences === undefined && item.occurrances === undefined) {
+                        item.occurrences = 0;
+                        needsSave = true;
+                    } else if (item.occurrences === undefined && item.occurrances !== undefined) {
+                        item.occurrences = item.occurrances; // Normalize spelling
+                        delete item.occurrances;
+                        needsSave = true;
+                    }
+                    return item;
+                }
+                return null;
+            }).filter(item => item !== null);
+
+            if (needsSave) {
+                this.SetConfigValue("bannedWordsArray", bwa);
+            }
+
             return Result.ok(bwa);
         } catch(err) {
             return Result.err(`error while trying to validate banned words array`);
@@ -172,20 +207,17 @@ export class BannedWordsManager extends BaseClass {
         const options = this.GetConfigValue("censorshipOptions").value;
         let currentType = this.GetConfigValue("censorType").value;
         
-        // Read fallback
         if (currentType === null || typeof currentType !== 'number' || isNaN(currentType)) {
             currentType = 1;
         }
 
-        // Fix: Explicitly force the numeric value onto the HTML element
         options.forEach((opt, index) => {
             let el = this.CHE({ type: 'option', innerText: opt });
-            el.value = index; // Explicitly set numeric string
+            el.value = index; 
             if (currentType === index) el.selected = true;
             typeSelect.append(el);
         });
 
-        // Fix: Use addEventListener and fetch value directly from the select element
         typeSelect.addEventListener("change", () => {
             const selectedIndex = parseInt(typeSelect.value, 10);
             if (!isNaN(selectedIndex)) {
@@ -197,7 +229,6 @@ export class BannedWordsManager extends BaseClass {
         let charLabel = this.CHE({ type: 'label', innerText: " Replace Char: " });
         let charInput = this.CHE({ type: 'input', style: "width: 30px;" });
         
-        // Fix: Explicitly bind the input value and event
         const currentChar = this.GetConfigValue("censorChar").value;
         charInput.value = currentChar || "*";
         
@@ -221,7 +252,6 @@ export class BannedWordsManager extends BaseClass {
     UpdateGenericList(listElementId, dataArray, onRemoveCallback) {
         const listElement = document.getElementById(listElementId);
         if (!listElement) return;
-
         listElement.innerHTML = "";
 
         dataArray.forEach(item => {
@@ -235,9 +265,7 @@ export class BannedWordsManager extends BaseClass {
                 type: 'span',
                 innerText: "❌",
                 style: "cursor: pointer; color: #ff5555;",
-                onClick: () => {
-                    onRemoveCallback(item);
-                }
+                onClick: () => onRemoveCallback(item)
             });
 
             li.append(span, removeBtn);
@@ -249,67 +277,86 @@ export class BannedWordsManager extends BaseClass {
         const result = this.SafeGetBannedWordsArray();
         if (result.isFailure) return;
 
-        this.UpdateGenericList(
-            "banned-words-display-list",
-            result.value,
-            (word) => this.RemoveBannedWord(word)
-        );
+        const listElement = document.getElementById("banned-words-display-list");
+        if (!listElement) return;
+
+        listElement.innerHTML = "";
+
+        result.value.forEach(item => {
+            const li = this.CHE({
+                type: 'li',
+                style: "display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid #333;"
+            });
+
+            const textSpan = this.CHE({ type: 'span', innerText: item.word });
+            
+            const rightContainer = this.CHE({ type: 'div', style: "display: flex; align-items: center; gap: 10px;" });
+            
+            // Hit Counter Badge
+            const hitsBadge = this.CHE({
+                type: 'span',
+                innerText: `Hits: ${item.occurrences}`,
+                style: "background: #555; color: white; padding: 2px 6px; border-radius: 10px; font-size: 0.8rem;"
+            });
+
+            const removeBtn = this.CHE({
+                type: 'span',
+                innerText: "❌",
+                style: "cursor: pointer; color: #ff5555;",
+                onClick: () => this.RemoveBannedWord(item.word)
+            });
+
+            rightContainer.append(hitsBadge, removeBtn);
+            li.append(textSpan, rightContainer);
+            listElement.append(li);
+        });
     }
 
     UpdateReplacementList() {
         const config = this.GetConfigValue("*").value;
         const list = config.randomCensorWords || [];
-        
-        this.UpdateGenericList(
-            "replacement-words-list", 
-            list, 
-            (word) => this.RemoveRandomWord(word)
-        );
+        this.UpdateGenericList("replacement-words-list", list, (word) => this.RemoveRandomWord(word));
     }
 
     UpdateSentenceList() {
         const config = this.GetConfigValue("*").value;
         const list = config.randomSentences || [];
-        
-        this.UpdateGenericList(
-            "sentence-pool-list", 
-            list, 
-            (sentence) => this.RemoveRandomSentence(sentence)
-        );
+        this.UpdateGenericList("sentence-pool-list", list, (sentence) => this.RemoveRandomSentence(sentence));
     }
 
     UpdateBannedWordsTrie() {
         let result = this.SafeGetBannedWordsArray();
-        if (result.isFailure) {
-            this.DebugPrint({ msg: "Update failed: could not get array" });
-            return;
-        }
+        if (result.isFailure) return;
         
         this.BannedWordsTrie = new TrieTree();
         
         let arr = result.value;
         for (let i = 0; i < arr.length; i++) {
-            if (typeof arr[i] === 'string') {
-                this.BannedWordsTrie.Add(arr[i].toLowerCase());
+            // Point the Trie to the new `.word` property
+            if (arr[i] && typeof arr[i].word === 'string') {
+                this.BannedWordsTrie.Add(arr[i].word.toLowerCase());
             }
         }
         this.DebugPrint({ msg: `Trie rebuilt with ${arr.length} words.` });
     }
 
     AddBannedWord(word = undefined){
-        let bannedWordsArray = this.SafeGetBannedWordsArray();
-        if(bannedWordsArray.isFailure) return Result.err(`could not get bannedWordsArray ${bannedWordsArray}`);
+        let result = this.SafeGetBannedWordsArray();
+        if (result.isFailure) return;
         
-        let arr = bannedWordsArray.value;
-        this.DebugPrint({msg: "attempting to add banned word:", word});
-        if(word == undefined) throw new Error("word is undefined");        
+        let arr = result.value;
+        if (word == undefined) throw new Error("word is undefined");        
         
-        if (arr.includes(word)) {
+        // Prevent duplicates regardless of case
+        const exists = arr.some(item => item.word.toLowerCase() === word.toLowerCase());
+        if (exists) {
             this.DebugPrint({msg: "not adding word, word already in array"});
             return;
         }
         
-        arr.push(word);
+        // Store as an object
+        arr.push({ word: word, occurrences: 0 });
+        
         this.SetConfigValue("bannedWordsArray", arr);
         this.UpdateBannedWordsTrie();
         this.UpdateBannedWordsList();
@@ -317,12 +364,12 @@ export class BannedWordsManager extends BaseClass {
 
     RemoveBannedWord(word = undefined) {
         let result = this.SafeGetBannedWordsArray();
-        if (result.isFailure) return result;
+        if (result.isFailure) return;
         
         let arr = result.value;
         if (word === undefined) throw new Error("word is undefined");
 
-        const index = arr.indexOf(word);
+        const index = arr.findIndex(item => item.word === word);
         if (index > -1) {
             this.DebugPrint({ msg: `Word "${word}" found, removing.` });
             arr.splice(index, 1);
@@ -337,34 +384,36 @@ export class BannedWordsManager extends BaseClass {
         if (!event) throw new Error("event is null");
 
         let file = event.target.files[0];
-        if (!file) {
-            this.DebugPrint({msg: "No file detected"});
-            return;
-        }
+        if (!file) return;
 
         let fileType = file.name.split(".").pop().toLowerCase(); 
-        let data = []; 
+        let rawData = []; 
         const text = await file.text(); 
 
         if (fileType === "json") {
-            this.DebugPrint({msg: ".json found, attempting to parse"});
-            data = JSON.parse(text);
+            rawData = JSON.parse(text);
         } else if (fileType === "csv") {
-            this.DebugPrint({msg: ".csv found, attempting to parse"});
-            data = text.split(/[,\n\r]+/).map(w => w.trim()).filter(w => w !== "");
+            rawData = text.split(/[,\n\r]+/).map(w => w.trim()).filter(w => w !== "");
         }
 
-        this.SetConfigValue(
-            "bannedWordsArray",  
-            [...this.GetConfigValue("bannedWordsArray").value, ...data]
-        );
+        // Loop through the imported data and add securely using the new system
+        rawData.forEach(item => {
+            if (typeof item === 'string') {
+                this.AddBannedWord(item);
+            } else if (typeof item === 'object' && item.word) {
+                // If importing an already-structured JSON, keep their occurrences
+                let arr = this.SafeGetBannedWordsArray().value;
+                if (!arr.some(ex => ex.word.toLowerCase() === item.word.toLowerCase())) {
+                    arr.push({ word: item.word, occurrences: item.occurrences || item.occurrances || 0 });
+                    this.SetConfigValue("bannedWordsArray", arr);
+                }
+            }
+        });
 
         if (!this.BannedWordsTrie || method === "replace") {
-            this.DebugPrint({msg: method === "replace" ? "Replacing tree" : "Initializing new tree"});
             this.BannedWordsTrie = new TrieTree();
         }
 
-        this.DebugPrint({msg: `Adding ${data.length} words to the Trie`}); 
         this.UpdateBannedWordsTrie();
         this.UpdateBannedWordsList();
         return this.SafeGetBannedWordsArray().value;
@@ -404,6 +453,28 @@ export class BannedWordsManager extends BaseClass {
         this.UpdateSentenceList(); 
     }
 
+    // New Tracking Function
+    IncrementWordHits(wordsToIncrement) {
+        let result = this.SafeGetBannedWordsArray();
+        if (result.isFailure) return;
+        
+        let arr = result.value;
+        let needsSave = false;
+
+        for (const word of wordsToIncrement) {
+            const found = arr.find(item => item.word.toLowerCase() === word);
+            if (found) {
+                found.occurrences++;
+                needsSave = true;
+            }
+        }
+
+        if (needsSave) {
+            this.SetConfigValue("bannedWordsArray", arr);
+            this.UpdateBannedWordsList(); // Visually updates the badge instantly
+        }
+    }
+
     GetBannedRanges(input) {
         const ranges = [];
         const lowerInput = input.toLowerCase();
@@ -411,7 +482,12 @@ export class BannedWordsManager extends BaseClass {
         for (let i = 0; i < input.length; i++) {
             let matchLength = this.BannedWordsTrie.FindLongestMatch(lowerInput, i);
             if (matchLength > 0) {
-                ranges.push([i, i + matchLength - 1]);
+                // Now returning an object so we know EXACTLY what word was hit
+                ranges.push({
+                    start: i, 
+                    end: i + matchLength - 1,
+                    matchedWord: lowerInput.substring(i, i + matchLength)
+                });
                 i += matchLength - 1; 
             }
         }
@@ -422,39 +498,46 @@ export class BannedWordsManager extends BaseClass {
         const ranges = this.GetBannedRanges(input);
         if (ranges.length === 0) return Result.ok(input);
 
-        // Fallback for censorChar if it was deleted
+        // Track the hits
+        this.IncrementWordHits(ranges.map(r => r.matchedWord));
+
         const cChar = config.censorChar || "*";
-        
         let output = "";
         let lastIndex = 0;
-        for (const [start, end] of ranges) {
-            output += input.substring(lastIndex, start);
-            const match = input.substring(start, end + 1);
+        
+        for (const r of ranges) {
+            output += input.substring(lastIndex, r.start);
+            const match = input.substring(r.start, r.end + 1);
             output += cChar.repeat(match.length);
-            lastIndex = end + 1;
+            lastIndex = r.end + 1;
         }
         output += input.substring(lastIndex);
         return Result.ok(output);
     }
 
-PerformSentenceCensorship(input, config) {
-        // Split by punctuation to separate sentences and keep the punctuation delimiters
+    PerformSentenceCensorship(input, config) {
         const sentences = input.split(/([.!?]+(?:\s+|$))/);
+        let hitWords = [];
         
         const processed = sentences.map((part, i) => {
-            if (i % 2 !== 0) return part; // This is the punctuation/spacing, skip checking
+            if (i % 2 !== 0) return part; 
             
-            // Use the same robust sub-string range checking as word censorship
             const ranges = this.GetBannedRanges(part);
-
-            // If we found any banned ranges in this sentence, replace the whole thing
             if (ranges.length > 0) {
-                const list = config.randomSentences || [];
+                // Collect all words found in this sentence chunk
+                hitWords.push(...ranges.map(r => r.matchedWord));
+                
+                const list = config.randomSentences;
                 return list.length > 0 ? list[Math.floor(Math.random() * list.length)] : part;
             }
             return part;
         });
-        
+
+        // Track all accumulated hits in the whole message
+        if (hitWords.length > 0) {
+            this.IncrementWordHits(hitWords);
+        }
+
         return Result.ok(processed.join(""));
     }
 
@@ -465,23 +548,26 @@ PerformSentenceCensorship(input, config) {
         if (configResult.isFailure) return Result.ok(input);
         
         const config = configResult.value;
-        
-        // Actively pull the latest censorType
         const typeResult = this.GetConfigValue("censorType");
         let rawType = typeResult.isSuccess ? typeResult.value : config.censorType;
 
         let modeIndex = parseInt(rawType, 10);
         
-        // Strict fallback to prevent errors
         if (isNaN(modeIndex) || modeIndex < 0 || modeIndex >= config.censorshipOptions.length) {
-            modeIndex = 1; // Default to censorWordWithChar
+            modeIndex = 1;
         }
 
         const currentMode = config.censorshipOptions[modeIndex];
 
         switch (currentMode) {
             case "censorByErasingEverything":
-                return Result.ok("");
+                // Check if there actually IS a banned word so we can track it before nuking
+                const ranges = this.GetBannedRanges(input);
+                if (ranges.length > 0) {
+                    this.IncrementWordHits(ranges.map(r => r.matchedWord));
+                    return Result.ok(""); // Erase
+                }
+                return Result.ok(input);
 
             case "censorWordWithChar":
                 return this.PerformWordCensorship(input, config);
@@ -493,4 +579,7 @@ PerformSentenceCensorship(input, config) {
                 return Result.ok(input);
         }
     }
+	
+	Init(){
+	};
 }

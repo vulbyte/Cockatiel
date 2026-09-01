@@ -1,4 +1,6 @@
 import { Result} from "./result.mjs";
+import { SocketManager } from "./socketManager.mjs";
+
 
 export class BaseClass {
 	// INIT STUFF
@@ -6,6 +8,8 @@ export class BaseClass {
 	#config = {
 		...structuredClone(window.Cockatiel.templates.config),
 	};
+
+	socket;
 
 	constructor(input = {
 		childClassName: null,
@@ -23,11 +27,12 @@ export class BaseClass {
 			this.#config = {...this.#config, ...input.extraConfig}
 		}
 
+		this.socket = new SocketManager();
+
 		this.Init();
 	}
 
 	// FUNCTIONS
-
 	GetConfigValue(key) {
 	    const string = String(key);
 
@@ -133,6 +138,7 @@ export class BaseClass {
 		}
 		window.Cockatiel.addSaveListener(() => {this.SaveConfig()});
 		window.addEventListener('beforeunload', () => {this.SaveConfig()});	
+
 		return Result.ok(`${this.name} was successfully inited`)
 	}
 

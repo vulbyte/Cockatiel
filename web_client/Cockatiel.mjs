@@ -1,50 +1,119 @@
 import { BaseClass } from "./baseClass.mjs";
 
-import { BannedWordsManager } from "./bannedWordsManager.mjs";
-import { ChatManager } from "./chat_manager.mjs";
-import { EventsManager } from "./events_manager.mjs";
-import { ScoreHandler } from "./score_handler.mjs";
-import { Timeline } from "./timeline.mjs";
-import { TtsManager } from "./tts_state.mjs";
-import { UserManager } from "./user_manager.mjs";
+//❌BannedWordsManager
+//❌ChatManager
+//❌EventsManager
+//❌ScoreHandler
+//❌Timeline
+//❌TtsManager
+//❌UserManager 
 
-//import { BilliBilli } from "./";
-//import { Discord } from "./";
-//import { Facebook } from "./";
-//import { Instagram } from "./";
-//import { Kick } from "./";
-//import { Odysee } from "./";
-//import { Picarto } from "./";
-//import { Pixiv } from "./";
-//import { Rumble } from "./";
-//import { Trovo } from "./";
-//import { TikTok } from "./";
-//import { Twitter } from "./";
-import { Twitch } from "./twitch_state.mjs";
-import { Youtube } from "./youtube_state.mjs";
+//❌BilliBilli
+//❌Discord
+//❌Facebook
+//❌Instagram 
+//❌Kick
+//❌Odysee
+//❌Picarto
+//❌Pixiv
+//❌Rumble
+//❌Trovo
+//❌TikTok
+//❌Twitter 
+//❌Twitch
+//❌Youtube
 
 import { DebugPrint } from "./DebugPrint.mjs";
+import { SocketPool } from "./socket_pool.mjs";
 import { Result } from "./result.mjs";
+import { MessageManager } from "./message_manager.mjs";
 
-// TLDR codebase rules:
-/* 1. why do we use getters/setters?: prevent data leaks for sensitive information. ie we don't want api-keys leaking. */
-/* 2. why use the result pattern?: javascript stack traces are a massive pain, and often get consumed in the worst way possible at critical times. so a proper pattern that just formal logging is far better than relying on throws. */
 
 export class Cockatiel {
   //assigend to document on init
   #hasInited = false;
 
 	//classes for handling things, declared here to help prevent shadow declarations
-  	d	
-	BannedWordsManager	
-	ChatManager
-	EventsManager
-	ScoreHandler
-	Timeline
-	TtsManager
-	UserManager
-	Twitch
-	Youtube
+  	d;
+	SocketPool;
+	MessageManager;
+	async Init() {
+		if (this.#hasInited) return; // Stop if already running
+		this.d = document; // document
+		this.SocketPool = new SocketPool();
+		this.MessageManager = new MessageManager();
+
+		this.d.body.append(this.GenerateUI());
+
+		//essentails above
+		this.#hasInited = true;
+	}
+
+	//not the most efficent form of passing data around, but is fairly extensive, and allows for cockatiel to be extensible across languages/devices
+	#commandSchema1 = `	
+		syntax = "proto3";
+
+		// Header is shared by every message
+		message Header {
+		    int32 version = 1;
+		    string request_id = 2;
+		    string jwt = 3;
+		    string type = 4; // Crucial for routing!
+		}
+
+		message NewAuth {
+		    Header header = 1;
+		    int32 auth_pin = 2;
+		    string public_ip = 3;
+		    string new_jwt = 4; // Will update if valid
+		}
+
+		message NewConnection {
+		    Header header = 1;
+		    string name = 2;
+		    string flag = 3;
+		    string description = 4;
+		    string html = 5;
+		}
+
+		message CloseConnection {
+		    Header header = 1;
+		    string reason = 2;
+		}
+
+		message NewFlag {
+		    Header header = 1;
+		    string name = 2;
+		    string flag = 3;
+		    string flag_id = 4;
+		    string description = 5;
+		}
+
+		message RemoveFlag {
+		    Header header = 1;
+		    string flag_id = 2;
+		    string flag = 3;
+		}
+
+		message Command {
+		    Header header = 1;
+		    string message = 2;
+		}
+
+		message Result {
+		    Header header = 1;
+		    bool ok = 2;
+		    string json_data = 3;
+		    string mime_type = 4;
+		    bytes blob = 5;
+		    string err = 6;
+		}
+
+		message ConfigSync {
+		    Header header = 1;
+		    string config = 2;
+		};
+	`;
 
 	#saveListeners = new Array();
 	addSaveListener(input){
@@ -87,15 +156,15 @@ export class Cockatiel {
 		}
 		return Result.ok("save ran successfully");
 	}
-	GetSL(){
-		return this.#saveListeners;
-	}
 
   templates = {
 	config: {
-		color: "#069420",
-		title: "you can click these to rename them!",
-		isHidden: false,
+		color: "#069420", // string
+		title: "you can click these to rename them!", // string
+		isHidden: false, // bool
+		socketAddress: null, //string
+		isSourceOfTruth: true, // local is considered source of truth unless otherwise specified
+		messageManagerOrder: null,
 	},
 	    platformSettings: {
 	      //key, default value
@@ -140,133 +209,7 @@ export class Cockatiel {
 		overrideGlobal: false,
 	      }, //ie chat
 	    },
-    user: {
-      version: 1,
-      username: null,
-      channels: {
-        facebook: [],
-        kick: [],
-        tiktok: [],
-        twitch: [],
-        youtube: [],
-      },
-      uuid: null,
-      ttsBans: [], // times they've been restricted from using tts (ie non-english, spam, etc)
-      channelBans: [], // when banned and why
-      conduct_score: 0, // -5 is the worst, 5 is the best, calculated at init or when a commendment or misconduct is added. ranks are in the following order (worst to best):
-      /*	opal		- 1.5x score multiplier
-				obsidian	- can send gifs
-				diamond 	- 1.2x score multiplier
-				platinum	- no more negative points -- here and above is trusted
-				gold		- 1.1x score multiplier
-				silver		- ...
-				bronze		- 0.85x
-				copper		- 0.75x score multiplier
-				concrete	- user now automatically hidden from chat (not dashboard tho)
-				dirt		- no chat customization perms
-				trash		- 0.5x score multiplier */
-      commendments: {
-        community: [], // welcoming, helpful, inclusivity, etc
-        engagement: [], // hype, constructive feedback, good chatting, etc
-        support: [], //the only thing one can buy
-        rep: [], // low support, no real value on scoring but can be fun for chat
-      },
-      misconduct: {
-        discrimination: [], // racism, sexism, etc
-        harassment: [], // bullying, hate speech, etc
-        spam: [], // self-promo, asdl;fknfrtn, links, etc
-        integrity: [], // language, spoilers, trolling/rage, bypassing filters
-      },
-      icon: null, //only allow icons from yt/twitch/etc
-      isSponser: false, // is a paying memeber/has payed money this stream
-      isChatModerator: false, // can remove messages or but users on timeout
-      isChatAdmin: false, // can manage blocked words, change chat modes, and some other things
-      isVerified: false, // if they have been verified by the platform
-      firstSeen: null, //Date.now()
-      points: 0,
-      totalPoints: 0,
-      styling: {
-        // ONLY CUSTOMIZABLE PROPERTIES ARE HERE, styles are whiteliste'd
-        chatMessageContainer: {
-          styling: null,
-          chatUserBubble: {
-            styling: null,
-            chatBubbleTailContainer: {
-              styling: null,
-              chatBubbleTailContainer: {
-                styling: null,
-                chatBubbleTail: { styling: null },
-              },
-            },
-            chatUserInfo: {
-              styling: {
-                backgroundColor: "#ff8",
-                borderRadius: "3rem",
-                color: "black",
-              },
-              chatUserImageContainer: {
-                styling: {
-                  backgroundColor: "#000",
-                  borderRadius: "100%",
-                },
-                chatUserImage: { styling: null },
-              },
-              chatUserStats: {
-                styling: null,
-                chatUsername: { styling: null },
-                chatUserCommendations: { styling: null },
-              },
-            },
-          },
-          chatMessageBubble: {
-            styling: {
-              backgroundColor: "#111",
-              borderRadius: "1.3rem",
-              color: "white",
-            },
-            chatCommandContainer: {
-              styling: {
-                height: "1rem",
-                paddingBottom: "1rem",
-              },
-              chatCommand: {
-                styling: {
-                  backgroundColor: "#222",
-                  borderRadius: "1rem",
-                  color: "cyan",
-                },
-              },
-            },
-
-            chatMessage: { styling: null },
-          },
-        },
-      }, //end of styling
-      totalMessages: 0,
-    },
   /* ALL COMMENTED OUT TEMPLATES ARE LEGACY, TO BE REMOVED IN THE FUTURE
-    bannedAt: {
-      version: 1,
-      datetime: "",
-      unbannedAt: [],
-      banAppeals: [],
-    },
-    bannedWord: {
-      word: "",
-      occurrances: 0,
-    },
-    channel: {
-      version: 1,
-      platform: "",
-      channelName: "",
-      channelId: "",
-    },
-    commendment: {
-      version: 1,
-      happenedAt: null,
-      byUser: null, // uuid
-      messageCommended: null, // messageCommended if any
-    },
     commands: {
       version: 1,
       commandType: null,
@@ -2222,8 +2165,6 @@ export class Cockatiel {
 	saveBtn.addEventListener("click", () => this.EmitSave());
 	titleContainer.append(saveBtn);
 
-	titleContainer.append(saveBtn);
-
 
 	const TC = class TitleClass extends BaseClass {
 	    extraConfig = {
@@ -2265,126 +2206,190 @@ export class Cockatiel {
 	    console.error("Failed to create container:", titalContainerFinal.error);
 	}
 
+	let socketUI = this.SocketPool.GenerateUI(); 
 
-	function AddUI(input) {
-		try{
-		    let res;
-			input.HTMLContainer = window.Cockatiel.CreateCockatielDragableChild(input);
-			
-			if (input.HTMLContainer.isSuccess) {
-			    res = g.append(input.HTMLContainer.value);
-			    return Result.ok(res);
-			} else {
-			    return Result.err(`Failed to create draggable child: ${res}`);
-			}
-		    } 		
-		catch(err){
-			return Result.err(`failed to run AddUI \n${err}`);
-		}
-	}
+	// If GenerateUI returns the DOM element directly:
+	g.append(this.CreateCockatielDragableChild({ 
+	    title: "module manager",
+	    color: this.GetRandomPastelColor().value,
+	    platform: this.SocketPool,
+	    HTML: socketUI, // Pass the element directly
+	}).value);
 
-	let uiArray = [
-		{
-			HTML: this.BannedWordsManager.GenerateUI(), 
-			color: this.BannedWordsManager.GetConfigValue("color").value,
-			title: this.BannedWordsManager.GetConfigValue("title").value,
-			platform: this.BannedWordsManager,
-		},
-		{
-			HTML: this.ChatManager.GenerateUI(), 
-			color: this.ChatManager.GetConfigValue("color").value,
-			title: this.ChatManager.GetConfigValue("title").value,
-			platform: this.ChatManager,
-		},
-		{
-			HTML: this.EventsManager.GenerateUI(), 
-			color: this.EventsManager.GetConfigValue("color").value,
-			title: this.EventsManager.GetConfigValue("title").value,
-			platform: this.EventsManager,
-		},
-		{
-			HTML: this.ScoreHandler.GenerateUI(), 
-			color: this.ScoreHandler.GetConfigValue("color").value,
-			title: this.ScoreHandler.GetConfigValue("title").value,
-			platform: this.ScoreHandler,
-		},
-		{
-			HTML: this.Timeline.GenerateUI(), 
-			color: this.Timeline.GetConfigValue("color").value,
-			title: this.Timeline.GetConfigValue("title").value,
-			platform: this.Timeline,
-		},
-		{
-			HTML: this.TtsManager.GenerateUI(), 
-			color: this.TtsManager.GetConfigValue("color").value,
-			title: this.TtsManager.GetConfigValue("title").value,
-			platform: this.TtsManager,
-		},
-		{
-			HTML: this.UserManager.GenerateUI(), 
-			color: this.UserManager.GetConfigValue("color").value,
-			title: this.UserManager.GetConfigValue("title").value,
-			platform: this.UserManager,
-		},
-		{
-			HTML: this.Twitch.GenerateUI(), 
-			color: this.Twitch.GetConfigValue("color").value,
-			title: this.Twitch.GetConfigValue("title").value,
-			platform: this.Twitch, 
-		},
-		{
-			HTML: this.Youtube.GenerateUI(), 
-			color: this.Youtube.GetConfigValue("color").value,
-			title: this.Youtube.GetConfigValue("title").value,
-			platform: this.Youtube, 
-		},
-	];
+	let MessageManagerUI = this.MessageManager.GenerateUI(); 
 
-	for (let i = 0; i < uiArray.length; ++i) {
-		try{
-		    let res = AddUI(uiArray[i]);
-		    if(res.isFailure){
-			console.warn(`could not add item to the UI: \n${uiArray[i]}`);
-		    }
-		}
-		catch(err){
-			console.warn(`could not create or add item to the UI: \n${uiArray[i]}`);
-		}
-	}
+	// If GenerateUI returns the DOM element directly:
+	g.append(this.CreateCockatielDragableChild({ 
+	    title: "module manager",
+	    color: this.GetRandomPastelColor().value,
+	    platform: this.MessageManager,
+	    HTML: MessageManagerUI, // Pass the element directly
+	}).value);
 
       document.body.append(g);
 
       return Result.ok("created UI successfully");
   }
 
-  async Init() {
-    if (this.#hasInited) return; // Stop if already running
+	InitNotificationStyles() {
+	    const styleId = "notification-styles";
+	    if (!document.getElementById(styleId)) {
+		const style = document.createElement("style");
+		style.id = styleId;
+		style.textContent = `
+		    /* The Blocking Layer */
+		    #modal-container {
+			position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+			z-index: 10000; pointer-events: none; /* Let clicks pass through when empty */
+		    }
+		    .blocking-overlay {
+			width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7);
+			display: flex; justify-content: center; align-items: center;
+			pointer-events: all; /* Block clicks only when active */
+		    }
 
-	this.d = document; // document
-	this.BannedWordsManager = new BannedWordsManager();
-	if(this.BannedWordsManager.Init().isFailure){throw new Error("bannedWordsManager failed to init")}
-	this.ChatManager = new ChatManager();
-	if(this.ChatManager.Init().isFailure){throw new Error("chatManager failed to init")}
-	this.EventsManager = new EventsManager();
-	if(this.EventsManager.Init().isFailure){throw new Error("eventsManagerfailed to init")}
-	this.ScoreHandler = new ScoreHandler();
-	if(this.ScoreHandler.Init().isFailure){throw new Error("scoreHandler failed to init")}
-	this.Timeline = new Timeline();
-	if(this.Timeline.Init().isFailure){throw new Error("timeline failed to init")}
-	this.TtsManager = new TtsManager();
-	if(this.TtsManager.Init().isFailure){throw new Error("tts manager failed to init")}
-	this.UserManager = new UserManager();
-	if(this.UserManager.Init().isFailure){throw new Error("userManager failed to init")}
-	this.Twitch = new Twitch();
-	if(this.Twitch.Init().isFailure){throw new Error("twitch failed to init")}
-	this.Youtube = new Youtube();
-	if(this.Youtube.Init().isFailure){throw new Error("youtubekfailed to init")}
+		    /* The Toast Layer */
+		#toast-container {
+		    position: fixed; 
+		    top: 0; 
+		    right: 0.5rem; 
+		    width: 24rem; 
+		    height: 100vh; /* Full window height */
+		    padding: 1.6rem;
+		    box-sizing: border-box; /* Ensures padding doesn't push width outside */
+		    
+		    display: flex; 
+		    flex-direction: column-reverse; /* New ones stack from the bottom up */
+		    gap: 0.7rem; 
+		    z-index: 9999;
+		    pointer-events: none; /* Let clicks pass through empty space */
+		    overflow-y: auto;
+		}
 
-    this.d.body.append(this.GenerateUI());
+		#toast-container::-webkit-scrollbar {
+		    display: none; /* Hides scrollbar on Chrome/Safari/Edge */
+		}
+		#toast-container {
+		    -ms-overflow-style: none; /* IE and Edge */
+		    scrollbar-width: none;    /* Firefox */
+		}
 
-    //essentails above
-    this.#hasInited = true;
-  }
+		.persistent-toast {
+			pointer-events: all; /* Only make the toast itself clickable */
+			width: 300px; background: #222; color: white;
+			padding: 15px; border-radius: 8px;
+			box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+			border: 1px solid #444;
+		    }
+		`;
+		document.head.appendChild(style);
+	    }
+	}
+
+	// Helper to ensure container exists
+	GetContainer(id) {
+	    let el = document.getElementById(id);
+	    if (!el) {
+		el = document.createElement("div");
+		el.id = id;
+		document.body.appendChild(el);
+	    }
+	    return el;
+	}
+
+	GetRandomPastelColor() {
+	    const hue = Math.floor(Math.random() * 360);
+	    return `hsl(${hue}, 70%, 90%)`; // Pastel colors are easier on the eyes
+	}
+
+	async CreateModal({ title, description, yesPrompt, noPrompt, yesFunction, noFunction }) {
+	    this.InitNotificationStyles();
+	    const modalContainer = this.GetContainer("modal-container");
+
+	    const overlay = document.createElement("div");
+	    overlay.className = "blocking-overlay";
+
+	    // Create the modal element and apply the random color
+	    const modal = document.createElement("div");
+	    modal.style.background = this.GetRandomPastelColor();
+	    modal.style.padding = "1.4rem";
+	    modal.style.borderRadius = "0.5rem";
+	    modal.style.border = "0.1rem solid rgba(0,0,0,0.1)";
+	    modal.style.color = "black";
+	    modal.style.maxWidth = "16rem";
+	    
+	    // Set the content
+	    modal.innerHTML = `
+		<h4>${title}</h4>
+		<p>${description}</p>
+		<div style="display: flex; gap: 10px;">
+		    <button class="modal-no">${noPrompt || "Cancel"}</button>
+		    <button class="modal-yes">${yesPrompt || "Yes"}</button>
+		</div>
+	    `;
+	    
+	    overlay.appendChild(modal);
+	    modalContainer.appendChild(overlay);
+
+	    return new Promise((resolve) => {
+		const yesBtn = modal.querySelector(".modal-yes");
+		const noBtn = modal.querySelector(".modal-no");
+
+		const cleanup = () => { overlay.remove(); };
+
+		yesBtn.onclick = () => {
+		    if (typeof yesFunction === "function") yesFunction();
+		    cleanup();
+		    resolve(Result.ok(true));
+		};
+
+		noBtn.onclick = () => {
+		    if (typeof noFunction === "function") noFunction();
+		    cleanup();
+		    resolve(Result.ok(false));
+		};
+	    });
+	}
+
+	async CreateToast({ title, description, yesPrompt, noPrompt, yesFunction, noFunction }) {
+	    this.InitNotificationStyles();
+	    const toastContainer = this.GetContainer("toast-container");
+		toastContainer.style.height = "100%";
+
+	    const toast = document.createElement("div");
+	    toast.className = "persistent-toast";
+	    toast.style.background = this.GetRandomPastelColor();
+	    toast.style.color = "#333";
+	    
+	    toast.innerHTML = `
+		<h4 style="margin: 0 0 10px 0;">${title}</h4>
+		<p style="margin: 0 0 10px 0;">${description}</p>
+		<div style="display: flex; gap: 10px;">
+		    <button class="toast-no">${noPrompt || "Cancel"}</button>
+		    <button class="toast-yes">${yesPrompt || "Yes"}</button>
+		</div>
+	    `;
+	    
+	    toastContainer.appendChild(toast);
+
+	    return new Promise((resolve) => {
+		const yesBtn = toast.querySelector(".toast-yes");
+		const noBtn = toast.querySelector(".toast-no");
+
+		yesBtn.onclick = () => {
+		    if (typeof yesFunction === "function") yesFunction();
+		    toast.remove();
+		    resolve(Result.ok(true));
+		};
+
+		noBtn.onclick = () => {
+		    if (typeof noFunction === "function") noFunction();
+		    toast.remove();
+		    resolve(Result.ok(false));
+		};
+	    });
+	}
+
 
   /*
 	 * WE CANNOT DELETE THIS AS SOME MADLAD (@Cunningstuntsinc) dropped a 50 banger (thankies ily)*

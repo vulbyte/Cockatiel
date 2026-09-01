@@ -2,6 +2,129 @@ import {BaseClass} from "./baseClass.mjs";
 import {Result} from "./result.mjs";
 
 export class UserManager extends BaseClass {
+    user: {
+      version: 1,
+      username: null,
+      channels: {
+        facebook: [],
+        kick: [],
+        tiktok: [],
+        twitch: [],
+        youtube: [],
+      },
+      uuid: null,
+      ttsBans: [], // times they've been restricted from using tts (ie non-english, spam, etc)
+      channelBans: [], // when banned and why
+      conduct_score: 0, // -5 is the worst, 5 is the best, calculated at init or when a commendment or misconduct is added. ranks are in the following order (worst to best):
+      /*	opal		- 1.5x score multiplier
+				obsidian	- can send gifs
+				diamond 	- 1.2x score multiplier
+				platinum	- no more negative points -- here and above is trusted
+				gold		- 1.1x score multiplier
+				silver		- ...
+				bronze		- 0.85x
+				copper		- 0.75x score multiplier
+				concrete	- user now automatically hidden from chat (not dashboard tho)
+				dirt		- no chat customization perms
+				trash		- 0.5x score multiplier */
+      commendments: {
+        community: [], // welcoming, helpful, inclusivity, etc
+        engagement: [], // hype, constructive feedback, good chatting, etc
+        support: [], //the only thing one can buy
+        rep: [], // low support, no real value on scoring but can be fun for chat
+      },
+      misconduct: {
+        discrimination: [], // racism, sexism, etc
+        harassment: [], // bullying, hate speech, etc
+        spam: [], // self-promo, asdl;fknfrtn, links, etc
+        integrity: [], // language, spoilers, trolling/rage, bypassing filters
+      },
+      icon: null, //only allow icons from yt/twitch/etc
+      isSponser: false, // is a paying memeber/has payed money this stream
+      isChatModerator: false, // can remove messages or but users on timeout
+      isChatAdmin: false, // can manage blocked words, change chat modes, and some other things
+      isVerified: false, // if they have been verified by the platform
+      firstSeen: null, //Date.now()
+      points: 0,
+      totalPoints: 0,
+      styling: {
+        // ONLY CUSTOMIZABLE PROPERTIES ARE HERE, styles are whiteliste'd
+        chatMessageContainer: {
+          styling: null,
+          chatUserBubble: {
+            styling: null,
+            chatBubbleTailContainer: {
+              styling: null,
+              chatBubbleTailContainer: {
+                styling: null,
+                chatBubbleTail: { styling: null },
+              },
+            },
+            chatUserInfo: {
+              styling: {
+                backgroundColor: "#ff8",
+                borderRadius: "3rem",
+                color: "black",
+              },
+              chatUserImageContainer: {
+                styling: {
+                  backgroundColor: "#000",
+                  borderRadius: "100%",
+                },
+                chatUserImage: { styling: null },
+              },
+              chatUserStats: {
+                styling: null,
+                chatUsername: { styling: null },
+                chatUserCommendations: { styling: null },
+              },
+            },
+          },
+          chatMessageBubble: {
+            styling: {
+              backgroundColor: "#111",
+              borderRadius: "1.3rem",
+              color: "white",
+            },
+            chatCommandContainer: {
+              styling: {
+                height: "1rem",
+                paddingBottom: "1rem",
+              },
+              chatCommand: {
+                styling: {
+                  backgroundColor: "#222",
+                  borderRadius: "1rem",
+                  color: "cyan",
+                },
+              },
+            },
+
+            chatMessage: { styling: null },
+          },
+        },
+      }, //end of styling
+      totalMessages: 0,
+    },
+    bannedAt: {
+      version: 1,
+      datetime: "",
+      unbannedAt: [],
+      banAppeals: [],
+    },
+    channel: {
+      version: 1,
+      platform: "",
+      channelName: "",
+      channelId: "",
+    },
+    commendment: {
+      version: 1,
+      happenedAt: null,
+      byUser: null, // uuid
+      messageCommended: null, // messageCommended if any
+    },
+
 	static extraConfig = {
 		color: `#ff00ff`,
 		title: `user Manager`,

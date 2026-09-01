@@ -1,0 +1,6 @@
+{
+            "database_location": "./",
+            "backup_database_location": "./",
+            "paring_pin": 185245,
+            "port": 9734
+}

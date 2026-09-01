@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/cmake_install.cmake",
+		"/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

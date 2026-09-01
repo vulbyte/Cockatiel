@@ -33,8 +33,8 @@
 <head>	
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<link rel="icon" type="image/x-icon" href="../assets/cockatiel_process_diagram.svg
-">
+	<link rel="icon" type="image/x-icon" href="../assets/cockatiel_process_diagram.svg">
+	<script src="https://cdn.jsdelivr.net/npm/protobufjs@7.x/dist/protobuf.min.js"></script>
 	<title>Cockatiels local test/run</title>
 	<!--
 		<details><summary>if you're curious how cockatiel works, or wanna mod it; here's a simple diagram</summary>
@@ -44,9 +44,14 @@
 		</details>
 	-->
 		<script type="module">
-			window.debug = true;
 			import {Cockatiel} from './Cockatiel.mjs';
+			import {BannedWordsManager} from "./bannedWordsManager.mjs";
+
+			//macro-service
 			window.Cockatiel = await new Cockatiel(); 
+			//micro-services
+			window.BannedWordsManager = await new BannedWordsManager();
+
 			document.addEventListener("DOMContentLoaded", async (event) => {
 				console.log("initing Cockatiel");
 				try{
@@ -55,6 +60,14 @@
 				}
 				catch(err){
 					console.error("init fail", err, err.stack);
+				}
+
+
+				try{
+					await window.BannedWordsManager.Init();
+				}
+				catch(err){
+					console.err("could not start banned words manager");
 				}
 			});
 			console.log("Cockatiel added to window");

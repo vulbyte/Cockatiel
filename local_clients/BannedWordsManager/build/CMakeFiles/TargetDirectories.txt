@@ -1,0 +1,14 @@
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/bannedWordsManager_server.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/edit_cache.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/rebuild_cache.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/list_install_components.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/install.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/install/local.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/CMakeFiles/install/strip.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/ixwebsocket.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/edit_cache.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/rebuild_cache.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/list_install_components.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/install.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/install/local.dir
+/Users/insert/Cockatiel/local_clients/BannedWordsManager/build/external/ixwebsocket/CMakeFiles/install/strip.dir

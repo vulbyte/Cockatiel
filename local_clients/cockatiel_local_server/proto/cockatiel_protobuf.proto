@@ -1,0 +1,104 @@
+// only 32bit numbers are allowed
+syntax = "proto3";
+package cockatiel_protobuf;
+
+/* SUB DATA STRUCTURES (to be consumed by another data struct) */
+
+message Flag {/*used to communicate flags within the Command flag ie the "-h"*/
+  string flag_name = 1; /*ie: help*/
+  string flag_description = 2; /*take a guess*/
+  string limiting_type = 3; /*any, options, or range */
+  float min_val = 4; /*if set to range*/
+  float max_val = 5; /*if set to range*/
+  repeated string options = 6; /*if set to options*/
+}
+message Command {/* used to communicate commands with sub-Flag's to Cockatiel_server*/
+  string command_name = 1; /*ie: text to speach*/
+  string command_flag = 2; /*ie: tts (do not include flag)*/
+  string command_description = 3; /*take a guess*/
+  repeated Flag command_flags = 4; /*array of Flag's*/
+}
+
+message Ban {
+  string commender_uuid7 = 1; /*user id of who gave the commendment*/
+  string commendee_uuid7 = 2; /*user id of who receives the commendment*/
+  bool unbanned = 3; /*if the ban has been revoked*/
+  string reason = 4; /*why the ban exists*/
+  string raw_message = 5; /*message connected to why the user was banned*/
+  repeated string appeals = 6; /*if the user wishes the ban to be undone, why*/
+}
+message Commendment {
+  string commender_uuid7 = 1; /*user id of who gave the commendment*/
+  string commendee_uuid7 = 2; /*user id of who receives the commendment*/
+  string raw_message = 3; /*message connected to why the user was commended*/
+}
+message UserStylingTemplate{/*TO IMPL*/}
+
+/*PAYLOADS*/
+message ConnectionRequest {/*used on first request to request connection*/
+    int32 pin = 1; /*pin must match one from config, if not connection is refused*/
+    string process_position = 2; /*preprocess:returns MessageRaw, inprocess:returns processedMessage(inflight), postprocess: returns processedMessage (finished processing)*/
+  }
+message ConnectionRequestReturn {/*return from ConnectionRequest to module*/
+    int32 new_port = 1; /*if value is 0000, then that means connection rejected*/
+  }
+  // POST-AUTH
+message AuthVerify {/*when asked to verify auth, will return this, pull id from header*/
+    string cur_auth = 1; /*the current token*/
+  }
+message AuthNew {/*is given from a new jwt,*/
+    string new_auth = 1; /*the new token*/
+  }
+message Commands {/**/
+    repeated Command commands = 1; /*array of commands for the purpose of communicating module capibilites*/
+  }
+message MessageRaw {/*for transfering unprocessed messages*/
+    string json_data = 1; /*due to the vagueness of each platform, cockatiel will take a message and seperate each value into a key data pair, and leave said data to the program. GENERALLY DISCOURAGED*/
+  }
+message MessageProcessed {/*for transfering processed messages*/
+    string platform = 1; /**/
+    string user_uuid = 2; /*user id + timestamp of their first appearance*/
+    string raw_message = 3; /*raw json from the platform (mainly for debugging reasons)*/
+    string processed_message = 4; /*message in process AFTER trasforms*/
+    bool is_final = 5; /*flag for if the message is processed, or is "in-flight"*/
+  }
+message TimelineEvent{/*event stored in the timeline*/
+    string uuid7_key = 1; /*id + timestamp*/
+    string data_type = 2; /*package type of data, used to shortcut determining data's structure and type*/
+    string data = 3; /*data in a json format for archival purposes and accessing*/ 
+    string error = 4; /*if there's an error, it will populate here.*/
+  }
+message UserData {/*used for transfering user data*/
+    string uuid = 1;   /**/
+    string username = 2; /**/
+    //repeated String youtube_channels = 2; /**/
+    //repeated String twitch_channels = 3; /**/
+    bool isSponsor = 3; /*if the user has EVER donated to the channel*/
+    bool isModerator = 4; /**/
+    bool isAdmin = 5; /**/
+    bool isOwner = 6; /**/
+    repeated Ban bans = 7; /**/
+    repeated Commendment commendments = 8; /**/
+    UserStylingTemplate styling = 9; /*the css for the user styling*/
+  }
+
+
+// MESSAGE SHAPE
+message Container { /*general template for communicating messages*/
+  int32 version = 1; /*version for disbatching*/
+  string type = 2; /*event type for logging and infra*/
+  string auth_token = 3; /*JWT for auth*/
+  string error = 4; /*errors if any for logging*/
+  string module_name = 5;/*used for displaying to user and for internal resource mgmt*/
+  oneof payload {
+    ConnectionRequest connection_request = 6;
+    ConnectionRequestReturn connection_request_return = 7;
+    AuthVerify auth_verify = 8;
+    AuthNew auth_new = 9;
+    Commands commands_payload = 10;
+    MessageRaw message_raw = 11;
+    MessageProcessed message_processed = 12;
+    TimelineEvent timeline_event = 13;
+    UserData user_data = 14;
+  }
+}

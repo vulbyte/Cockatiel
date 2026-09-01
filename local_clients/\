@@ -1,0 +1,88 @@
+use std::path::{Path, PathBuf};
+use turso::{Builder, Connection};
+use std::io::{self}
+
+
+macro_rules! db_log {
+    ($($arg:tt)*) => {
+        println!("[DATABASE]: {}", format!($($arg)*));
+    };
+}
+
+pub struct SqliteHandler {
+    useDefaultPaths: bool,
+    pub db_path: PathBuf,
+    pub backup_db_path: PathBuf,
+
+    pub connection: Connection,
+
+    listeners: Vec<Box<dyn Fn()>>,
+}
+
+impl SqliteHandler {
+
+    fn prompt_new_path(path:PathBuf, path_name:string)->PathBuf{
+        let og_path = path
+        let mut input = String::new();
+
+        loop {
+            println!("do you want to use a custom path for {}? (y/n)", path_name);
+            input.clear();
+            io::stdin().read_line(&mut input)?;
+            match input.trim() {
+                "q" => {std::process::exit(1)},
+                "n" => {return og_path;},
+                "y" => {},
+                _ => {println!("input is not y or n, try again or type q to quit"); continue;}
+            }
+
+                input.clear();
+                io::stdin().read_line(&mut input)?;
+                let input = input.trim();
+                if(input != "y" && input != "n"){
+                    println!("input is not y or n, try again or ctrl+c to exit");
+                }
+            }
+        }
+    }
+
+    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut db_path = PathBuf::from("./data/");
+        db_path = prompt_new_path(db_path);
+
+        let mut backup_db_path = PathBuf::from("./data/");
+        backup_db_path = prompt_new_path(backup_db_path);
+
+        Ok({
+            db_path,
+            backup_db_path,
+            connection,
+            listeners,
+        });
+    }
+
+    pub fn assign_new_dir(var){
+        if(input == 'n'){
+            let mut db_path_valid:bool = false;
+            while(!db_path_valid){
+                println!("what is the new path? (~/ does not work, exclude the name, as renaming is not supported)");
+                io:stdin().read_line(&mut db_path);
+                if db_path.is_dir() {
+                    println!("path is valid! gj");
+                    db_path_valid = true;
+                }
+                else {
+                    println!("path is invalid, id the dir correct?");
+                    db_path_valid = false;
+                }
+            }
+        }
+        else {
+            db_log!("user chose to use default paths: \n\t db:");
+        }
+    }
+
+    pub fn connect(function) -> {
+        Self.listeners.push(function);
+    }
+}
