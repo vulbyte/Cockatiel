@@ -1,6 +1,7 @@
 ./web_client/assets/sleepi_tib.png
 **/target/
-**/target/
-**/target/
 target/
-**/target/
+config.json
+discord-config.json
+.env
+.env.*

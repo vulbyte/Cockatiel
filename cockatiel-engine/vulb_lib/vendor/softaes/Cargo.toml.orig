@@ -1,0 +1,12 @@
+[package]
+name = "softaes"
+version = "0.1.5"
+edition = "2021"
+categories = ["no-std", "cryptography", "wasm"]
+keywords = ["crypto", "aes", "software"]
+license = "MIT"
+homepage = "https://github.com/jedisct1/rust-softaes"
+repository = "https://github.com/jedisct1/rust-softaes"
+authors = ["Frank Denis <github@pureftpd.org>"]
+description = "Fast software implementation of the AES round function in pure Rust"
+include = ["src/**/*.rs", "tests/**/*.rs", "LICENSE"]
