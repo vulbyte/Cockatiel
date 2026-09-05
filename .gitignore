@@ -1,7 +1,12 @@
 ./web_client/assets/sleepi_tib.png
 **/target/
 target/
-config.json
-discord-config.json
+# Ignore all config files regardless of capitalization or directory
+*[cC][oO][nN][fF][iI][gG].[jJ][sS][oO][nN]
+**/*[cC][oO][nN][fF][iI][gG].[jJ][sS][oO][nN]
+*[cC][oO][nN][fF][iI][gG]*.json
+**/*[cC][oO][nN][fF][iI][gG]*.json
+
 .env
 .env.*
+
