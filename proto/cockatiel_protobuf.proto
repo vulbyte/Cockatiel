@@ -53,16 +53,30 @@ message AuthNew {/*is given from a new jwt,*/
 message Commands {/**/
     repeated Command commands = 1; /*array of commands for the purpose of communicating module capibilites*/
   }
-message MessageRaw {/*for transfering unprocessed messages*/
-    string json_data = 1; /*due to the vagueness of each platform, cockatiel will take a message and seperate each value into a key data pair, and leave said data to the program. GENERALLY DISCOURAGED*/
-  }
-message MessageProcessed {/*for transfering processed messages*/
-    string platform = 1; /**/
-    string user_uuid = 2; /*user id + timestamp of their first appearance*/
-    string raw_message = 3; /*raw json from the platform (mainly for debugging reasons)*/
-    string processed_message = 4; /*message in process AFTER trasforms*/
-    bool is_final = 5; /*flag for if the message is processed, or is "in-flight"*/
-  }
+
+// Stage 1: Raw payload coming in from an external platform adapter
+message MessagePreProcess {
+  string platform = 1;
+  string raw_data = 2; /* due to platform vagueness, raw key-data pairs or json string */
+  string raw_message = 3; /*message from the user in the raw with no transforamtions, parsing, or anything at all.*/
+}
+// Stage 2: Intermediate state as filters and transforms act on the message sequentially
+message MessageInProcess {
+  string platform = 1;
+  string user_uuid = 2; /* user id + timestamp of their first appearance */
+  string raw_message = 3; /* raw json for debugging */
+  string processed_message = 4; /* message modified AFTER transforms */
+  bool is_final = 5; /* flag for in-flight status */
+}
+// Stage 3: Fully finalized message ready for database commit (timeline events) and broadcasting
+message MessagePostProcess {
+  string platform = 1;
+  string user_uuid = 2;
+  string raw_message = 3;
+  string processed_message = 4;
+  bool is_final = 5; /* set to true */
+}
+
 message TimelineEvent{/*event stored in the timeline*/
     string uuid7_key = 1; /*id + timestamp*/
     string data_type = 2; /*package type of data, used to shortcut determining data's structure and type*/
@@ -85,21 +99,24 @@ message UserData {/*used for transfering user data*/
 
 
 // MESSAGE SHAPE
-message Container { /*general template for communicating messages*/
-  int32 version = 1; /*version for disbatching*/
-  string type = 2; /*event type for logging and infra*/
-  string auth_token = 3; /*JWT for auth*/
-  string error = 4; /*errors if any for logging*/
-  string module_name = 5;/*used for displaying to user and for internal resource mgmt*/
+// MESSAGE SHAPE
+message Container { /* general template for communicating messages */
+  int32 version = 1; /* version for disbatching */
+  string type = 2; /* event type for logging and infra */
+  string auth_token = 3; /* JWT for auth */
+  string error = 4; /* errors if any for logging */
+  string module_name = 5; /* used for displaying to user and for internal resource mgmt */
+  
   oneof payload {
     ConnectionRequest connection_request = 6;
     ConnectionRequestReturn connection_request_return = 7;
     AuthVerify auth_verify = 8;
     AuthNew auth_new = 9;
     Commands commands_payload = 10;
-    MessageRaw message_raw = 11;
-    MessageProcessed message_processed = 12;
-    TimelineEvent timeline_event = 13;
-    UserData user_data = 14;
+    MessagePreProcess message_pre_process = 11;
+    MessageInProcess message_in_process = 12;
+    MessagePostProcess message_post_process = 13;
+    TimelineEvent timeline_event = 14;
+    UserData user_data = 15;
   }
 }

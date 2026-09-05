@@ -1,7 +1,6 @@
-use quote::{quote, ToTokens, TokenStreamExt};
-use syn::{Ident, Path};
+use syn::{Ident, Type};
 
-use crate::{Error, FromField, FromMeta};
+use crate::{util::Callable, Error, FromField, FromMeta};
 
 use super::ParseAttribute;
 
@@ -10,15 +9,27 @@ use super::ParseAttribute;
 pub struct ForwardedField {
     /// The ident of the field that will receive the forwarded value.
     pub ident: Ident,
+    /// The type of the field that will receive the forwarded value.
+    pub ty: Type,
     /// Path of the function that will be called to convert the forwarded value
     /// into the type expected by the field in `ident`.
-    pub with: Option<Path>,
+    pub with: Option<Callable>,
 }
 
 impl ForwardedField {
-    /// Returns a field initializer for this forwarded field.
-    pub fn as_initializer(&self) -> Initializer<'_> {
-        Initializer(self)
+    /// Returns a field initializer that assumes:
+    ///
+    /// 1. There is a local variable with the same ident as `self.ident`
+    /// 2. That local variable is an `Option`
+    /// 3. That any errors were already checked by an accumulator.
+    pub fn to_field_value(&self) -> syn::FieldValue {
+        let ident = &self.ident;
+        syn::FieldValue {
+            attrs: Vec::new(),
+            member: syn::Member::Named(ident.clone()),
+            colon_token: Some(Default::default()),
+            expr: syn::parse_quote!(#ident.expect("Errors were already checked")),
+        }
     }
 }
 
@@ -28,6 +39,7 @@ impl FromField for ForwardedField {
             ident: field.ident.clone().ok_or_else(|| {
                 Error::custom("forwarded field must be named field").with_span(field)
             })?,
+            ty: field.ty.clone(),
             with: None,
         };
 
@@ -47,19 +59,5 @@ impl ParseAttribute for ForwardedField {
         } else {
             Err(Error::unknown_field_path_with_alts(mi.path(), &["with"]).with_span(mi))
         }
-    }
-}
-
-/// A field initializer that assumes:
-///
-/// 1. There is a local variable with the same ident as `self.ident`
-/// 2. That local variable is an `Option`
-/// 3. That any errors were already checked by an accumulator.
-pub struct Initializer<'a>(&'a ForwardedField);
-
-impl ToTokens for Initializer<'_> {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let ident = &self.0.ident;
-        tokens.append_all(quote!(#ident: #ident.expect("Errors were already checked"),));
     }
 }

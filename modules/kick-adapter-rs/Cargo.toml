@@ -1,0 +1,15 @@
+[package]
+name = "kick-adapter-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib-cockatiel = { path = "../../lib-cockatiel/rust" }
+tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+futures-util = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"

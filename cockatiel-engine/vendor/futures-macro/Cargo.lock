@@ -2,11 +2,11 @@
 # It is not intended for manual editing.
 [[package]]
 name = "futures-macro"
-version = "0.3.33"
+version = "0.3.34"
 dependencies = [
  "proc-macro2 1.0.106 (registry+https://github.com/rust-lang/crates.io-index)",
  "quote 1.0.45 (registry+https://github.com/rust-lang/crates.io-index)",
- "syn 2.0.117 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 3.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.117"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "proc-macro2 1.0.106 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -43,5 +43,5 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [metadata]
 "checksum proc-macro2 1.0.106 (registry+https://github.com/rust-lang/crates.io-index)" = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 "checksum quote 1.0.45 (registry+https://github.com/rust-lang/crates.io-index)" = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
-"checksum syn 2.0.117 (registry+https://github.com/rust-lang/crates.io-index)" = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+"checksum syn 3.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
 "checksum unicode-ident 1.0.24 (registry+https://github.com/rust-lang/crates.io-index)" = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"

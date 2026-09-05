@@ -4,7 +4,7 @@
 //!
 //! ## Design
 //! Darling takes considerable design inspiration from [`serde`](https://serde.rs). A data structure that can be
-//! read from any attribute implements `FromMeta` (or has an implementation automatically
+//! read from any attribute implements [`FromMeta`] (or has an implementation automatically
 //! generated using `derive`). Any crate can provide `FromMeta` implementations, even one not
 //! specifically geared towards proc-macro authors.
 //!
@@ -31,8 +31,13 @@
 //!   value, so a missing field error is generated. `Option<T: FromMeta>` uses this to make options optional without requiring
 //!   `#[darling(default)]` declarations, and structs and enums can use this themselves with `#[darling(from_none = ...)]`.
 //!   This takes either a path or a closure whose signature matches `FromMeta::from_none`.
-//! * **Generate `syn::parse::Parse` impl**: When deriving `FromMeta`, add `#[darling(derive_syn_parse)]` to also generate an impl
+//! * **Generate [`syn::parse::Parse`] impl**: When deriving `FromMeta`, add `#[darling(derive_syn_parse)]` to also generate an impl
 //!   of the `Parse` trait.
+//! * **Renamed crate**: You can use `#[darling(crate = ...)]` to specify a path to the `darling` crate
+//!   instance to use when referring to `darling` from generated code.
+//! * **Transparency**: Tuple structs or tuple variants with a single field delegate trait implementations
+//!   to the inner type. If the field is named, you can use `#[darling(transparent)]` on the container for
+//!   the same effect
 //!
 //! ## Forwarded Fields
 //! All derivable traits except `FromMeta` support forwarding some fields from the input AST to the derived struct.
@@ -42,35 +47,35 @@
 //!
 //! A deriving struct is free to include or exclude any of the fields below.
 //!
-//! ### `FromDeriveInput`
+//! ### [`FromDeriveInput`]
 //! |Field name|Type|Meaning|
 //! |---|---|---|
-//! |`ident`|`syn::Ident`|The identifier of the passed-in type|
+//! |`ident`|`syn::Ident` (or anything, using `#[darling(with = ...)]`)|The identifier of the passed-in type|
 //! |`vis`|`syn::Visibility`|The visibility of the passed-in type|
 //! |`generics`|`T: darling::FromGenerics`|The generics of the passed-in type. This can be `syn::Generics`, `darling::ast::Generics`, or any compatible type.|
-//! |`data` (or anything, using `#[darling(with = ...)]`)|`darling::ast::Data`|The body of the passed-in type|
+//! |`data`|`darling::ast::Data` (or anything that implements `TryFrom<&syn::Data, Error=darling::Error>`, or anything using `#[darling(with = ...)]`)|The body of the passed-in type|
 //! |`attrs`|`Vec<syn::Attribute>` (or anything, using `#[darling(with = ...)]`)|The forwarded attributes from the passed in type. These are controlled using the `forward_attrs` attribute.|
 //!
-//! ### `FromField`
+//! ### [`FromField`]
 //! |Field name|Type|Meaning|
 //! |---|---|---|
-//! |`ident`|`Option<syn::Ident>`|The identifier of the passed-in field, or `None` for tuple fields|
+//! |`ident`|`Option<syn::Ident>` (or anything, using `#[darling(with = ...)]`)|The identifier of the passed-in field, or `None` for tuple fields|
 //! |`vis`|`syn::Visibility`|The visibility of the passed-in field|
 //! |`ty`|`syn::Type`|The type of the passed-in field|
 //! |`attrs`|`Vec<syn::Attribute>` (or anything, using `#[darling(with = ...)]`)|The forwarded attributes from the passed in field. These are controlled using the `forward_attrs` attribute.|
 //!
-//! ### `FromTypeParam`
+//! ### [`FromTypeParam`]
 //! |Field name|Type|Meaning|
 //! |---|---|---|
-//! |`ident`|`syn::Ident`|The identifier of the passed-in type param|
+//! |`ident`|`syn::Ident` (or anything, using `#[darling(with = ...)]`)|The identifier of the passed-in type param|
 //! |`bounds`|`Vec<syn::TypeParamBound>`|The bounds applied to the type param|
 //! |`default`|`Option<syn::Type>`|The default type of the parameter, if one exists|
 //! |`attrs`|`Vec<syn::Attribute>` (or anything, using `#[darling(with = ...)]`)|The forwarded attributes from the passed in type param. These are controlled using the `forward_attrs` attribute.|
 //!
-//! ### `FromVariant`
+//! ### [`FromVariant`]
 //! |Field name|Type|Meaning|
 //! |---|---|---|
-//! |`ident`|`syn::Ident`|The identifier of the passed-in variant|
+//! |`ident`|`syn::Ident` (or anything, using `#[darling(with = ...)]`)|The identifier of the passed-in variant|
 //! |`discriminant`|`Option<syn::Expr>`|For a variant such as `Example = 2`, the `2`|
 //! |`fields`|`darling::ast::Fields<T> where T: FromField`|The fields associated with the variant|
 //! |`attrs`|`Vec<syn::Attribute>` (or anything, using `#[darling(with = ...)]`)|The forwarded attributes from the passed in variant. These are controlled using the `forward_attrs` attribute.|
@@ -105,17 +110,22 @@ pub use darling_core::ToTokens;
 /// of the referenced types.
 #[doc(hidden)]
 pub mod export {
-    pub use core::convert::{identity, From, Into};
+    pub use core::convert::{identity, From, Into, TryFrom};
     pub use core::default::Default;
     pub use core::iter::IntoIterator;
     pub use core::option::Option::{self, None, Some};
     pub use core::result::Result::{self, Err, Ok};
     pub use darling_core::syn;
+    pub use std::clone::Clone;
+    pub use std::marker::PhantomData;
     pub use std::string::ToString;
     pub use std::vec::Vec;
 
     pub use crate::ast::NestedMeta;
 }
+
+#[doc(hidden)]
+pub use darling_core::autoref_specialization;
 
 #[macro_use]
 mod macros_public;

@@ -2,7 +2,6 @@ use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
 
 use crate::{
-    ast::Data,
     codegen::{ExtractAttribute, OuterFromImpl, TraitImpl},
     util::PathList,
 };
@@ -21,24 +20,30 @@ impl ToTokens for FromAttributesImpl<'_> {
         let input = self.param_name();
         let post_transform = self.base.post_transform_call();
 
-        if let Data::Struct(ref data) = self.base.data {
-            if data.is_newtype() {
-                self.wrap(
-                    quote! {
-                        fn from_attributes(#input: &[::darling::export::syn::Attribute]) -> ::darling::Result<Self> {
-                            ::darling::export::Ok(
-                                #ty_ident(::darling::FromAttributes::from_attributes(#input)?)
-                            ) #post_transform
-                        }
-                    },
-                    tokens,
-                );
+        if let Some((member, _)) = self
+            .base
+            .data
+            .as_struct()
+            .and_then(|fields| super::extract_transparent(fields, self.base.transparent))
+        {
+            self.wrap(
+                quote! {
+                    fn from_attributes(#input: &[_darling::export::syn::Attribute]) -> _darling::Result<Self> {
+                        _darling::export::Ok(
+                            #ty_ident { #member: _darling::FromAttributes::from_attributes(#input)? }
+                        ) #post_transform
+                    }
+                },
+                tokens,
+            );
 
-                return;
-            }
-        }
+            return;
+        };
 
-        let passed_attrs = self.forward_attrs.as_initializer();
+        let forwarded_fields = vec![self.forward_attrs.to_field_value()]
+            .into_iter()
+            .flatten();
+
         let inits = self.base.initializers();
         let default = self.base.fallback_decl();
 
@@ -50,7 +55,7 @@ impl ToTokens for FromAttributesImpl<'_> {
 
         self.wrap(
             quote! {
-                fn from_attributes(#input: &[::darling::export::syn::Attribute]) -> ::darling::Result<Self> {
+                fn from_attributes(#input: &[_darling::export::syn::Attribute]) -> _darling::Result<Self> {
                     #declare_errors
 
                     #grab_attrs
@@ -61,8 +66,8 @@ impl ToTokens for FromAttributesImpl<'_> {
 
                     #default
 
-                    ::darling::export::Ok(#ty_ident {
-                        #passed_attrs
+                    _darling::export::Ok(#ty_ident {
+                        #(#forwarded_fields,)*
                         #inits
                     }) #post_transform
                 }
@@ -100,11 +105,11 @@ impl ExtractAttribute for FromAttributesImpl<'_> {
 
 impl<'a> OuterFromImpl<'a> for FromAttributesImpl<'a> {
     fn trait_path(&self) -> syn::Path {
-        path!(::darling::FromAttributes)
+        path!(_darling::FromAttributes)
     }
 
     fn trait_bound(&self) -> syn::Path {
-        path!(::darling::FromMeta)
+        path!(_darling::FromMeta)
     }
 
     fn base(&'a self) -> &'a TraitImpl<'a> {

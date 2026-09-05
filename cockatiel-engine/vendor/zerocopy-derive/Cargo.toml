@@ -12,11 +12,7 @@
 [package]
 edition = "2021"
 name = "zerocopy-derive"
-version = "0.8.55"
-authors = [
-    "Joshua Liebow-Feeser <joshlf@google.com>",
-    "Jack Wrenn <jswrenn@amazon.com>",
-]
+version = "0.8.56"
 build = false
 exclude = [
     ".*",
@@ -188,7 +184,7 @@ features = ["full"]
 version = "1.0.9"
 
 [dev-dependencies.prettyplease]
-version = "=0.2.17"
+version = "0.2.17"
 
 [dev-dependencies.rustversion]
 version = "1.0"

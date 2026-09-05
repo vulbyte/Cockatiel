@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use syn::{parse_quote_spanned, spanned::Spanned};
 
-use crate::codegen;
+use crate::codegen::{self, OverrideableCallable};
 use crate::options::{Core, DefaultExpression, ParseAttribute};
 use crate::util::{Callable, Flag, SpannedValue};
 use crate::{Error, FromMeta, Result};
@@ -34,14 +34,15 @@ impl InputField {
                 .map_or_else(|| Cow::Owned(self.ident.to_string()), Cow::Borrowed),
             ty: &self.ty,
             default_expression: self.as_codegen_default(),
-            with_callable: self.with.as_ref().map(|w| w.as_ref()).map_or_else(
-                || {
-                    Cow::Owned(
-                        parse_quote_spanned!(self.ty.span()=> ::darling::FromMeta::from_meta),
-                    )
-                },
-                Cow::Borrowed,
-            ),
+            with_callable: self
+                .with
+                .as_ref()
+                .map(|w| OverrideableCallable::Custom(Cow::Borrowed(w)))
+                .unwrap_or_else(|| {
+                    OverrideableCallable::Default(Cow::Owned(
+                        parse_quote_spanned!(self.ty.span()=> _darling::FromMeta::from_meta),
+                    ))
+                }),
             skip: *self.skip.unwrap_or_default(),
             post_transform: self.post_transform.as_ref(),
             multiple: self.multiple.unwrap_or_default(),
@@ -112,7 +113,7 @@ impl InputField {
             (_, false, true) => Some(DefaultExpression::Inherit),
 
             // If we're skipping the field and no defaults have been expressed then we should
-            // use the ::darling::export::Default trait, and set the span to the skip keyword
+            // use the _darling::export::Default trait, and set the span to the skip keyword
             // so that an error caused by the skipped field's type not implementing `Default`
             // will correctly identify why darling is trying to use `Default`.
             (Some(v), false, false) if **v => Some(DefaultExpression::Trait { span: v.span() }),
@@ -195,7 +196,7 @@ impl ParseAttribute for InputField {
 
             self.multiple = FromMeta::from_meta(mi)?;
 
-            if self.multiple == Some(true) && self.flatten.is_present() {
+            if self.multiple.unwrap_or(false) && self.flatten.is_present() {
                 return Err(
                     Error::custom("`flatten` and `multiple` cannot be used together").with_span(mi),
                 );
@@ -209,7 +210,7 @@ impl ParseAttribute for InputField {
 
             let mut conflicts = Error::accumulator();
 
-            if self.multiple == Some(true) {
+            if self.multiple.unwrap_or(false) {
                 conflicts.push(
                     Error::custom("`flatten` and `multiple` cannot be used together").with_span(mi),
                 );

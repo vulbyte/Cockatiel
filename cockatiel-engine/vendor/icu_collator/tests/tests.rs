@@ -7,7 +7,7 @@ use core::cmp::Ordering;
 use atoi::FromRadix16;
 use icu_collator::provider::*;
 use icu_collator::{options::*, preferences::*, *};
-use icu_locale_core::{langid, locale, Locale};
+use icu_locale_core::{Locale, data_locale, locale};
 use icu_provider::prelude::*;
 
 struct TestingProvider;
@@ -18,7 +18,6 @@ const _: () = {
     pub mod icu {
         pub use crate as collator;
         pub use icu_collections as collections;
-        pub use icu_locale as locale;
         pub use icu_normalizer as normalizer;
     }
     make_provider!(TestingProvider);
@@ -38,8 +37,6 @@ const _: () = {
     icu_normalizer_data::impl_normalizer_nfkd_tables_v1!(TestingProvider);
     icu_normalizer_data::impl_normalizer_uts46_data_v1!(TestingProvider);
 };
-
-type StackString = arraystring::ArrayString<arraystring::typenum::U32>;
 
 fn assert_all_comparisons(
     collator: &CollatorBorrowed,
@@ -73,15 +70,11 @@ fn assert_all_comparisons(
 }
 
 /// Parse a string of space-separated hexadecimal code points (ending in end of input or semicolon)
-fn parse_hex(mut hexes: &[u8]) -> Option<StackString> {
-    let mut buf = StackString::new();
+fn parse_hex(mut hexes: &[u8]) -> Option<String> {
+    let mut buf = String::new();
     loop {
         let (scalar, mut offset) = u32::from_radix_16(hexes);
-        if let Some(c) = core::char::from_u32(scalar) {
-            buf.try_push(c).unwrap();
-        } else {
-            return None;
-        }
+        buf.push(char::from_u32(scalar)?);
         if offset == hexes.len() {
             return Some(buf);
         }
@@ -1511,7 +1504,7 @@ fn test_nb_nn_no() {
         .unwrap()
         .metadata
         .locale,
-        Some(langid!("no").into())
+        Some(data_locale!("no"))
     );
 
     // And "nn" should work, too
@@ -1534,7 +1527,7 @@ fn test_nb_nn_no() {
         .unwrap()
         .metadata
         .locale,
-        Some(langid!("no").into())
+        Some(data_locale!("no"))
     );
 }
 
@@ -1729,7 +1722,7 @@ fn test_cantillation_utf8() {
 fn test_conformance_shifted() {
     // Adapted from `UCAConformanceTest::TestTableShifted` of ucaconf.cpp in ICU4C.
     let bugs = [];
-    let dict = include_bytes!("data/CollationTest_CLDR_SHIFTED.txt");
+    let dict = include_bytes!("data/CollationTest_CLDR_SHIFTED_SHORT.txt");
 
     let mut options = CollatorOptions::default();
     options.strength = Some(Strength::Quaternary);
@@ -1772,7 +1765,7 @@ fn test_conformance_shifted() {
 fn test_conformance_non_ignorable() {
     // Adapted from `UCAConformanceTest::TestTableNonIgnorable` of ucaconf.cpp in ICU4C.
     let bugs = [];
-    let dict = include_bytes!("data/CollationTest_CLDR_NON_IGNORABLE.txt");
+    let dict = include_bytes!("data/CollationTest_CLDR_NON_IGNORABLE_SHORT.txt");
 
     let mut options = CollatorOptions::default();
     options.strength = Some(Strength::Quaternary);
@@ -2054,6 +2047,17 @@ fn test_fffe_issue_6811() {
     );
 }
 
+#[test]
+fn test_burmese() {
+    let mut options = CollatorOptions::default();
+    options.strength = Some(Strength::Tertiary);
+    let collator = Collator::try_new(locale!("my").into(), options).unwrap();
+    assert_eq!(
+        collator.compare("", "\u{102d}\u{102f}\u{1037}"),
+        Ordering::Less
+    );
+}
+
 #[cfg(feature = "latin1")]
 #[test]
 fn test_latin1_root() {
@@ -2116,6 +2120,21 @@ fn test_numeric_zeros() {
     // ICU4C behavior. Let's treat fixing both as a shared design bug
     // to figure out.
     assert_eq!(collator.compare(&left, &right), Ordering::Less);
+}
+
+#[test]
+fn emoji() {
+    let mut options = CollatorOptions::default();
+    options.strength = Some(Strength::Secondary);
+    let collator = Collator::try_new(locale!("und-u-co-emoji").into(), options).unwrap();
+    let grinning_face = "😀";
+    let grinning_face_with_big_eyes = "😃";
+    let red_circle = "🔴";
+    assert_eq!(
+        collator.compare(grinning_face, grinning_face_with_big_eyes),
+        Ordering::Less
+    );
+    assert_eq!(collator.compare(grinning_face, red_circle), Ordering::Less);
 }
 
 // TODO: Test languages that map to the root.

@@ -36,9 +36,11 @@ impl ForwardAttrs<'_> {
         self.field.map(ValuePopulator)
     }
 
-    /// Get the field initializer for use when building the deriving struct.
-    pub fn as_initializer<'a>(&'a self) -> Option<impl 'a + ToTokens> {
-        self.field.map(|f| f.as_initializer())
+    /// Returns the field value for use when building the deriving struct.
+    ///
+    /// See [`ForwardedField::to_field_value`] for assumptions made by the initializer.
+    pub fn to_field_value(&self) -> Option<syn::FieldValue> {
+        self.field.map(|f| f.to_field_value())
     }
 }
 
@@ -48,8 +50,8 @@ impl ToTokens for Declaration<'_> {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         let ident = &self.0.ident;
         tokens.append_all(quote! {
-            let mut __fwd_attrs: ::darling::export::Vec<::darling::export::syn::Attribute> = vec![];
-            let mut #ident: ::darling::export::Option<_> = None;
+            let mut __fwd_attrs = _darling::export::Vec::<_darling::export::syn::Attribute>::new();
+            let mut #ident: _darling::export::Option<_> = _darling::export::None;
         });
     }
 }
@@ -58,10 +60,10 @@ pub struct ValuePopulator<'a>(pub &'a ForwardedField);
 
 impl ToTokens for ValuePopulator<'_> {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        let ForwardedField { ident, with } = self.0;
+        let ForwardedField { ident, with, .. } = self.0;
         let initializer_expr = match with {
             Some(with) => quote_spanned!(with.span()=> __errors.handle(#with(__fwd_attrs))),
-            None => quote!(::darling::export::Some(__fwd_attrs)),
+            None => quote!(_darling::export::Some(__fwd_attrs)),
         };
         tokens.append_all(quote!(#ident = #initializer_expr;));
     }
@@ -72,7 +74,7 @@ pub struct MatchArms<'a>(&'a ForwardAttrs<'a>);
 impl ToTokens for MatchArms<'_> {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         if !self.0.will_forward_any() {
-            tokens.append_all(quote!(_ => continue));
+            tokens.append_all(quote!(_ => {}));
             return;
         }
 
@@ -89,7 +91,7 @@ impl ToTokens for MatchArms<'_> {
                     let names = idents.to_strings();
                     quote! {
                         #(#names)|* => #push_command,
-                        _ => continue,
+                        _ => {},
                     }
                 }
             },

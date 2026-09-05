@@ -13,7 +13,7 @@
 edition = "2018"
 rust-version = "1.59"
 name = "branches"
-version = "0.4.5"
+version = "0.4.6"
 authors = ["Khashayar Fereidani"]
 build = "build.rs"
 autolib = false
@@ -77,6 +77,7 @@ check-cfg = [
     "cfg(branches_stable)",
     "cfg(branches_nightly)",
     "cfg(rustc_ge_1_81_0)",
+    "cfg(rustc_ge_1_84_0)",
     "cfg(rustc_ge_1_95_0)",
     "cfg(branches_check_asm)",
 ]

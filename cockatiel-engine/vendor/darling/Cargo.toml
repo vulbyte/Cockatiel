@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.88.0"
 name = "darling"
-version = "0.23.0"
+version = "0.24.1"
 authors = ["Ted Driggs <ted.driggs@outlook.com>"]
 build = false
 exclude = [
@@ -30,7 +30,7 @@ description = """
 A proc-macro library for reading attributes into structs when
 implementing custom derives.
 """
-documentation = "https://docs.rs/darling/0.23.0"
+documentation = "https://docs.rs/darling/0.24.1"
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/TedDriggs/darling"
@@ -57,6 +57,10 @@ name = "consume_fields"
 path = "examples/consume_fields.rs"
 
 [[example]]
+name = "derive"
+path = "examples/derive.rs"
+
+[[example]]
 name = "enum_of_struct_variants"
 path = "examples/enum_of_struct_variants.rs"
 
@@ -75,6 +79,14 @@ path = "examples/from_word_and_expr.rs"
 [[example]]
 name = "heterogeneous_enum_and_word"
 path = "examples/heterogeneous_enum_and_word.rs"
+
+[[example]]
+name = "html"
+path = "examples/html.rs"
+
+[[example]]
+name = "serde"
+path = "examples/serde.rs"
 
 [[example]]
 name = "shorthand_or_long_field"
@@ -103,6 +115,10 @@ path = "tests/computed_bound.rs"
 [[test]]
 name = "custom_bound"
 path = "tests/custom_bound.rs"
+
+[[test]]
+name = "custom_crate"
+path = "tests/custom_crate.rs"
 
 [[test]]
 name = "data_with"
@@ -153,6 +169,10 @@ name = "from_generics"
 path = "tests/from_generics.rs"
 
 [[test]]
+name = "from_invalid_expr"
+path = "tests/from_invalid_expr.rs"
+
+[[test]]
 name = "from_meta"
 path = "tests/from_meta.rs"
 
@@ -185,16 +205,20 @@ name = "hash_map"
 path = "tests/hash_map.rs"
 
 [[test]]
+name = "ident_with"
+path = "tests/ident_with.rs"
+
+[[test]]
+name = "lints"
+path = "tests/lints.rs"
+
+[[test]]
 name = "meta_with"
 path = "tests/meta_with.rs"
 
 [[test]]
 name = "multiple"
 path = "tests/multiple.rs"
-
-[[test]]
-name = "newtype"
-path = "tests/newtype.rs"
 
 [[test]]
 name = "override_callable"
@@ -221,14 +245,26 @@ name = "supports"
 path = "tests/supports.rs"
 
 [[test]]
+name = "transparent"
+path = "tests/transparent.rs"
+
+[[test]]
 name = "unsupported_attributes"
 path = "tests/unsupported_attributes.rs"
 
+[[test]]
+name = "with_invalid_expr"
+path = "tests/with_invalid_expr.rs"
+
+[[test]]
+name = "with_no_impl_from_meta"
+path = "tests/with_no_impl_from_meta.rs"
+
 [dependencies.darling_core]
-version = "=0.23.0"
+version = "=0.24.1"
 
 [dependencies.darling_macro]
-version = "=0.23.0"
+version = "=0.24.1"
 
 [dev-dependencies.proc-macro2]
 version = "1.0.86"
@@ -237,7 +273,7 @@ version = "1.0.86"
 version = "1.0.18"
 
 [dev-dependencies.syn]
-version = "2.0.15"
+version = "3.0.0"
 
 [target."cfg(compiletests)".dev-dependencies.rustversion]
 version = "1.0.9"

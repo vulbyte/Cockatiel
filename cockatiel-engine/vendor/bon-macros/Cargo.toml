@@ -10,10 +10,10 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2021"
-rust-version = "1.59.0"
+edition = "2024"
+rust-version = "1.88.0"
 name = "bon-macros"
-version = "3.9.3"
+version = "3.10.0"
 build = false
 autolib = false
 autobins = false
@@ -48,13 +48,13 @@ path = "src/lib.rs"
 proc-macro = true
 
 [dependencies.darling]
-version = ">=0.20.0, <0.24.0"
+version = ">=0.24.1, <0.25.0"
 
 [dependencies.ident_case]
 version = "1"
 
 [dependencies.prettyplease]
-version = "0.2"
+version = "0.3"
 
 [dependencies.proc-macro2]
 version = "1.0.88"
@@ -62,11 +62,8 @@ version = "1.0.88"
 [dependencies.quote]
 version = "1"
 
-[dependencies.rustversion]
-version = "1.0.18"
-
 [dependencies.syn]
-version = "2.0.56"
+version = "3.0.3"
 features = [
     "full",
     "visit-mut",
@@ -116,6 +113,7 @@ invalid_upcast_comparisons = "warn"
 iter_not_returning_iterator = "warn"
 iter_on_empty_collections = "warn"
 iter_with_drain = "warn"
+large_futures = "allow"
 large_include_file = "warn"
 linkedlist = "warn"
 lossy_float_literal = "warn"
@@ -216,14 +214,6 @@ unused_lifetimes = "warn"
 unused_macro_rules = "warn"
 unused_qualifications = "warn"
 variant_size_differences = "warn"
-
-[lints.rust.rust_2024_compatibility]
-level = "warn"
-priority = 1
-
-[lints.rust.tail_expr_drop_order]
-level = "allow"
-priority = 2
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

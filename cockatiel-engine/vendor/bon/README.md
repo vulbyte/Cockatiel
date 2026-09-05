@@ -23,7 +23,7 @@
     /></a>
         <a href="https://docs.rs/bon/latest/bon/"><img
         alt="docs.rs"
-        src="https://img.shields.io/badge/MSRV-1.59.0-b83fbf?style=for-the-badge&labelColor=555555&logo=docs.rs"
+        src="https://img.shields.io/badge/MSRV-1.88.0-b83fbf?style=for-the-badge&labelColor=555555&logo=docs.rs"
         height="25"
     /></a>
 </div>
@@ -199,7 +199,7 @@ Add `bon` to your `Cargo.toml`.
 
 ```toml
 [dependencies]
-bon = "3.9"
+bon = "3.10"
 ```
 
 You can opt out of `std` and `alloc` cargo features with `default-features = false` for `no_std` environments.
@@ -225,17 +225,6 @@ If you can't figure something out, consult the docs and maybe use the `🔍 Sear
 
 This project was heavily inspired by such awesome crates as [`buildstructor`](https://docs.rs/buildstructor), [`typed-builder`](https://docs.rs/typed-builder) and [`derive_builder`](https://docs.rs/derive_builder). This crate was designed with many lessons learned from them.
 
-## Supporters
-
-<div align="center">
-
-Big thanks to `bon`'s current financial supporters ❤️
-
-**Julius Lungys**\
-<sup><code>$1/month</code></sup>
-
-</div>
-
 ## Past Supporters
 
 <div align="center">
@@ -246,6 +235,8 @@ Big thanks to `bon`'s past financial supporters ❤️
 [**Kindness**](https://kindness.ai)
 
 **Ethan Skowronski**
+
+**Julius Lungys**
 
 </div>
 

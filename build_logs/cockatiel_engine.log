@@ -1,0 +1,8 @@
+error: failed to load manifest for workspace member `/Users/insert/Cockatiel/cockatiel-engine/modules/youtube_adapter`
+referenced by workspace at `/Users/insert/Cockatiel/cockatiel-engine/Cargo.toml`
+
+Caused by:
+  failed to read `/Users/insert/Cockatiel/cockatiel-engine/modules/youtube_adapter/Cargo.toml`
+
+Caused by:
+  No such file or directory (os error 2)

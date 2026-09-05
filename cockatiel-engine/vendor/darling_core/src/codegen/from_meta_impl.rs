@@ -22,51 +22,57 @@ impl ToTokens for FromMetaImpl<'_> {
 
         let from_word = self.from_word.as_ref().map(|body| {
             quote_spanned! {body.span()=>
-                fn from_word() -> ::darling::Result<Self> {
-                    ::darling::export::identity::<fn() -> ::darling::Result<Self>>(#body)()
+                fn from_word() -> _darling::Result<Self> {
+                    _darling::export::identity::<fn() -> _darling::Result<Self>>(#body)()
                 }
             }
         });
 
         let from_none = self.from_none.map(|body| {
             quote_spanned! {body.span()=>
-                fn from_none() -> ::darling::export::Option<Self> {
-                    ::darling::export::identity::<fn() -> ::darling::export::Option<Self>>(#body)()
+                fn from_none() -> _darling::export::Option<Self> {
+                    _darling::export::identity::<fn() -> _darling::export::Option<Self>>(#body)()
                 }
             }
         });
 
         let from_expr = self.from_expr.map(|body| {
             quote_spanned! {body.span()=>
-                fn from_expr(expr: &::darling::export::syn::Expr) -> ::darling::Result<Self> {
-                    ::darling::export::identity::<fn(&::darling::export::syn::Expr) -> ::darling::Result<Self>>(#body)(expr)
+                fn from_expr(expr: &_darling::export::syn::Expr) -> _darling::Result<Self> {
+                    _darling::export::identity::<fn(&_darling::export::syn::Expr) -> _darling::Result<Self>>(#body)(expr)
                 }
             }
         });
+
+        // Transparent proxies to the sole value it contains
+        if let Some((member, _)) = base
+            .data
+            .as_struct()
+            .and_then(|fields| super::extract_transparent(fields, base.transparent))
+        {
+            let ty_ident = base.ident;
+            let impl_block = quote!(
+                fn from_meta(__item: &_darling::export::syn::Meta) -> _darling::Result<Self> {
+                    _darling::FromMeta::from_meta(__item)
+                        .map_err(|e| e.with_span(&__item))
+                        .map(|value| #ty_ident { #member: value })
+                }
+            );
+
+            self.wrap(impl_block, tokens);
+            if self.derive_syn_parse {
+                ParseImpl(self).to_tokens(tokens);
+            }
+            return;
+        }
 
         let impl_block = match base.data {
             // Unit structs allow empty bodies only.
             Data::Struct(ref vd) if vd.style.is_unit() => {
                 let ty_ident = base.ident;
                 quote!(
-                    fn from_word() -> ::darling::Result<Self> {
-                        ::darling::export::Ok(#ty_ident)
-                    }
-                )
-            }
-
-            // Newtype structs proxy to the sole value they contain.
-            Data::Struct(Fields {
-                ref fields,
-                style: Style::Tuple,
-                ..
-            }) if fields.len() == 1 => {
-                let ty_ident = base.ident;
-                quote!(
-                    fn from_meta(__item: &::darling::export::syn::Meta) -> ::darling::Result<Self> {
-                        ::darling::FromMeta::from_meta(__item)
-                            .map_err(|e| e.with_span(&__item))
-                            .map(#ty_ident)
+                    fn from_word() -> _darling::Result<Self> {
+                        _darling::export::Ok(#ty_ident)
                     }
                 )
             }
@@ -93,7 +99,7 @@ impl ToTokens for FromMetaImpl<'_> {
 
                     #from_expr
 
-                    fn from_list(__items: &[::darling::export::NestedMeta]) -> ::darling::Result<Self> {
+                    fn from_list(__items: &[_darling::export::NestedMeta]) -> _darling::Result<Self> {
 
                         #decls
 
@@ -107,7 +113,7 @@ impl ToTokens for FromMetaImpl<'_> {
 
                         #default
 
-                        ::darling::export::Ok(Self {
+                        _darling::export::Ok(Self {
                             #(#inits),*
                         }) #post_transform
                     }
@@ -117,7 +123,7 @@ impl ToTokens for FromMetaImpl<'_> {
                 let unit_arms = variants.iter().map(Variant::as_unit_match_arm);
 
                 let (unknown_variant_err, unknown_unit_variant_err) = if !variants.is_empty() {
-                    let names = variants.iter().map(Variant::as_name);
+                    let names = variants.iter().filter(|v| !v.skip).map(Variant::as_name);
                     let names = quote!(&[#(#names),*]);
                     (
                         quote! {
@@ -139,29 +145,29 @@ impl ToTokens for FromMetaImpl<'_> {
                 let data_variants = variants.iter().map(Variant::as_data_match_arm);
 
                 quote!(
-                    fn from_list(__outer: &[::darling::export::NestedMeta]) -> ::darling::Result<Self> {
+                    fn from_list(__outer: &[_darling::export::NestedMeta]) -> _darling::Result<Self> {
                         // An enum must have exactly one value inside the parentheses if it's not a unit
                         // match arm.
                         match __outer.len() {
-                            0 => ::darling::export::Err(::darling::Error::too_few_items(1)),
+                            0 => _darling::export::Err(_darling::Error::too_few_items(1)),
                             1 => {
-                                if let ::darling::export::NestedMeta::Meta(ref __nested) = __outer[0] {
-                                    match ::darling::util::path_to_string(__nested.path()).as_ref() {
+                                if let _darling::export::NestedMeta::Meta(ref __nested) = __outer[0] {
+                                    match _darling::util::path_to_string(__nested.path()).as_ref() {
                                         #(#data_variants)*
-                                        __other => ::darling::export::Err(::darling::Error::#unknown_variant_err.with_span(__nested))
+                                        __other => _darling::export::Err(_darling::Error::#unknown_variant_err.with_span(__nested))
                                     }
                                 } else {
-                                    ::darling::export::Err(::darling::Error::unsupported_format("literal"))
+                                    _darling::export::Err(_darling::Error::unsupported_format("literal"))
                                 }
                             }
-                            _ => ::darling::export::Err(::darling::Error::too_many_items(1)),
+                            _ => _darling::export::Err(_darling::Error::too_many_items(1)),
                         }
                     }
 
-                    fn from_string(lit: &str) -> ::darling::Result<Self> {
+                    fn from_string(lit: &str) -> _darling::Result<Self> {
                         match lit {
                             #(#unit_arms)*
-                            __other => ::darling::export::Err(::darling::Error::#unknown_unit_variant_err)
+                            __other => _darling::export::Err(_darling::Error::#unknown_unit_variant_err)
                         }
                     }
 
@@ -183,7 +189,7 @@ impl ToTokens for FromMetaImpl<'_> {
 
 impl<'a> OuterFromImpl<'a> for FromMetaImpl<'a> {
     fn trait_path(&self) -> syn::Path {
-        path!(::darling::FromMeta)
+        path!(_darling::FromMeta)
     }
 
     fn base(&'a self) -> &'a TraitImpl<'a> {
@@ -195,7 +201,7 @@ struct ParseImpl<'a>(&'a FromMetaImpl<'a>);
 
 impl<'a> OuterFromImpl<'a> for ParseImpl<'a> {
     fn trait_path(&self) -> syn::Path {
-        path!(::darling::export::syn::parse::Parse)
+        path!(_darling::export::syn::parse::Parse)
     }
 
     fn base(&'a self) -> &'a TraitImpl<'a> {
@@ -213,13 +219,13 @@ impl ToTokens for ParseImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let from_meta = self.0.trait_path();
         let impl_block = quote! {
-            fn parse(input: ::darling::export::syn::parse::ParseStream<'_>) -> ::darling::export::syn::Result<Self> {
-                use ::darling::export::IntoIterator;
+            fn parse(input: _darling::export::syn::parse::ParseStream<'_>) -> _darling::export::syn::Result<Self> {
+                use _darling::export::IntoIterator;
 
-                let items = ::darling::export::syn::punctuated::Punctuated::<::darling::export::NestedMeta, ::darling::export::syn::Token![,]>::parse_terminated(input)?
+                let items = _darling::export::syn::punctuated::Punctuated::<_darling::export::NestedMeta, _darling::export::syn::Token![,]>::parse_terminated(input)?
                     .into_iter()
-                    .collect::<::darling::export::Vec<_>>();
-                <Self as #from_meta>::from_list(&items).map_err(::darling::export::Into::into)
+                    .collect::<_darling::export::Vec<_>>();
+                <Self as #from_meta>::from_list(&items).map_err(_darling::export::Into::into)
             }
         };
 

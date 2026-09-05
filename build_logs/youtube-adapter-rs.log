@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling hyper v0.14.32
+   Compiling url v2.5.8
+   Compiling tungstenite v0.21.0
+   Compiling tokio-tungstenite v0.21.0
+   Compiling hyper-timeout v0.4.1
+   Compiling axum v0.6.20
+   Compiling tonic v0.11.0
+   Compiling youtube-adapter-rs v0.1.0 (/Users/insert/Cockatiel/modules/youtube-adapter-rs)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.10s

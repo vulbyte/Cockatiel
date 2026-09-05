@@ -1,3 +1,4 @@
+use quote::ToTokens;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::btree_map::BTreeMap;
@@ -8,10 +9,11 @@ use std::num;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use syn::spanned::Spanned;
 
-use syn::{Expr, Lit, Meta};
+use syn::{Expr, Ident, Lit, Meta, Path};
 
-use crate::ast::NestedMeta;
+use crate::ast::{MetaNameValueInvalidExpr, NestedMeta};
 use crate::util::path_to_string;
 use crate::{Error, Result};
 
@@ -55,6 +57,7 @@ pub trait FromMeta: Sized {
         (match *item {
             NestedMeta::Lit(ref lit) => Self::from_value(lit),
             NestedMeta::Meta(ref mi) => Self::from_meta(mi),
+            NestedMeta::NameValueInvalidExpr(ref meta) => Self::from_invalid_expr(meta),
         })
         .map_err(|e| e.with_span(item))
     }
@@ -137,6 +140,85 @@ pub trait FromMeta: Sized {
         .map_err(|e| e.with_span(expr))
     }
 
+    /// `name = value` where the `value` failed to parse as a [`syn::Expr`].
+    ///
+    /// For example:
+    ///
+    /// ```ignore
+    /// #[example(vis = pub(crate))]
+    /// #[example(bound = where T: Deserialize<'de>)]
+    /// ```
+    ///
+    /// It is recommended to implement [`syn::parse::Parse`] for your type, then
+    /// have an implementation of `from_invalid_expr` as follows:
+    ///
+    /// ```ignore
+    /// fn from_invalid_expr(value: &MetaNameValueInvalidExpr) -> darling::Result<Self> {
+    ///     syn::parse2(value.value.clone()).map_err(Into::into)
+    /// }
+    /// ```
+    ///
+    /// # Convert from anything
+    ///
+    /// This function handles parsing for things that are invalid expressions.
+    ///
+    /// Because of that, if you were to try and re-implement `impl FromMeta for syn::Type`,
+    /// you will run into a problem: `(i32, u32)` is both a valid [`Expr`]
+    /// and a valid [`Type`](syn::Type). `from_invalid_expr` will never be called for it, because it
+    /// **is** a valid expression.
+    ///
+    /// In order to circumvent that, you need to implement both `from_expr` and `from_invalid_expr`:
+    ///
+    /// ```ignore
+    /// fn from_expr(expr: &Expr) -> darling::Result<Self> {
+    ///     match *expr {
+    ///         // Invisible delimiter when the input to the macro is passed
+    ///         // by a `macro_rules!`, but we can safely ignore the wrapper
+    ///         Expr::Group(ref group) => Self::from_expr(&group.expr),
+    ///         _ => Ok(syn::parse2(expr.into_token_stream().clone())?)
+    ///     }
+    ///     .map_err(|e| e.with_span(expr))
+    /// }
+    ///
+    /// fn from_invalid_expr(value: &MetaNameValueInvalidExpr) -> darling::Result<Type> {
+    ///     syn::parse2(value.value.clone()).map_err(Into::into)
+    /// }
+    /// ```
+    ///
+    /// `from_expr` parses the set of all valid expressions, `from_invalid_expr` parses the set of all invalid expressions:
+    /// together, they can parse anything!
+    ///
+    /// # Truly arbitrary inputs
+    ///
+    /// Tokens are collected until the first comma is encountered. The comma is excluded
+    /// from the collected tokens.
+    ///
+    /// For this input, it means we first collect everything between `=` and `,` into a `TokenStream`:
+    ///
+    /// ```ignore
+    /// #[example(bound = where T: Deserialize<'de>, D: 'static)]
+    ///                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    /// ```
+    ///
+    /// Then we try to parse the remaining as a [`syn::NestedMeta`], and fail:
+    ///
+    /// ```ignore
+    /// #[example(bound = where T: Deserialize<'de>, D: 'static)]
+    ///                                              ^^^^^^^^^^
+    /// ```
+    ///
+    /// In order to support truly arbitrary inputs like the `bound` above, you can hold
+    /// the tokens in a string literal:
+    ///
+    /// ```ignore
+    /// #[example(bound = "where T: Deserialize<'de>, D: 'static")]
+    /// ```
+    ///
+    /// Then parse
+    fn from_invalid_expr(value: &MetaNameValueInvalidExpr) -> Result<Self> {
+        Err(value.error.clone())
+    }
+
     /// Create an instance from a char literal in a value position.
     #[allow(unused_variables)]
     fn from_char(value: char) -> Result<Self> {
@@ -174,14 +256,16 @@ impl FromMeta for () {
                 // The accumulator is used to ensure all these errors are returned at once, rather than
                 // only producing an error on the first unexpected field in the flattened list.
                 NestedMeta::Meta(meta) => Error::unknown_field_path(meta.path()).with_span(meta),
-                NestedMeta::Lit(lit) => Error::unexpected_expr_type(
-                    &(syn::ExprLit {
+                NestedMeta::NameValueInvalidExpr(meta) => {
+                    Error::unknown_field_path(&meta.path).with_span(&meta.path.span())
+                }
+                NestedMeta::Lit(lit) => {
+                    Error::unexpected_expr_type(&syn::Expr::Lit(syn::ExprLit {
                         attrs: vec![],
                         lit: lit.clone(),
-                    }
-                    .into()),
-                )
-                .with_span(lit),
+                    }))
+                    .with_span(lit)
+                }
             });
         }
 
@@ -473,13 +557,35 @@ macro_rules! from_syn_parse {
                     Err(Error::unexpected_lit_type(value))
                 }
             }
+
+            fn from_expr(expr: &Expr) -> Result<Self> {
+                match *expr {
+                    Expr::Lit(ref lit) => Self::from_value(&lit.lit),
+                    Expr::Group(ref group) => {
+                        // syn may generate this invisible group delimiter when the input to the darling
+                        // proc macro (specifically, the attributes) are generated by a
+                        // macro_rules! (e.g. propagating a macro_rules!'s expr)
+                        // Since we want to basically ignore these invisible group delimiters,
+                        // we just propagate the call to the inner expression.
+                        Self::from_expr(&group.expr)
+                    }
+                    // Parse valid expressions as this type T implementing Parse instead.
+                    // For example, `_` is both an expression and a type. Parse it as a type.
+                    _ => Ok(syn::parse2(expr.into_token_stream().clone())?),
+                }
+                .map_err(|e| e.with_span(expr))
+            }
+
+            fn from_invalid_expr(value: &MetaNameValueInvalidExpr) -> Result<Self> {
+                syn::parse2(value.value.clone()).map_err(Into::into)
+            }
         }
     };
 }
 
 from_syn_parse!(syn::Type);
 from_syn_parse!(syn::TypeArray);
-from_syn_parse!(syn::TypeBareFn);
+from_syn_parse!(syn::TypeFnPtr);
 from_syn_parse!(syn::TypeGroup);
 from_syn_parse!(syn::TypeImplTrait);
 from_syn_parse!(syn::TypeInfer);
@@ -502,6 +608,7 @@ impl FromMeta for syn::TypePath {
             Expr::Path(body) => {
                 if body.attrs.is_empty() {
                     Ok(syn::TypePath {
+                        attrs: vec![],
                         qself: body.qself.clone(),
                         path: body.path.clone(),
                     })
@@ -801,6 +908,10 @@ macro_rules! map {
                                 FromMeta::from_meta(inner).map_err(|e| e.at_path(&path)),
                             ))
                         }
+                        NestedMeta::NameValueInvalidExpr(ref inner) => Ok((
+                            &inner.path,
+                            FromMeta::from_invalid_expr(inner).map_err(|e| e.at_path(&inner.path)),
+                        )),
                         NestedMeta::Lit(_) => Err(Error::unsupported_format("expression")),
                     }
                 });
@@ -866,22 +977,223 @@ map!(hash_map, syn::Path, nested);
 map!(btree_map, String, nested);
 map!(btree_map, syn::Ident, nested);
 
+#[doc(hidden)]
+/// Autoref specialization to allow using `.from_none()` on types `T` implementing
+/// `FromMeta` to get `Option<T>`,  and on other types always getting `None`
+///
+/// This is used inside the `#[derive(FromMeta)]` impl, see
+/// issue: <https://github.com/TedDriggs/darling/issues/305>
+///
+/// # How it works
+///
+/// When using method call syntax, if Rust can't find the method, then Rust will
+/// insert an extra reference `&` and try again.
+///
+/// This allows a form of "specialization", which can't be used in a generic context
+/// BUT it can be used with "concrete" types that are known at compile time.
+///
+/// This is only useful inside of macros.
+///
+/// This is known as "autoref specialization", more information can be found here:
+/// <https://github.com/dtolnay/case-studies/tree/master/autoref-specialization>
+///
+/// # Usage
+///
+/// ```ignore
+/// use _darling::autoref_specialization::{
+///     SpecFromMeta as _,
+///     SpecFromMetaAll as _
+/// };
+///
+/// let x = (&_darling::export::PhantomData::<T>).tag().from_none()
+/// ```
+///
+/// If `T` implements `FromMeta`, `x` will be `T::from_meta()` (an `Option<T>`)
+/// because `(&PhantomData::<T>).tag()` selects the `SpecFromMeta` trait impl, and evaluates to `FromMetaTag`,
+/// which then calls `FromMetaTag::<T>.from_none()` getting us the value of `T`.
+///
+/// Otherwise, if `T` does not implement `FromMeta`, `x` will always be `None` because
+/// `(&PhantomData::<T>).tag()` selects the `SpecFromMetaAll` trait impl, and evaluates to `FromMetaTagAll`,
+/// which then calls `FromMetaTagAll::<T>.from_none()` which always just returns `None`.
+///
+/// The `PhantomData` must be there because we must use exactly method call syntax, so the function
+/// must take `self`, but we don't have an instantiation of `T`, we just have the type. Usually
+/// auto-ref specialization works on concrete expressions.
+#[allow(clippy::wrong_self_convention)]
+pub mod autoref_specialization {
+    use super::FromMeta;
+    use std::marker::PhantomData;
+
+    pub struct FromMetaTag<T>(PhantomData<T>);
+    pub struct FromMetaTagAll<T>(PhantomData<T>);
+
+    impl<T: FromMeta> FromMetaTag<T> {
+        pub fn from_none(self) -> Option<T> {
+            T::from_none()
+        }
+    }
+
+    impl<T> FromMetaTagAll<T> {
+        pub fn from_none(self) -> Option<T> {
+            None
+        }
+    }
+
+    pub trait SpecFromMeta<T>: Sized {
+        fn tag(self) -> FromMetaTag<T> {
+            FromMetaTag(PhantomData)
+        }
+    }
+
+    pub trait SpecFromMetaAll<T>: Sized {
+        fn tag(self) -> FromMetaTagAll<T> {
+            FromMetaTagAll(PhantomData)
+        }
+    }
+
+    // Less specific than the next impl, so this will get
+    // selected if the next impl isn't because Rust will add a `&`
+    // and try again
+    impl<T> SpecFromMetaAll<T> for &&PhantomData<T> {}
+
+    impl<T: FromMeta> SpecFromMeta<T> for &PhantomData<T> {}
+}
+
+impl FromMeta for Vec<Ident> {
+    fn from_list(nested: &[NestedMeta]) -> Result<Self> {
+        let items = nested.iter().map(|item| match *item {
+            NestedMeta::Meta(ref inner) => Ok(inner.require_path_only()?.require_ident()?),
+            NestedMeta::NameValueInvalidExpr(_) | NestedMeta::Lit(_) => {
+                Err(Error::unsupported_format("expression"))
+            }
+        });
+
+        let mut errors = Error::accumulator();
+
+        let list = items
+            .filter_map(|item| errors.handle(item))
+            .cloned()
+            .collect();
+
+        errors.finish_with(list)
+    }
+}
+
+impl FromMeta for Vec<Path> {
+    fn from_list(nested: &[NestedMeta]) -> Result<Self> {
+        let items = nested.iter().map(|item| match *item {
+            NestedMeta::Meta(ref inner) => Ok(inner.require_path_only()?),
+            NestedMeta::NameValueInvalidExpr(_) | NestedMeta::Lit(_) => {
+                Err(Error::unsupported_format("expression"))
+            }
+        });
+
+        let mut errors = Error::accumulator();
+
+        let list = items
+            .filter_map(|item| errors.handle(item))
+            .cloned()
+            .collect();
+
+        errors.finish_with(list)
+    }
+}
+
+impl FromMeta for HashSet<Ident> {
+    fn from_list(nested: &[NestedMeta]) -> Result<Self> {
+        let items = nested.iter().map(|item| match *item {
+            NestedMeta::Meta(ref inner) => Ok(inner.require_path_only()?.require_ident()?),
+            NestedMeta::NameValueInvalidExpr(_) | NestedMeta::Lit(_) => {
+                Err(Error::unsupported_format("expression"))
+            }
+        });
+
+        let mut errors = Error::accumulator();
+        let mut list = HashSet::with_capacity(nested.len());
+
+        for item in items {
+            let Some(item) = errors.handle(item) else {
+                continue;
+            };
+            if !list.insert(item.clone()) {
+                errors.push(Error::duplicate_field(&item.to_string()).with_span(item))
+            };
+        }
+
+        errors.finish_with(list)
+    }
+}
+
+impl FromMeta for HashSet<Path> {
+    fn from_list(nested: &[NestedMeta]) -> Result<Self> {
+        let items = nested.iter().map(|item| match *item {
+            NestedMeta::Meta(ref inner) => Ok(inner.require_path_only()?),
+            NestedMeta::NameValueInvalidExpr(_) | NestedMeta::Lit(_) => {
+                Err(Error::unsupported_format("expression"))
+            }
+        });
+
+        let mut errors = Error::accumulator();
+        let mut list = HashSet::with_capacity(nested.len());
+
+        for item in items {
+            let Some(item) = errors.handle(item) else {
+                continue;
+            };
+            if !list.insert(item.clone()) {
+                errors.push(Error::duplicate_field(&path_to_string(item)).with_span(item))
+            };
+        }
+
+        errors.finish_with(list)
+    }
+}
+
 /// Tests for `FromMeta` implementations. Wherever the word `ignore` appears in test input,
 /// it should not be considered by the parsing.
 #[cfg(test)]
 mod tests {
-    use std::num::{NonZeroU32, NonZeroU64};
+    use std::{
+        collections::HashSet,
+        fmt::Debug,
+        num::{NonZeroU32, NonZeroU64},
+    };
 
     use proc_macro2::TokenStream;
     use quote::quote;
-    use syn::parse_quote;
+    use syn::{
+        parse_quote, Ident, Path, Type, TypeArray, TypeFnPtr, TypeImplTrait, TypeInfer, TypeNever,
+        TypeParen, TypePtr, TypeReference, TypeSlice, TypeTraitObject, TypeTuple, Visibility,
+        WhereClause,
+    };
 
     use crate::{Error, FromMeta, Result};
+
+    #[track_caller]
+    fn test_type<T: FromMeta + PartialEq + Debug>(tokens: TokenStream, f: fn(T) -> Type) {
+        // Should work if the type is in a string literal
+        let tokens_str = tokens.to_string();
+        let t1 = pnm::<T>(tokens.clone()).expect("1");
+        let t2 = pnm::<T>(quote! { #tokens_str }).expect("2");
+        let type1 = pnm::<Type>(tokens).expect("3");
+        let type2 = pnm::<Type>(quote! { #tokens_str }).expect("4");
+
+        assert_eq!(t1, t2, "5");
+        assert_eq!(type1, type2, "6");
+        assert_eq!(f(t1), type1, "7");
+        assert_eq!(f(t2), type1, "8");
+    }
 
     /// parse a string as a syn::Meta instance.
     fn pm(tokens: TokenStream) -> ::std::result::Result<syn::Meta, String> {
         let attribute: syn::Attribute = parse_quote!(#[#tokens]);
         Ok(attribute.meta)
+    }
+
+    /// assert that this value parses into NestedMeta
+    #[track_caller]
+    fn pnm<T: FromMeta>(ts: TokenStream) -> Result<T> {
+        T::from_nested_meta(&parse_quote!(ignore = #ts))
     }
 
     #[track_caller]
@@ -1195,6 +1507,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vec_ident_succeeds() {
+        let input: Vec<Ident> = vec![
+            parse_quote!(hello),
+            parse_quote!(world),
+            parse_quote!(there),
+        ];
+
+        assert_eq!(fm::<Vec<Ident>>(quote!(ignore(hello, world, there))), input);
+    }
+
+    #[test]
+    fn vec_ident_allows_duplicates() {
+        let input: Vec<Ident> = vec![parse_quote!(hello), parse_quote!(hello)];
+
+        assert_eq!(fm::<Vec<Ident>>(quote!(ignore(hello, hello))), input);
+    }
+
+    #[test]
+    fn vec_ident_rejects_paths() {
+        let result: Result<Vec<Ident>> =
+            FromMeta::from_meta(&pm(quote!(ignore(the::world))).unwrap());
+
+        result.unwrap_err();
+    }
+
+    #[test]
+    fn vec_path_succeeds() {
+        let input = vec![parse_quote!(hello), parse_quote!(the::world)];
+
+        assert_eq!(
+            fm::<Vec<syn::Path>>(quote!(ignore(hello, the::world))),
+            input
+        );
+    }
+
+    #[test]
+    fn vec_path_allows_duplicates() {
+        let input = vec![parse_quote!(hello), parse_quote!(hello)];
+
+        assert_eq!(fm::<Vec<Path>>(quote!(ignore(hello, hello))), input);
+    }
+
+    #[test]
+    fn hash_set_ident_succeeds() {
+        let comparison: HashSet<Ident> = [parse_quote!(hello), parse_quote!(world)].into();
+
+        assert_eq!(
+            fm::<HashSet<Ident>>(quote!(ignore(hello, world))),
+            comparison
+        );
+    }
+
+    #[test]
+    fn hash_set_ident_duplicate() {
+        HashSet::<syn::Ident>::from_meta(&pm(quote!(ignore(hello, hello))).unwrap()).unwrap_err();
+    }
+
+    #[test]
+    fn hash_set_ident_multiple_errors() {
+        let err = HashSet::<syn::Ident>::from_meta(
+            &pm(quote!(ignore(hello, hello, the::world))).unwrap(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.len(), 2);
+    }
+
+    #[test]
+    fn hash_set_path_succeeds() {
+        let comparison: HashSet<_> = [parse_quote!(hello), parse_quote!(the::world)].into();
+
+        assert_eq!(
+            fm::<HashSet<syn::Path>>(quote!(ignore(hello, the::world))),
+            comparison
+        );
+    }
+
+    #[test]
+    fn hash_set_path_duplicate() {
+        HashSet::<syn::Path>::from_meta(&pm(quote!(ignore(the::world, the::world))).unwrap())
+            .unwrap_err();
+    }
+
     /// Tests that fallible parsing will always produce an outer `Ok` (from `fm`),
     /// and will accurately preserve the inner contents.
     #[test]
@@ -1296,5 +1692,76 @@ mod tests {
         fm::<syn::ExprRange>(quote!(ignore = 0..=5));
         fm::<syn::ExprRange>(quote!(ignore = ..5));
         fm::<syn::ExprRange>(quote!(ignore = ..(x + y)));
+    }
+
+    #[test]
+    fn test_where_clause() {
+        pnm::<WhereClause>(quote!(where T: Deserialize<'de>)).unwrap();
+        // Must use quotes because this contains a comma. Due to this comma,
+        // it thinks that the next value (D: 'static) is a NestedMeta
+        pnm::<WhereClause>(quote!("where T: Deserialize<'de>, D: 'static")).unwrap();
+    }
+
+    #[test]
+    fn test_vis() {
+        pnm::<Visibility>(quote!(pub(in crate::module))).unwrap();
+        pnm::<Visibility>(quote!(pub)).unwrap();
+    }
+
+    #[test]
+    fn test_type_array() {
+        test_type::<TypeArray>(quote!([u32; 4]), Type::Array);
+    }
+
+    #[test]
+    fn test_type_infer() {
+        test_type::<TypeInfer>(quote!(_), Type::Infer);
+    }
+
+    #[test]
+    fn test_type_slice() {
+        test_type::<TypeSlice>(quote!([u32]), Type::Slice);
+    }
+
+    #[test]
+    fn test_type_ptr() {
+        test_type::<TypePtr>(quote!(*const T), Type::Ptr);
+        test_type::<TypePtr>(quote!(*mut T), Type::Ptr);
+    }
+
+    #[test]
+    fn test_type_trait_object() {
+        test_type::<TypeTraitObject>(quote!(dyn Trait), Type::TraitObject);
+    }
+
+    #[test]
+    fn test_type_never() {
+        test_type::<TypeNever>(quote!(!), Type::Never);
+    }
+
+    #[test]
+    fn test_type_impl_trait() {
+        test_type::<TypeImplTrait>(quote!(impl Trait + 'a), Type::ImplTrait);
+    }
+
+    #[test]
+    fn test_type_tuple() {
+        test_type::<TypeTuple>(quote!((u32, i32)), Type::Tuple);
+    }
+
+    #[test]
+    fn test_type_reference() {
+        test_type::<TypeReference>(quote!(&u32), Type::Reference);
+        test_type::<TypeReference>(quote!(&'a mut u32), Type::Reference);
+    }
+
+    #[test]
+    fn test_type_bare_fn() {
+        test_type::<TypeFnPtr>(quote!(fn(usize) -> bool), Type::FnPtr);
+    }
+
+    #[test]
+    fn test_type_paren() {
+        test_type::<TypeParen>(quote!((u32)), Type::Paren);
     }
 }

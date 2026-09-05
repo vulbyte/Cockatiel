@@ -5,6 +5,7 @@ use crate::codegen;
 use crate::codegen::PostfixTransform;
 use crate::error::Accumulator;
 use crate::options::{DefaultExpression, InputField, InputVariant, ParseAttribute, ParseData};
+use crate::util::Flag;
 use crate::{Error, FromMeta, Result};
 
 /// A struct or enum which should have `FromMeta` or `FromDeriveInput` implementations
@@ -25,6 +26,9 @@ pub struct Core {
     /// The rule that should be used to rename all fields/variants in the container.
     pub rename_rule: RenameRule,
 
+    /// The crate name to use for darling
+    pub krate: Option<syn::Path>,
+
     /// A transform which will be called on `darling::Result<Self>`. It must either be
     /// an `FnOnce(T) -> T` when `map` is used, or `FnOnce(T) -> darling::Result<T>` when
     /// `and_then` is used.
@@ -41,6 +45,9 @@ pub struct Core {
 
     /// Whether or not unknown fields should produce an error at compilation time.
     pub allow_unknown_fields: Option<bool>,
+
+    /// Use implementation of the inner type
+    pub transparent: Flag,
 }
 
 impl Core {
@@ -51,6 +58,7 @@ impl Core {
             generics: di.generics.clone(),
             data: Data::try_empty_from(&di.data)?,
             default: Default::default(),
+            krate: Default::default(),
             // See https://github.com/TedDriggs/darling/issues/10: We default to snake_case
             // for enums to help authors produce more idiomatic APIs.
             rename_rule: if let syn::Data::Enum(_) = di.data {
@@ -61,6 +69,7 @@ impl Core {
             post_transform: Default::default(),
             bound: Default::default(),
             allow_unknown_fields: Default::default(),
+            transparent: Default::default(),
         })
     }
 
@@ -120,6 +129,18 @@ impl ParseAttribute for Core {
             }
 
             self.allow_unknown_fields = FromMeta::from_meta(mi)?;
+        } else if path.is_ident("transparent") {
+            if self.transparent.is_present() {
+                return Err(Error::duplicate_field("transparent").with_span(mi));
+            }
+
+            self.transparent = FromMeta::from_meta(mi)?;
+        } else if path.is_ident("crate") {
+            if self.krate.is_some() {
+                return Err(Error::duplicate_field("crate").with_span(mi));
+            }
+
+            self.krate = FromMeta::from_meta(mi)?;
         } else {
             return Err(Error::unknown_field_path(path).with_span(mi));
         }
@@ -158,6 +179,13 @@ impl ParseData for Core {
 
     fn validate_body(&self, errors: &mut Accumulator) {
         if let Data::Struct(fields) = &self.data {
+            if self.transparent.is_present() && fields.len() != 1 {
+                errors.push(
+                    Error::custom("`#[darling(transparent)]` can only be applied to structs with a single field")
+                        .with_span(&self.transparent.span()),
+                );
+            }
+
             let flatten_targets: Vec<_> = fields
                 .iter()
                 .filter_map(|field| {
@@ -194,6 +222,8 @@ impl<'a> From<&'a Core> for codegen::TraitImpl<'a> {
             default: v.as_codegen_default(),
             post_transform: v.post_transform.as_ref(),
             allow_unknown_fields: v.allow_unknown_fields.unwrap_or_default(),
+            transparent: v.transparent.is_present(),
+            krate: v.krate.as_ref(),
         }
     }
 }

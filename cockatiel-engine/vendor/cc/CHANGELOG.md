@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4](https://github.com/rust-lang/cc-rs/compare/cc-v1.4.3...cc-v1.4.4) - 2026-08-21
+
+### Fixed
+
+- honour `Build::env` overrides in Android llvm-ar probe ([#1868](https://github.com/rust-lang/cc-rs/pull/1868))
+- honour `Build::env` overrides in flag support and compiler family detection probes ([#1866](https://github.com/rust-lang/cc-rs/pull/1866))
+
+## [1.4.3](https://github.com/rust-lang/cc-rs/compare/cc-v1.4.2...cc-v1.4.3) - 2026-08-14
+
+### Other
+
+- Update MSRV to 1.65 ([#1834](https://github.com/rust-lang/cc-rs/pull/1834))
+- Regenerate target info ([#1848](https://github.com/rust-lang/cc-rs/pull/1848))
+
+## [1.4.2](https://github.com/rust-lang/cc-rs/compare/cc-v1.4.1...cc-v1.4.2) - 2026-08-08
+
+### Fixed
+
+- Infer NEON, not VFPv4, from `neon` in the target name ([#1843](https://github.com/rust-lang/cc-rs/pull/1843))
+- do not emit `-mno-omit-leaf-frame-pointer` if unsupported ([#1845](https://github.com/rust-lang/cc-rs/pull/1845))
+
+## [1.4.1](https://github.com/rust-lang/cc-rs/compare/cc-v1.4.0...cc-v1.4.1) - 2026-08-07
+
+### Fixed
+
+- Fix `-Cforce-frame-pointers`'s corresponding `CFLAGS` ([#1814](https://github.com/rust-lang/cc-rs/pull/1814))
+- Fix parsing of thumbv7a-vex-v5 ([#1840](https://github.com/rust-lang/cc-rs/pull/1840))
+
+### Other
+
+- Regenerate target info ([#1839](https://github.com/rust-lang/cc-rs/pull/1839))
+- Add `aarch64_be` to `prefix_for_target` ([#1835](https://github.com/rust-lang/cc-rs/pull/1835))
+- Use lp64d ABI for Managarm riscv64 ([#1829](https://github.com/rust-lang/cc-rs/pull/1829))
+- Make cc work on Motor OS ([#1822](https://github.com/rust-lang/cc-rs/pull/1822))
+- Update edition to 2021 ([#1811](https://github.com/rust-lang/cc-rs/pull/1811))
+- Update MSRV to 1.64 ([#1808](https://github.com/rust-lang/cc-rs/pull/1808))
+
 ## [1.4.0](https://github.com/rust-lang/cc-rs/compare/cc-v1.3.0...cc-v1.4.0) - 2026-07-24
 
 ### Added

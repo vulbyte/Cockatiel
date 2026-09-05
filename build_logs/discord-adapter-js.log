@@ -1,0 +1,31 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling cockatiel_local_server v0.1.0 (/Users/insert/Cockatiel/cockatiel-engine)
+error[E0599]: no variant, associated function, or constant named `MessageRaw` found for enum `Payload` in the current scope
+   --> cockatiel-engine/src/main.rs:264:51
+    |
+264 | ...                   Some(Payload::MessageRaw(data)) => {
+    |                                     ^^^^^^^^^^ variant, associated function, or constant not found in `Payload`
+    |
+   ::: /Users/insert/Cockatiel/target/debug/build/cockatiel_local_server-04a1e6095b90cc4c/out/cockatiel_protobuf.rs:234:5
+    |
+234 |     pub enum Payload {
+    |     ---------------- variant, associated function, or constant `MessageRaw` not found for this enum
+
+error[E0609]: no field `is_sponsoring` on type `UserData`
+   --> cockatiel-engine/src/main.rs:298:123
+    |
+298 | ...r: {} | Sponsor: {}", user.username, user.is_sponsoring);
+    |                                              ^^^^^^^^^^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+298 -                                         p!("Received UserData state update | User: {} | Sponsor: {}", user.username, user.is_sponsoring);
+298 +                                         p!("Received UserData state update | User: {} | Sponsor: {}", user.username, user.is_sponsor);
+    |
+
+Some errors have detailed explanations: E0599, E0609.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `cockatiel_local_server` (bin "cockatiel_local_server") due to 2 previous errors
