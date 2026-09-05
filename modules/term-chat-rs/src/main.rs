@@ -288,13 +288,15 @@ async fn run_tui(
                 format!("{} | {}", msg.username, pl_code)
             };
 
-            let plain_line = format!("[{}]: {}", bracket_content, msg.content);
+            // Now rendered as two lines: "[user | platform | perm]:" on its
+            // own line, then the message content below it.
+            let bracket_line = format!("[{}]:", bracket_content);
 
-            let visible_len = plain_line.chars().count().max(1);
+            let bracket_rows = (bracket_line.chars().count().max(1) + cols_usize - 1) / cols_usize;
 
-            let wrapped_rows = (visible_len + cols_usize - 1) / cols_usize.max(1);
+            let content_rows = (msg.content.chars().count().max(1) + cols_usize - 1) / cols_usize;
 
-            let rows_needed = wrapped_rows + 1; // +1 for the spacer line after it
+            let rows_needed = bracket_rows + content_rows + 1; // +1 for the spacer line after it
 
             if used_rows + rows_needed > max_chat_rows {
                 // This message doesn't fit in what's left of the budget.
@@ -303,22 +305,17 @@ async fn run_tui(
                 // area on its own -- truncate it so it still fits, rather
                 // than letting it push everything else off-screen.
                 if selected.is_empty() && max_chat_rows > 1 {
-                    // Rows available for the wrapped text itself, after
-                    // reserving one row for the spacer line beneath it.
-                    let content_area_rows = max_chat_rows - 1;
+                    // Rows available for the content line(s), after
+                    // reserving rows for the bracket line and the spacer
+                    // beneath it.
+                    let content_area_rows = (max_chat_rows - 1).saturating_sub(bracket_rows).max(1);
 
                     let max_visible_chars = cols_usize.saturating_mul(content_area_rows).max(1);
-
-                    let prefix = format!("[{}]: ", bracket_content);
-
-                    let prefix_len = prefix.chars().count();
-
-                    let content_budget = max_visible_chars.saturating_sub(prefix_len).max(1);
 
                     let truncated_content: String = msg
                         .content
                         .chars()
-                        .take(content_budget.saturating_sub(1))
+                        .take(max_visible_chars.saturating_sub(1))
                         .collect();
 
                     selected.push(RenderedLine {
@@ -344,7 +341,7 @@ async fn run_tui(
 
         for line in &selected {
             print!(
-                "{}[{}]\x1b[0m: \x1b[37m{}\x1b[0m\r\n\r\n",
+                "{}[{}]:\x1b[0m\r\n\x1b[37m{}\x1b[0m\r\n\r\n",
                 color_code, line.bracket_content, line.content
             );
         }
