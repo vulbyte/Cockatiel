@@ -1,16 +1,19 @@
 [package]
-name = "database_service"
+name = "user_database"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+
+build = "build.rs"
 
 [dependencies]
-tokio = { version = "1.38", features = ["full"] }
-axum = "0.7"
-reqwest = { version = "0.12", features = ["json"] }
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+prost = "0.14.4"
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-uuid = { version = "1.0", features = ["v7", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
+uuid = { version = "1.24.0", features = ["v7", "serde", "fast-rng"] }
+
+[build-dependencies]
+prost-build = "0.14.4"

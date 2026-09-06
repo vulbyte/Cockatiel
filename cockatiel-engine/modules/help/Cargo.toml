@@ -3,4 +3,14 @@ name = "help"
 version = "0.1.0"
 edition = "2024"
 
+build = "build.rs"
+
 [dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+prost = "0.14.4"
+uuid = { version = "1.24.0", features = ["v7", "fast-rng"] }
+
+[build-dependencies]
+prost-build = "0.14.4"

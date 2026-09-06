@@ -1,8 +1,8 @@
 {
-    "name": "user-moduel", 
-    "description": "used to consolodate and save user settings and preferences, ban history, and more",
-    "version": "0.1.0", 
-    "capabilities": "preprocessing",    
+    "name": "user-module",
+    "description": "used to consolidate and save user settings and preferences, ban history, and more",
+    "version": "0.1.0",
+    "capabilities": "preprocess",
     "root_file": "./src/main.rs",
     "launch_command": "cargo run",
     "command_flags": [

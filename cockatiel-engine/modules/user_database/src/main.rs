@@ -1,140 +1,181 @@
-use rusqlite::{params, Connection, Result as SqlResult};
-use serde_json::{json, Value};
+use futures_util::{SinkExt, StreamExt};
+use prost::Message as ProstMessage;
+use rusqlite::{Connection, params};
+use std::path::PathBuf;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use uuid::Uuid;
 
-/// Represents a Ban record mapping to the protobuf structure
-pub struct ProtoBan {
-    pub commender_uuid7: String,
-    pub commendee_uuid7: String,
-    pub unbanned: bool,
-    pub reason: String,
-    pub raw_message: String,
-    pub appeals: Vec<String>,
+pub mod cockatiel_protobuf {
+    include!(concat!(env!("OUT_DIR"), "/cockatiel_protobuf.rs"));
 }
 
-/// Represents a Commendment record mapping to the protobuf structure
-pub struct ProtoCommendment {
-    pub commender_uuid7: String,
-    pub commendee_uuid7: String,
-    pub raw_message: String,
+use cockatiel_protobuf::{ConnectionRequest, Container, UserData, container::Payload};
+
+const ENGINE_URL: &str = "ws://127.0.0.1:9734";
+
+struct UserDatabase {
+    connection: Connection,
 }
 
-/// Represents the parsed UserData proto event for Rust processing
-pub struct ProtoUserEvent {
-    pub uuid: Option<String>,
-    pub username: Option<String>,
-    pub is_sponsor: bool,
-    pub is_moderator: bool,
-    pub is_admin: bool,
-    pub is_owner: bool,
-    pub bans: Vec<ProtoBan>,
-    pub commendments: Vec<ProtoCommendment>,
+impl UserDatabase {
+    fn open(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+        let connection = Connection::open(path)?;
+
+        connection.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                uuid7 TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                is_sponsor INTEGER NOT NULL DEFAULT 0,
+                is_moderator INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                is_owner INTEGER NOT NULL DEFAULT 0,
+                data_json TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_users_username
+                ON users(username);
+            "#,
+        )?;
+
+        Ok(Self { connection })
+    }
+
+    fn upsert(&self, user: &UserData) -> Result<(), String> {
+        let uuid = if user.uuid.trim().is_empty() {
+            Uuid::now_v7().to_string()
+        } else {
+            user.uuid.clone()
+        };
+
+        let data_json = serde_json::to_string(user)
+            .map_err(|e| format!("could not serialize UserData: {}", e))?;
+
+        self.connection
+            .execute(
+                r#"
+                INSERT INTO users (
+                    uuid7,
+                    username,
+                    is_sponsor,
+                    is_moderator,
+                    is_admin,
+                    is_owner,
+                    data_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(uuid7) DO UPDATE SET
+                    username = excluded.username,
+                    is_sponsor = excluded.is_sponsor,
+                    is_moderator = excluded.is_moderator,
+                    is_admin = excluded.is_admin,
+                    is_owner = excluded.is_owner,
+                    data_json = excluded.data_json
+                "#,
+                params![
+                    uuid,
+                    user.username,
+                    user.is_sponsor,
+                    user.is_moderator,
+                    user.is_admin,
+                    user.is_owner,
+                    data_json,
+                ],
+            )
+            .map_err(|e| format!("user database error: {}", e))?;
+
+        Ok(())
+    }
 }
 
-/// Ingests/Upserts a UserData event into the SQLite database.
-pub fn upsert_user(conn: &Connection, event: &ProtoUserEvent) -> Result<String, String> {
-    let user_uuid = match event.uuid {
-        Some(ref u) if !u.is_empty() => u.clone(),
-        _ => Uuid::now_v7().to_string(),
+fn database_path() -> PathBuf {
+    std::env::var("COCKATIEL_USER_DB")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("cockatiel_users.db"))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let database = UserDatabase::open(database_path())?;
+
+    let engine_url =
+        std::env::var("COCKATIEL_ENGINE_URL").unwrap_or_else(|_| ENGINE_URL.to_string());
+
+    let pin: i32 = std::env::var("COCKATIEL_PAIRING_PIN")
+        .unwrap_or_else(|_| "0".into())
+        .parse()?;
+
+    let instance_uuid7 = Uuid::now_v7().to_string();
+
+    let (ws, _) = connect_async(engine_url).await?;
+    let (mut write, mut read) = ws.split();
+
+    let request = Container {
+        version: 1,
+        auth_token: String::new(),
+        module_name: "user-module".into(),
+        module_instance_uuid7: instance_uuid7.clone(),
+        payload: Some(Payload::ConnectionRequest(ConnectionRequest {
+            pin,
+            process_position: "preprocess".into(),
+            priority: 1,
+            module_instance_uuid7: instance_uuid7,
+        })),
     };
 
-    let username_val = event.username.as_deref().unwrap_or("").to_string();
-    let mut validation_error = None;
-    if username_val.is_empty() {
-        validation_error = Some("Username cannot be empty".to_string());
+    let mut encoded = Vec::new();
+    request.encode(&mut encoded)?;
+    write.send(Message::Binary(encoded.into())).await?;
+
+    println!("[user-module] connected");
+
+    while let Some(message) = read.next().await {
+        let message = match message {
+            Ok(message) => message,
+            Err(error) => {
+                eprintln!("[user-module] websocket error: {}", error);
+                break;
+            }
+        };
+
+        let data = match message {
+            Message::Binary(data) => data,
+            Message::Close(_) => break,
+            _ => continue,
+        };
+
+        let container = match Container::decode(data.as_ref()) {
+            Ok(container) => container,
+            Err(error) => {
+                eprintln!("[user-module] invalid packet: {}", error);
+                continue;
+            }
+        };
+
+        match container.payload {
+            Some(Payload::ConnectionRequestReturn(response)) => {
+                if response.new_port == 0 {
+                    println!("[user-module] authenticated");
+                } else {
+                    eprintln!("[user-module] rejected with status {}", response.new_port);
+                    break;
+                }
+            }
+
+            Some(Payload::UserData(user)) => {
+                if let Err(error) = database.upsert(&user) {
+                    eprintln!("[user-module] failed to save {}: {}", user.username, error);
+                }
+            }
+
+            Some(Payload::Shutdown(shutdown)) => {
+                println!("[user-module] shutdown requested: {}", shutdown.reason);
+                break;
+            }
+
+            _ => {}
+        }
     }
 
-    let now_millis = chrono::Utc::now().timestamp_millis();
-
-    // Format bans into JSON array
-    let bans_json: Vec<Value> = event
-        .bans
-        .iter()
-        .map(|b| {
-            json!({
-                "commender_uuid7": b.commender_uuid7,
-                "commendee_uuid7": b.commendee_uuid7,
-                "unbanned": b.unbanned,
-                "reason": b.reason,
-                "raw_message": b.raw_message,
-                "appeals": b.appeals
-            })
-        })
-        .collect();
-
-    // Format commendments into JSON array
-    let commendments_json: Vec<Value> = event
-        .commendments
-        .iter()
-        .map(|c| {
-            json!({
-                "commender_uuid7": c.commender_uuid7,
-                "commendee_uuid7": c.commendee_uuid7,
-                "raw_message": c.raw_message
-            })
-        })
-        .collect();
-
-    // Check if user already exists to merge or initialize
-    let existing_json: Option<String> = conn
-        .query_row(
-            "SELECT data_json FROM users WHERE uuid7 = ?1",
-            [&user_uuid],
-            |row| row.get(0),
-        )
-        .ok();
-
-    let final_json_str = if let Some(json_str) = existing_json {
-        let mut data: Value = serde_json::from_str(&json_str).unwrap_or_else(|_| json!({}));
-        data["username"] = json!(username_val);
-        data["isSponsor"] = json!(event.is_sponsor);
-        data["isChatModerator"] = json!(event.is_moderator);
-        data["isChatAdmin"] = json!(event.is_admin);
-        data["isOwner"] = json!(event.is_owner);
-        data["channelBans"] = json!(bans_json); // maps to your schema's channelBans/bans list
-        data["commendments"] = json!(commendments_json);
-        data.to_string()
-    } else {
-        let initial_json = json!({
-            "version": 1,
-            "username": username_val,
-            "uuid7": user_uuid,
-            "channels": {},
-            "ttsBans": [],
-            "channelBans": bans_json,
-            "conduct_score": 0.0,
-            "commendments": commendments_json,
-            "misconduct": { "discrimination": [], "harassment": [], "spam": [], "integrity": [] },
-            "icon": null,
-            "isSponsor": event.is_sponsor,
-            "isChatModerator": event.is_moderator,
-            "isChatAdmin": event.is_admin,
-            "isOwner": event.is_owner,
-            "isVerified": false,
-            "firstSeen": now_millis,
-            "points": 0,
-            "totalPoints": 0,
-            "totalMessages": 0,
-            "styling": {}
-        });
-        initial_json.to_string()
-    };
-
-    // Save or update row in SQLite
-    let res = conn.execute(
-        "INSERT INTO users (uuid7, username, conduct_score, data_json) 
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(uuid7) DO UPDATE SET username = excluded.username, data_json = excluded.data_json",
-        params![user_uuid, username_val, 0.0, final_json_str],
-    );
-
-    if let Err(err) = res {
-        return Err(format!("Database execution error: {}", err));
-    }
-
-    if let Some(err_msg) = validation_error {
-        return Err(err_msg);
-    }
-
-    Ok(user_uuid)
+    Ok(())
 }
