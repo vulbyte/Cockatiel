@@ -22,20 +22,6 @@ message Commands {/**/
     repeated Command commands = 1; /*array of commands for the purpose of communicating module capibilites*/
   }
 
-message Ban {
-  string commender_uuid7 = 1; /*user id of who gave the commendment*/
-  string commendee_uuid7 = 2; /*user id of who receives the commendment*/
-  bool unbanned = 3; /*if the ban has been revoked*/
-  string reason = 4; /*why the ban exists*/
-  string raw_message = 5; /*message connected to why the user was banned*/
-  repeated string appeals = 6; /*if the user wishes the ban to be undone, why*/
-}
-message Commendment {
-  string commender_uuid7 = 1; /*user id of who gave the commendment*/
-  string commendee_uuid7 = 2; /*user id of who receives the commendment*/
-  string raw_message = 3; /*message connected to why the user was commended*/
-}
-message UserStylingTemplate{/*TO IMPL*/}
 
 /*PAYLOADS*/
 message ConnectionRequest {/*used on first request to request connection*/
@@ -103,12 +89,35 @@ message Err {
   string trace = 3; /*whatever the language spits out as the generic stack ala: err.trace*/
 }
 
-message TimelineEvent{/*event stored in the timeline*/
-    string uuid7_key = 1; /*id + timestamp*/
-    string data_type = 2; /*package type of data, used to shortcut determining data's structure and type*/
-    string data = 3; /*data in a json format for archival purposes and accessing*/ 
-    string error = 4; /*if there's an error, it will populate here.*/
-  }
+message TimelineEvent {
+  string c = 1;  // command flag attempted (e.g., "!tts")
+  bytes d = 2;   // data blob (e.g., mp3 file for tts)
+  string e = 3;  // error message if any
+  string f = 4;  // flags (if any)
+  string i = 5;  // timeline id# (uuid7 format, includes timecode) THIS IS THE PRIME KEY
+  string o = 6;  // origin of message (system, youtube, twitch, etc)
+  string p = 7;  // processed message
+  string r = 8;  // raw message
+  string s = 9;  // stream origin
+  string t = 10; // message type (log, warning, error, system, usermessage, etc)
+  string u = 11; // user_id of who triggered the event
+  int32 v = 12;  // version
+}
+
+message Ban {
+  string commender_uuid7 = 1; /*user id of who gave the commendment*/
+  string commendee_uuid7 = 2; /*user id of who receives the commendment*/
+  bool unbanned = 3; /*if the ban has been revoked*/
+  string reason = 4; /*why the ban exists*/
+  string raw_message = 5; /*message connected to why the user was banned*/
+  repeated string appeals = 6; /*if the user wishes the ban to be undone, why*/
+}
+message Commendment {
+  string commender_uuid7 = 1; /*user id of who gave the commendment*/
+  string commendee_uuid7 = 2; /*user id of who receives the commendment*/
+  string raw_message = 3; /*message connected to why the user was commended*/
+}
+message UserStylingTemplate{/*TO IMPL*/}
 message UserData {/*used for transfering user data*/
     string uuid = 1;   /**/
     string username = 2; /**/

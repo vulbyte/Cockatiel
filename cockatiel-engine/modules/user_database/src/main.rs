@@ -1,100 +1,140 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::{get, post},
-};
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::Semaphore;
-use tracing::{Level, info};
-use tracing_subscriber::FmtSubscriber;
+use rusqlite::{params, Connection, Result as SqlResult};
+use serde_json::{json, Value};
+use uuid::Uuid;
 
-// State shared across all async tasks
-#[derive(Clone)]
-struct AppState {
-    http_client: Client,
-    // Prevents overwhelming downstream resources during traffic spikes
-    rate_limiter: Arc<Semaphore>,
+/// Represents a Ban record mapping to the protobuf structure
+pub struct ProtoBan {
+    pub commender_uuid7: String,
+    pub commendee_uuid7: String,
+    pub unbanned: bool,
+    pub reason: String,
+    pub raw_message: String,
+    pub appeals: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct TaskPayload {
-    target_url: String,
+/// Represents a Commendment record mapping to the protobuf structure
+pub struct ProtoCommendment {
+    pub commender_uuid7: String,
+    pub commendee_uuid7: String,
+    pub raw_message: String,
 }
 
-#[derive(Serialize)]
-struct TaskResponse {
-    status: String,
-    http_code: u16,
+/// Represents the parsed UserData proto event for Rust processing
+pub struct ProtoUserEvent {
+    pub uuid: Option<String>,
+    pub username: Option<String>,
+    pub is_sponsor: bool,
+    pub is_moderator: bool,
+    pub is_admin: bool,
+    pub is_owner: bool,
+    pub bans: Vec<ProtoBan>,
+    pub commendments: Vec<ProtoCommendment>,
 }
 
-#[tokio::main]
-async fn main() {
-    // 1. Initialize logging
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
-
-    // 2. Build optimized HTTP client with connection pooling
-    let http_client = Client::builder()
-        .pool_max_idle_per_host(50)
-        .timeout(Duration::from_secs(10))
-        .tcp_keepalive(Duration::from_secs(60))
-        .build()
-        .expect("Failed to build reqwest client");
-
-    // Allow up to 100 concurrent requests (well above 25 req/sec threshold)
-    let state = AppState {
-        http_client,
-        rate_limiter: Arc::new(Semaphore::new(100)),
+/// Ingests/Upserts a UserData event into the SQLite database.
+pub fn upsert_user(conn: &Connection, event: &ProtoUserEvent) -> Result<String, String> {
+    let user_uuid = match event.uuid {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => Uuid::now_v7().to_string(),
     };
 
-    // 3. Define routes
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/process", post(process_request))
-        .with_state(state);
+    let username_val = event.username.as_deref().unwrap_or("").to_string();
+    let mut validation_error = None;
+    if username_val.is_empty() {
+        validation_error = Some("Username cannot be empty".to_string());
+    }
 
-    // 4. Start Axum server
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    info!("Server listening on http://{}", addr);
+    let now_millis = chrono::Utc::now().timestamp_millis();
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
+    // Format bans into JSON array
+    let bans_json: Vec<Value> = event
+        .bans
+        .iter()
+        .map(|b| {
+            json!({
+                "commender_uuid7": b.commender_uuid7,
+                "commendee_uuid7": b.commendee_uuid7,
+                "unbanned": b.unbanned,
+                "reason": b.reason,
+                "raw_message": b.raw_message,
+                "appeals": b.appeals
+            })
+        })
+        .collect();
 
-// Health check handler
-async fn health_check() -> &'static str {
-    "OK"
-}
+    // Format commendments into JSON array
+    let commendments_json: Vec<Value> = event
+        .commendments
+        .iter()
+        .map(|c| {
+            json!({
+                "commender_uuid7": c.commender_uuid7,
+                "commendee_uuid7": c.commendee_uuid7,
+                "raw_message": c.raw_message
+            })
+        })
+        .collect();
 
-// Request handler with concurrency management
-async fn process_request(
-    State(state): State<AppState>,
-    Json(payload): Json<TaskPayload>,
-) -> Result<Json<TaskResponse>, (StatusCode, String)> {
-    // Acquire a permit from the semaphore
-    let _permit = state
-        .rate_limiter
-        .acquire()
-        .await
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Semaphore closed".into()))?;
+    // Check if user already exists to merge or initialize
+    let existing_json: Option<String> = conn
+        .query_row(
+            "SELECT data_json FROM users WHERE uuid7 = ?1",
+            [&user_uuid],
+            |row| row.get(0),
+        )
+        .ok();
 
-    // Perform non-blocking async HTTP request
-    let res = state
-        .http_client
-        .get(&payload.target_url)
-        .send()
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Fetch error: {}", e)))?;
+    let final_json_str = if let Some(json_str) = existing_json {
+        let mut data: Value = serde_json::from_str(&json_str).unwrap_or_else(|_| json!({}));
+        data["username"] = json!(username_val);
+        data["isSponsor"] = json!(event.is_sponsor);
+        data["isChatModerator"] = json!(event.is_moderator);
+        data["isChatAdmin"] = json!(event.is_admin);
+        data["isOwner"] = json!(event.is_owner);
+        data["channelBans"] = json!(bans_json); // maps to your schema's channelBans/bans list
+        data["commendments"] = json!(commendments_json);
+        data.to_string()
+    } else {
+        let initial_json = json!({
+            "version": 1,
+            "username": username_val,
+            "uuid7": user_uuid,
+            "channels": {},
+            "ttsBans": [],
+            "channelBans": bans_json,
+            "conduct_score": 0.0,
+            "commendments": commendments_json,
+            "misconduct": { "discrimination": [], "harassment": [], "spam": [], "integrity": [] },
+            "icon": null,
+            "isSponsor": event.is_sponsor,
+            "isChatModerator": event.is_moderator,
+            "isChatAdmin": event.is_admin,
+            "isOwner": event.is_owner,
+            "isVerified": false,
+            "firstSeen": now_millis,
+            "points": 0,
+            "totalPoints": 0,
+            "totalMessages": 0,
+            "styling": {}
+        });
+        initial_json.to_string()
+    };
 
-    let status_code = res.status().as_u16();
+    // Save or update row in SQLite
+    let res = conn.execute(
+        "INSERT INTO users (uuid7, username, conduct_score, data_json) 
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(uuid7) DO UPDATE SET username = excluded.username, data_json = excluded.data_json",
+        params![user_uuid, username_val, 0.0, final_json_str],
+    );
 
-    Ok(Json(TaskResponse {
-        status: "success".into(),
-        http_code: status_code,
-    }))
+    if let Err(err) = res {
+        return Err(format!("Database execution error: {}", err));
+    }
+
+    if let Some(err_msg) = validation_error {
+        return Err(err_msg);
+    }
+
+    Ok(user_uuid)
 }
