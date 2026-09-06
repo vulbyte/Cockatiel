@@ -1,38 +1,29 @@
-#![allow(unused_parens, unused_imports)]
-use cockatiel_protobuf::{container::Payload, Container};
+#![allow(clippy::type_complexity)]
 
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
-use vulb_lib::random::Random;
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::PathBuf,
+    process,
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::{net::TcpListener, sync::mpsc};
+use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 
-use std::collections::{BTreeMap, HashMap};
-use std::env;
-use std::fs;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::process;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
-use tokio_tungstenite::{accept_async, tungstenite::protocol::Message, WebSocketStream};
+mod tui;
 
 pub mod cockatiel_protobuf {
     include!(concat!(env!("OUT_DIR"), "/cockatiel_protobuf.rs"));
 }
 
-// Term colors & reset
-pub const FG_K: &str = "\x1b[30m";
-pub const FG_R: &str = "\x1b[31m";
-pub const FG_G: &str = "\x1b[32m";
-pub const FG_B: &str = "\x1b[34m";
-pub const FG_C: &str = "\x1b[36m";
-pub const FG_M: &str = "\x1b[35m";
-pub const FG_Y: &str = "\x1b[33m";
-pub const FG_W: &str = "\x1b[37m";
-pub const RST: &str = "\x1b[0m";
+use cockatiel_protobuf::{container::Payload, Container};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModuleEntry {
@@ -46,12 +37,16 @@ pub struct Config {
     pub backup_database_location: String,
     pub paring_pin: u32,
     pub port: u16,
-    #[serde(default, rename = "inputs")]
+
+    #[serde(default)]
     pub inputs: Vec<ModuleEntry>,
+
     #[serde(default, rename = "preprocessModules")]
     pub preprocess_modules: Vec<ModuleEntry>,
+
     #[serde(default, rename = "inprocessModules")]
     pub inprocess_modules: Vec<ModuleEntry>,
+
     #[serde(default, rename = "postprocessModules")]
     pub postprocess_modules: Vec<ModuleEntry>,
 }
@@ -62,536 +57,1016 @@ pub struct ConfigState {
     pub config: Config,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleState {
+    Running,
+    Paused,
+    Stopped,
+    Crashed,
+}
+
 #[derive(Clone)]
-pub struct PipelineTracker {
-    pub inprocess_waterfall: Vec<String>,
-    pub current_step: usize,
+pub struct ModuleInfo {
+    pub name: String,
+    pub instance_uuid7: String,
+    pub priority: i32,
+    pub process_position: String,
+    pub state: ModuleState,
+
+    pub sender: Option<mpsc::Sender<Container>>,
 }
 
-macro_rules! p {
-($($arg:tt)*) => {
-println!("\x1b[31m[Cockatiel]:\x1b[0m {}\n", format!($($arg)*))
-};
+#[derive(Clone)]
+pub struct TimelineDisplayEvent {
+    pub id: String,
+    pub timestamp: String,
+    pub text: String,
 }
 
-fn confirm_input(prompt: &str, yes_dialog: &str, no_dialog: &str) -> bool {
-    let mut input: String = Default::default();
-    loop {
-        println!("{}\n (y/n), or you can enter 'q' to quit", prompt);
-        input.clear();
-        match std::io::stdin().read_line(&mut input) {
-            Ok(_) => {
-                let trimmed = input.trim();
-                match trimmed {
-                    "y" => {
-                        p!("{}", yes_dialog);
-                        return true;
-                    }
-                    "n" => {
-                        p!("{}", no_dialog);
-                        return false;
-                    }
-                    "q" => {
-                        process::exit(0);
-                    }
-                    _ => {
-                        p!("input invalid, please try again");
-                        continue;
-                    }
-                }
-            }
-            Err(e) => {
-                p!("could not read input, closing\n{FG_Y}{}{RST}", e);
-                panic!();
-            }
+#[derive(Clone)]
+pub struct EngineState {
+    pub modules: Vec<ModuleInfo>,
+    pub timeline: Vec<TimelineDisplayEvent>,
+}
+
+impl EngineState {
+    pub fn new() -> Self {
+        Self {
+            modules: Vec::new(),
+            timeline: Vec::new(),
         }
     }
 }
 
-async fn create_config(config_path: PathBuf) -> Result<String, String> {
-    let mut r = Random::new();
-    let target_file = config_path.join("config.json");
-    let pin: u32 = r.num_of_len(6);
-    let port: u16 = 9734;
+#[derive(Debug)]
+pub enum EngineCommand {
+    OpenModuleActions(String),
+    TogglePause(String),
+    Restart(String),
+    Shutdown(String),
+    InspectTimeline(String),
+    Quit,
+}
 
-    let default_config = format!(
+fn log_event(state: &Arc<Mutex<EngineState>>, text: impl Into<String>) {
+    let text = text.into();
+
+    println!("[Cockatiel] {}", text);
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into());
+
+    let mut state = state.lock().unwrap();
+
+    state.timeline.push(TimelineDisplayEvent {
+        id: Uuid::now_v7().to_string(),
+        timestamp,
+        text,
+    });
+
+    if state.timeline.len() > 100 {
+        state.timeline.remove(0);
+    }
+}
+
+fn get_file(path: &str) -> Result<String, String> {
+    let path = PathBuf::from(path);
+
+    if !path.exists() {
+        return Err("file does not exist".into());
+    }
+
+    if path.is_dir() {
+        return Err("path is a directory".into());
+    }
+
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+fn create_config(directory: PathBuf) -> Result<String, String> {
+    let target = directory.join("config.json");
+
+    let pin: u32 = 100000 + (Uuid::new_v4().as_u128() % 900000) as u32;
+
+    let config = format!(
         r#"{{
-"database_location": "./",
-"backup_database_location": "./",
-"paring_pin": {},
-"port": {},
-"inputs": [],
-"preprocessModules": [],
-"inprocessModules": [],
-"postprocessModules": []
+    "database_location": "./cockatiel_data.db",
+    "backup_database_location": "./cockatiel_backup.db",
+    "paring_pin": {},
+    "port": 9734,
+    "inputs": [],
+    "preprocessModules": [],
+    "inprocessModules": [],
+    "postprocessModules": []
 }}"#,
-        pin, port
+        pin
     );
 
-    match fs::write(&target_file, &default_config) {
-        Ok(_) => {
-            p!("config file created at {:?}", target_file);
-            Ok(default_config)
-        }
-        Err(e) => {
-            p!("config file could not be created.\nerr: {FG_Y}{}{RST}\n", e);
-            Err(e.to_string())
-        }
-    }
+    fs::write(&target, &config).map_err(|e| e.to_string())?;
+
+    Ok(config)
 }
 
-fn get_file(file_path: &str) -> Result<String, String> {
-    let config_path = PathBuf::from(file_path);
-    if !config_path.exists() {
-        return Err("file does not exist".to_string());
-    }
-    if config_path.is_dir() {
-        return Err("path is a directory".to_string());
-    }
-    fs::read_to_string(&config_path).map_err(|e| e.to_string())
-}
-
-async fn verify_config() -> (String, PathBuf) {
-    let paths = ["../config.json", "./config.json"];
-    for path in &paths {
+async fn verify_config() -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
+    for path in ["../config.json", "./config.json"] {
         if let Ok(content) = get_file(path) {
-            p!("Loaded config file from: {}", path);
-            return (content, PathBuf::from(path));
+            return Ok((content, PathBuf::from(path)));
         }
     }
 
-    p!("{FG_R}Config file not found in root or local directory.{RST}");
-    println!("Config file wasn't found... Do you want to create a new config in the root workspace directory? (y/n)");
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .expect("failed to read line");
-    if input.trim() == "n" {
-        process::exit(0);
-    }
-    let current = env::current_dir().unwrap();
-    let target_dir = if current.ends_with("cockatiel-engine") {
-        current.parent().unwrap().to_path_buf()
+    let current = env::current_dir()?;
+
+    let target = if current.ends_with("cockatiel-engine") {
+        current.parent().unwrap_or(&current).to_path_buf()
     } else {
         current
     };
-    let content = create_config(target_dir.clone()).await.unwrap();
-    (content, target_dir.join("config.json"))
+
+    let content = create_config(target.clone())?;
+
+    Ok((content, target.join("config.json")))
 }
 
-fn get_authoritative_config(state: &Arc<Mutex<ConfigState>>) -> Config {
-    let mut guard = state.lock().unwrap();
-    if let Ok(metadata) = fs::metadata(&guard.path) {
-        let current_size = metadata.len();
-        if current_size != guard.last_size {
-            if let Ok(content) = fs::read_to_string(&guard.path) {
-                if let Ok(parsed) = serde_json::from_str(&content) {
-                    guard.config = parsed;
-                    guard.last_size = current_size;
+fn get_config(state: &Arc<Mutex<ConfigState>>) -> Config {
+    let mut state = state.lock().unwrap();
+
+    if let Ok(metadata) = fs::metadata(&state.path) {
+        let size = metadata.len();
+
+        if size != state.last_size {
+            if let Ok(content) = fs::read_to_string(&state.path) {
+                if let Ok(config) = serde_json::from_str(&content) {
+                    state.config = config;
+                    state.last_size = size;
                 }
             }
         }
     }
-    guard.config.clone()
+
+    state.config.clone()
 }
 
-fn update_and_save_config<F>(state: &Arc<Mutex<ConfigState>>, mut update_fn: F) -> Config
+fn update_config<F>(state: &Arc<Mutex<ConfigState>>, update: F)
 where
-    F: FnMut(&mut Config),
+    F: FnOnce(&mut Config),
 {
-    let mut guard = state.lock().unwrap();
-    update_fn(&mut guard.config);
-    if let Ok(serialized) = serde_json::to_string_pretty(&guard.config) {
-        if fs::write(&guard.path, &serialized).is_ok() {
-            if let Ok(metadata) = fs::metadata(&guard.path) {
-                guard.last_size = metadata.len();
+    let mut state = state.lock().unwrap();
+
+    update(&mut state.config);
+
+    if let Ok(serialized) = serde_json::to_string_pretty(&state.config) {
+        if fs::write(&state.path, serialized).is_ok() {
+            if let Ok(metadata) = fs::metadata(&state.path) {
+                state.last_size = metadata.len();
             }
         }
     }
-    guard.config.clone()
 }
 
-fn insert_module_entry(list: &mut Vec<ModuleEntry>, name: &str, priority: i32) {
-    if let Some(pos) = list.iter().position(|m| m.name == name) {
-        list[pos].priority = priority;
-        return;
-    }
+fn pipeline_list(config: &Config, position: &str) -> Vec<ModuleEntry> {
+    let mut list = match position {
+        "input" => config.inputs.clone(),
+        "preprocess" => config.preprocess_modules.clone(),
+        "inprocess" => config.inprocess_modules.clone(),
+        "postprocess" => config.postprocess_modules.clone(),
+        _ => Vec::new(),
+    };
 
-    let mut insert_idx = list.len();
-    for (i, entry) in list.iter().enumerate() {
-        if entry.priority > priority {
-            insert_idx = i;
-            break;
-        }
-    }
-    list.insert(
-        insert_idx,
-        ModuleEntry {
-            name: name.to_string(),
-            priority,
-        },
-    );
+    list.sort_by_key(|entry| entry.priority);
+
+    list
 }
 
-async fn dispatch_stage_message(
+fn add_module_to_config(
     config_state: &Arc<Mutex<ConfigState>>,
-    active_connections: &Arc<Mutex<HashMap<String, mpsc::Sender<Container>>>>,
-    stage_selector: fn(&Config) -> &[ModuleEntry],
-    container: &Container,
+    name: &str,
+    position: &str,
+    priority: i32,
 ) {
-    let config = get_authoritative_config(config_state);
-    let entries = stage_selector(&config);
+    update_config(config_state, |config| {
+        let list = match position {
+            "input" => &mut config.inputs,
+            "preprocess" => &mut config.preprocess_modules,
+            "inprocess" => &mut config.inprocess_modules,
+            "postprocess" => &mut config.postprocess_modules,
+            _ => return,
+        };
 
-    let senders: Vec<mpsc::Sender<Container>> = {
-        let conn_map = active_connections.lock().unwrap();
-        entries
-            .iter()
-            .filter_map(|entry| conn_map.get(&entry.name).cloned())
-            .collect()
+        if let Some(existing) = list.iter_mut().find(|entry| entry.name == name) {
+            existing.priority = priority;
+            return;
+        }
+
+        list.push(ModuleEntry {
+            name: name.into(),
+            priority,
+        });
+
+        list.sort_by_key(|entry| entry.priority);
+    });
+}
+
+async fn send_to_instance(
+    modules: &Arc<Mutex<HashMap<String, ModuleInfo>>>,
+    instance: &str,
+    container: Container,
+) {
+    let sender = {
+        modules
+            .lock()
+            .unwrap()
+            .get(instance)
+            .and_then(|m| m.sender.clone())
     };
 
-    for tx in senders {
-        let _ = tx.send(container.clone()).await;
+    if let Some(sender) = sender {
+        let _ = sender.send(container).await;
     }
 }
 
-async fn send_to_specific_module(
-    module_name: &str,
-    active_connections: &Arc<Mutex<HashMap<String, mpsc::Sender<Container>>>>,
+async fn broadcast_stage(
+    modules: &Arc<Mutex<HashMap<String, ModuleInfo>>>,
+    config_state: &Arc<Mutex<ConfigState>>,
+    position: &str,
     container: &Container,
 ) {
-    let tx_opt = {
-        let conn_map = active_connections.lock().unwrap();
-        conn_map.get(module_name).cloned()
+    let config = get_config(config_state);
+    let entries = pipeline_list(&config, position);
+
+    let names: Vec<String> = entries.into_iter().map(|e| e.name).collect();
+
+    let senders = {
+        let modules = modules.lock().unwrap();
+
+        modules
+            .values()
+            .filter(|module| module.state == ModuleState::Running && names.contains(&module.name))
+            .filter_map(|module| module.sender.clone())
+            .collect::<Vec<_>>()
     };
-    if let Some(tx) = tx_opt {
-        let _ = tx.send(container.clone()).await;
+
+    for sender in senders {
+        let _ = sender.send(container.clone()).await;
+    }
+}
+
+fn refresh_ui_modules(
+    ui_state: &Arc<Mutex<EngineState>>,
+    modules: &Arc<Mutex<HashMap<String, ModuleInfo>>>,
+) {
+    let mut list = modules
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    list.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.name.cmp(&b.name)));
+
+    ui_state.lock().unwrap().modules = list;
+}
+
+fn module_action(
+    command: EngineCommand,
+    modules: &Arc<Mutex<HashMap<String, ModuleInfo>>>,
+    ui_state: &Arc<Mutex<EngineState>>,
+) {
+    match command {
+        EngineCommand::TogglePause(instance) => {
+            let mut modules = modules.lock().unwrap();
+
+            if let Some(module) = modules.get_mut(&instance) {
+                module.state = if module.state == ModuleState::Paused {
+                    ModuleState::Running
+                } else {
+                    ModuleState::Paused
+                };
+
+                log_event(
+                    ui_state,
+                    format!(
+                        "{} [{}] is now {:?}",
+                        module.name, module.instance_uuid7, module.state
+                    ),
+                );
+            }
+        }
+
+        EngineCommand::Shutdown(instance) => {
+            let module = { modules.lock().unwrap().get(&instance).cloned() };
+
+            if let Some(module) = module {
+                if let Some(sender) = module.sender {
+                    let container = Container {
+                        version: 1,
+                        auth_token: String::new(),
+                        module_name: "cockatiel".into(),
+                        module_instance_uuid7: instance.clone(),
+                        payload: Some(Payload::Shutdown(cockatiel_protobuf::Shutdown {
+                            reason: "Shutdown requested by operator".into(),
+                        })),
+                    };
+
+                    let _ = sender.try_send(container);
+                }
+            }
+        }
+
+        EngineCommand::Restart(instance) => {
+            log_event(ui_state, format!("Restart requested for {}", instance));
+
+            // Actual process restart is deliberately
+            // handled by the module launcher.
+            // For now this asks the existing instance
+            // to shut down.
+        }
+
+        EngineCommand::InspectTimeline(id) => {
+            log_event(ui_state, format!("Timeline inspection requested: {}", id));
+        }
+
+        EngineCommand::OpenModuleActions(instance) => {
+            log_event(ui_state, format!("Selected module {}", instance));
+        }
+
+        EngineCommand::Quit => {}
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=proto/cockatiel_protobuf.proto");
+    println!(
+        r#"
+                         X
+                 XXXXXXXXX     XXX
+              XXXXXXXXXXXXXXXXX
+             XX    XXXXXXXXXXXX
+         XXXX      XXXXXXXXXXXXXX
+        XXXXXX    XXXXXXXXXXX
+         XXXXXXXXXXXXXXXXX
+           XXXXXXXXXXXXXXX
+           XXX XXXXXXX XXX
+           XX    XXXX    XX
+           cockatiel
+              -by vulbyte
+"#
+    );
 
-    p!("
-X
-XXXXXXXXXXX     XXX
-XXXXXXXXXXXXXXXXXX 
-XXX    XXXXXXXXXXXX 
-XXXX      XXXXXXXXXXXXXX
-XXXXXX    XXXXXXXXXXX   
-XXXXXXXXXXXXXXXXX      
-XXXXXXXXXXXXXXX      
-XXX XXXXXXX XXX      
-XX    XXXX   XX      
+    let (config_string, config_path) = verify_config().await?;
 
-cockatiel
--by vulbyte
-");
+    let config: Config = serde_json::from_str(&config_string)?;
 
-    let (config_string, config_path) = verify_config().await;
-
-    let initial_config: Config = match serde_json::from_str(&config_string) {
-        Ok(c) => c,
-        Err(e) => {
-            p!(
-                "{FG_R}Error parsing config file at {:?}: {}{RST}",
-                config_path,
-                e
-            );
-            let overwrite = confirm_input(
-"The config file is corrupted or empty. Do you want to overwrite it with a new default config?",
-"Creating new default config...",
-"Exiting so you can fix the config file manually."
-);
-
-            if overwrite {
-                let target_dir = config_path.parent().unwrap().to_path_buf();
-                let new_config_str = create_config(target_dir).await.unwrap();
-                serde_json::from_str(&new_config_str).unwrap()
-            } else {
-                process::exit(1);
-            }
-        }
-    };
-
-    let initial_size = fs::metadata(&config_path).map(|m| m.len()).unwrap_or(0);
+    let config_size = fs::metadata(&config_path)?.len();
 
     let config_state = Arc::new(Mutex::new(ConfigState {
         path: config_path,
-        last_size: initial_size,
-        config: initial_config,
+        last_size: config_size,
+        config: config.clone(),
     }));
 
-    let active_connections: Arc<Mutex<HashMap<String, mpsc::Sender<Container>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let modules: Arc<Mutex<HashMap<String, ModuleInfo>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    let active_pipelines: Arc<Mutex<HashMap<String, PipelineTracker>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let ui_state = Arc::new(Mutex::new(EngineState::new()));
 
-    let current_config = get_authoritative_config(&config_state);
-    let bind_addr = format!("0.0.0.0:{}", current_config.port);
-    let handshake_port = TcpListener::bind(&bind_addr)
-        .await
-        .expect("Failed to bind to port");
-    p!("Listening for connections on {}", bind_addr);
+    let (command_tx, command_rx) = std::sync::mpsc::channel::<EngineCommand>();
+
+    let tui_state = Arc::clone(&ui_state);
+
+    let tui_command_tx = command_tx.clone();
+
+    thread::spawn(move || match tui::Tui::new() {
+        Ok(mut tui) => {
+            if let Err(error) = tui.run(tui_state, tui_command_tx) {
+                eprintln!("TUI error: {}", error);
+            }
+        }
+
+        Err(error) => {
+            eprintln!("Could not start TUI: {}", error);
+        }
+    });
+
+    let command_modules = Arc::clone(&modules);
+
+    let command_ui_state = Arc::clone(&ui_state);
+
+    thread::spawn(move || {
+        while let Ok(command) = command_rx.recv() {
+            if matches!(command, EngineCommand::Quit) {
+                break;
+            }
+
+            module_action(command, &command_modules, &command_ui_state);
+        }
+    });
+
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", config.port)).await?;
+
+    log_event(&ui_state, format!("Listening on port {}", config.port));
 
     loop {
-        match handshake_port.accept().await {
-            Ok((stream, peer_address)) => {
-                p!("Incoming connection from {}", peer_address);
-                let config_state = Arc::clone(&config_state);
-                let active_connections = Arc::clone(&active_connections);
-                let active_pipelines = Arc::clone(&active_pipelines);
-                let paring_pin = current_config.paring_pin;
+        let (stream, address) = listener.accept().await?;
 
-                tokio::spawn(async move {
-                    let mut websocket_stream = match accept_async(stream).await {
-                        Ok(ws) => ws,
-                        Err(_) => return,
-                    };
+        log_event(&ui_state, format!("Connection from {}", address));
 
-                    let (tx, mut rx) = mpsc::channel::<cockatiel_protobuf::Container>(32);
-                    let mut current_module_name = String::new();
-                    let mut is_authenticated = false;
+        let config_state = Arc::clone(&config_state);
 
-                    loop {
-                        tokio::select! {
-                            Some(pkg) = websocket_stream.next() => {
-                                let msg = match pkg {
-                                    Ok(Message::Binary(data)) => data,
-                                    Ok(Message::Close(_)) | Err(_) => break,
-                                    _ => continue,
-                                };
+        let modules = Arc::clone(&modules);
 
-                                let decode = match cockatiel_protobuf::Container::decode(msg.as_ref()) {
-                                    Ok(d) => d,
-                                    Err(_) => continue,
-                                };
+        let ui_state = Arc::clone(&ui_state);
 
-                                match decode.payload {
-                                    Some(Payload::Shutdown(_)) => {println!("received a shutdown command!")}
-                                    Some(Payload::Log(_)) => {println!("received a log")}
-                                    Some(Payload::Err(_)) => {println!("received an err")}
+        tokio::spawn(async move {
+            if let Err(error) = handle_connection(stream, config_state, modules, ui_state).await {
+                eprintln!("Connection error: {}", error);
+            }
+        });
+    }
+}
 
-                                    Some(Payload::ConnectionRequest(data)) => {
-                                        if data.pin == paring_pin as i32 {
-                                            is_authenticated = true;
-                                            current_module_name = decode.module_name.clone();
-                                            let current_priority = data.priority;
-                                            let current_position = data.process_position.to_lowercase();
+async fn handle_connection(
+    stream: tokio::net::TcpStream,
+    config_state: Arc<Mutex<ConfigState>>,
+    modules: Arc<Mutex<HashMap<String, ModuleInfo>>>,
+    ui_state: Arc<Mutex<EngineState>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut websocket = accept_async(stream).await?;
 
-                                            {
-                                                let mut conn_map = active_connections.lock().unwrap();
-                                                conn_map.insert(current_module_name.clone(), tx.clone());
-                                            }
+    let (tx, mut rx) = mpsc::channel::<Container>(64);
 
-                                            update_and_save_config(&config_state, |cfg| {
-                                                let list = match current_position.as_str() {
-                                                    "input" | "inputs" => &mut cfg.inputs,
-                                                    "preprocess" => &mut cfg.preprocess_modules,
-                                                    "inprocess" => &mut cfg.inprocess_modules,
-                                                    "postprocess" | "output" | "outputs" | "display" | "post" => &mut cfg.postprocess_modules,
-                                                    _ => &mut cfg.inputs,
-                                                };
-                                                insert_module_entry(list, &current_module_name, current_priority);
-                                            });
+    let mut authenticated = false;
 
-                                            p!("Authenticated {} at priority {}", current_module_name, current_priority);
+    let mut module_name = String::new();
+    let mut instance_uuid7 = String::new();
 
-                                            let mut buf = Vec::new();
-                                            let response = cockatiel_protobuf::Container {
-                                                version: 1,
-                                                auth_token: "".into(),
-                                                module_name: "cockatiel".into(),
-                                                module_instance_uuid7: "".into(),
-                                                payload: Some(Payload::ConnectionRequestReturn(
+    loop {
+        tokio::select! {
+                    incoming = websocket.next() => {
+                        let Some(incoming) = incoming else {
+                            break;
+                        };
+
+                        let message = incoming?;
+
+                        let Message::Binary(data) =
+                            message
+                        else {
+                            continue;
+                        };
+
+                        let container =
+                            Container::decode(
+                                data.as_ref()
+                            )?;
+
+                        match container.payload {
+
+                            Some(
+                                Payload::ConnectionRequest(request)
+                            ) => {
+                                let config =
+                                    get_config(
+                                        &config_state
+                                    );
+
+                                if request.pin
+                                    != config.paring_pin as i32
+                                {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "Rejected connection from {}",
+                                            container.module_name
+                                        ),
+                                    );
+
+                                    let response =
+                                        Container {
+                                            version: 1,
+                                            auth_token:
+                                                String::new(),
+                                            module_name:
+                                                "cockatiel".into(),
+                                            module_instance_uuid7:
+                                                String::new(),
+                                            payload: Some(
+                                                Payload::ConnectionRequestReturn(
                                                     cockatiel_protobuf::ConnectionRequestReturn {
                                                         new_port: 0,
-                                                        module_instance_uuid7: "".into(),
+                                                        module_instance_uuid7:
+                                                            String::new(),
                                                     }
-                                                )),
-                                                ..Default::default()
-                                            };
-                                            response.encode(&mut buf).unwrap();
-                                            let _ = websocket_stream.send(Message::Binary(buf)).await;
-                                        } else {
-                                            p!("❌ Authentication REJECTED for '{}': Invalid PIN provided (received {}, expected {})",
-                                            decode.module_name, data.pin, paring_pin);
-
-                                            let mut buf = Vec::new();
-                                            let response = cockatiel_protobuf::Container {
-                                                version: 1,
-                                                auth_token: "".into(),
-                                                module_name: "cockatiel".into(),
-                                                module_instance_uuid7: "".into(),
-                                                payload: None,
-                                                ..Default::default()
-                                            };
-                                            response.encode(&mut buf).unwrap();
-                                            let _ = websocket_stream.send(Message::Binary(buf)).await;
-                                            break;
-                                        }
-                                    },
-                                    Some(Payload::ConnectionRequestReturn(ret)) => {
-                                        p!("Received ConnectionRequestReturn: assigned port/status code = {}", ret.new_port);
-                                    },
-
-
-                                    Some(Payload::MessagePreProcess(ref msg)) => {
-                                        p!("Pipeline Stage 1 [PreProcess] Initiated | Platform: '{}'", msg.platform);
-
-                                        // Extract authorName from raw_data JSON string
-                                        let mut extracted_username = "".to_string();
-                                        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&msg.raw_data) {
-                                            if let Some(author_name) = json_val.get("authorName").and_then(|v| v.as_str()) {
-                                                extracted_username = author_name.to_string();
-                                            }
-                                        }
-
-                                        dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.preprocess_modules, &decode).await;
-
-                                        let inprocess_list: Vec<String> = {
-                                            let mut config = get_authoritative_config(&config_state);
-                                            config.inprocess_modules.sort_by_key(|m| m.priority);
-                                            config.inprocess_modules.into_iter().map(|m| m.name).collect()
+                                                )
+                                            ),
                                         };
 
-                                        if inprocess_list.is_empty() {
-                                            p!("No InProcess modules found. Skipping straight to Stage 3 [PostProcess].");
+                                    let mut bytes =
+                                        Vec::new();
 
-                                            let mut post_container = decode.clone();
-                                            post_container.payload = Some(Payload::MessagePostProcess(
-                                                cockatiel_protobuf::MessagePostProcess {
-                                                    platform: msg.platform.clone(),
-                                                    raw_message: msg.raw_message.clone(),
-                                                    processed_message: "".to_string(),
-                                                    user_uuid7: extracted_username,
-                                                    ..Default::default()
-                                                }
-                                            ));
-                                            dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &post_container).await;
-                                        }
-                                        else {
-                                            let msg_id = format!("msg_{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
-                                            let target_module = inprocess_list[0].clone();
+                                    response.encode(
+                                        &mut bytes
+                                    )?;
 
-                                            active_pipelines.lock().unwrap().insert(msg_id, PipelineTracker {
-                                                inprocess_waterfall: inprocess_list,
-                                                current_step: 0,
-                                            });
+                                    websocket
+                                        .send(
+                                            Message::Binary(
+                                                bytes.into()
+                                            )
+                                        )
+                                        .await?;
 
-                                            send_to_specific_module(&target_module, &active_connections, &decode).await;
-                                        }
-                                    },
-
-                                    Some(Payload::MessageInProcess(ref msg)) => {
-                                        if !is_authenticated { continue; }
-
-                                        enum NextAction {
-                                            Forward(String),
-                                            Complete(cockatiel_protobuf::MessagePostProcess),
-                                        }
-
-                                        let action = {
-                                            let mut pipelines = active_pipelines.lock().unwrap();
-                                            let first_key = pipelines.keys().next().cloned();
-
-                                            if let Some(msg_id) = first_key {
-                                                if let Some(tracker) = pipelines.get_mut(&msg_id) {
-                                                    tracker.current_step += 1;
-
-                                                    if tracker.current_step < tracker.inprocess_waterfall.len() {
-                                                        let next_module = tracker.inprocess_waterfall[tracker.current_step].clone();
-                                                        Some(NextAction::Forward(next_module))
-
-                                                    } else {
-                                                        pipelines.remove(&msg_id);
-
-                                                        // Inside MessageInProcess mapping
-                                                        Some(NextAction::Complete(cockatiel_protobuf::MessagePostProcess {
-                                                            platform: msg.platform.clone(),
-                                                            raw_message: msg.raw_message.clone(),
-                                                            processed_message: msg.processed_message.clone(),
-                                                            user_uuid7: msg.user_uuid7.clone(),
-                                                            ..Default::default()
-                                                        }))
-                                                    }
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        };
-
-                                        match action {
-                                            Some(NextAction::Forward(next_module)) => {
-                                                p!("Pipeline Stage 2 [InProcess] -> Advancing to '{}'", next_module);
-                                                send_to_specific_module(&next_module, &active_connections, &decode).await;
-                                            }
-                                            Some(NextAction::Complete(post_payload)) => {
-                                                p!("Pipeline Stage 2 [InProcess] Complete. Broadcasting to Stage 3 [PostProcess].");
-                                                let mut final_container = decode.clone();
-                                                final_container.payload = Some(Payload::MessagePostProcess(post_payload));
-                                                dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &final_container).await;
-                                            }
-                                            None => {}
-                                        }
-                                    },
-
-                                    Some(Payload::MessagePostProcess(ref msg)) => {
-                                        if !is_authenticated { continue; }
-                                        p!("Pipeline Stage 3 [Processed] | Platform: '{}' | User: {}", msg.platform, msg.user_uuid7);
-                                        dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &decode).await;
-                                    },
-                                    Some(Payload::CommandsPayload(ref cmds)) => {
-                                        if !is_authenticated { continue; }
-                                        p!("Received Commands from '{}': {} command(s) declared", current_module_name, cmds.commands.len());
-                                    },
-                                    Some(Payload::TimelineEvent(event)) => {
-                                        if !is_authenticated { continue; }
-                                        p!("Received TimelineEvent record | Key: {}", event.uuid7_key);
-                                    },
-                                    Some(Payload::UserData(user)) => {
-                                        if !is_authenticated { continue; }
-                                        p!("Received UserData state update | User: {} | Sponsor: {}", user.username, user.is_sponsor);
-                                    },
-                                    Some(Payload::AuthVerify(_auth)) => {
-                                        if !is_authenticated { continue; }
-                                        p!("Received AuthVerify request from '{}'", current_module_name);
-                                    },
-                                    Some(Payload::AuthNew(_auth)) => {
-                                        if !is_authenticated { continue; }
-                                        p!("Received AuthNew token refresh for '{}'", current_module_name);
-                                    },
-                                    None => {
-                                        p!("Received container packet with empty payload from '{}'", current_module_name);
-                                    }
-                                }
-                            }
-
-                            Some(outbound_msg) = rx.recv() => {
-                                let mut buf = Vec::new();
-                                outbound_msg.encode(&mut buf).unwrap();
-                                if websocket_stream.send(Message::Binary(buf)).await.is_err() {
                                     break;
                                 }
+
+                                module_name =
+                                    container.module_name.clone();
+
+                                let requested_id =
+                                    request
+                                        .module_instance_uuid7
+                                        .clone();
+
+                                let assigned_id =
+                                    {
+                                        let modules =
+                                            modules.lock().unwrap();
+
+                                        if requested_id.is_empty()
+                                            || modules.contains_key(
+                                                &requested_id
+                                            )
+                                        {
+                                            loop {
+                                                let id =
+                                                    Uuid::now_v7()
+                                                        .to_string();
+
+                                                if !modules.contains_key(
+                                                    &id
+                                                ) {
+                                                    break id;
+                                                }
+                                            }
+                                        } else {
+                                            requested_id.clone()
+                                        }
+                                    };
+
+                                instance_uuid7 =
+                                    assigned_id.clone();
+
+                                authenticated = true;
+
+                                let position =
+                                    match request
+                                        .process_position
+                                        .to_lowercase()
+                                        .as_str()
+                                    {
+                                        "input"
+                                        | "inputs" =>
+                                            "input",
+
+                                        "preprocess" =>
+                                            "preprocess",
+
+                                        "inprocess" =>
+                                            "inprocess",
+
+                                        "postprocess"
+                                        | "output"
+                                        | "outputs"
+                                        | "display"
+                                        | "post" =>
+                                            "postprocess",
+
+                                        _ => "input",
+                                    }
+                                    .to_string();
+
+                                add_module_to_config(
+                                    &config_state,
+                                    &module_name,
+                                    &position,
+                                    request.priority,
+                                );
+
+                                {
+                                    let mut modules =
+                                        modules.lock().unwrap();
+
+                                    modules.insert(
+                                        assigned_id.clone(),
+                                        ModuleInfo {
+                                            name:
+                                                module_name.clone(),
+                                            instance_uuid7:
+                                                assigned_id.clone(),
+                                            priority:
+                                                request.priority,
+                                            process_position:
+                                                position.clone(),
+                                            state:
+                                                ModuleState::Running,
+                                            sender:
+                                                Some(tx.clone()),
+                                        },
+                                    );
+                                }
+
+                                refresh_ui_modules(
+                                    &ui_state,
+                                    &modules
+                                );
+
+                                log_event(
+                                    &ui_state,
+                                    format!(
+                                        "{} [{}] connected",
+                                        module_name,
+                                        assigned_id
+                                    ),
+                                );
+
+                                let response =
+                                    Container {
+                                        version: 1,
+                                        auth_token:
+                                            String::new(),
+                                        module_name:
+                                            "cockatiel".into(),
+                                        module_instance_uuid7:
+                                            assigned_id.clone(),
+                                        payload: Some(
+                                            Payload::ConnectionRequestReturn(
+                                                cockatiel_protobuf::ConnectionRequestReturn {
+                                                    new_port: 0,
+                                                    module_instance_uuid7:
+                                                        if assigned_id != requested_id {
+                                                            assigned_id.clone()
+                                                        } else {
+                                                            String::new()
+                                                        },
+                                                }
+                                            )
+                                        ),
+                                    };
+
+                                let mut bytes =
+                                    Vec::new();
+
+                                response.encode(
+                                    &mut bytes
+                                )?;
+
+                                websocket
+                                    .send(
+                                        Message::Binary(
+                                            bytes.into()
+                                        )
+                                    )
+                                    .await?;
                             }
+
+                            Some(
+                                Payload::MessagePreProcess(ref message)
+                            ) => {
+                                if !authenticated {
+                                    continue;
+                                }
+
+                                let mut next =
+                                    container.clone();
+
+                                next.module_instance_uuid7 =
+                                    instance_uuid7.clone();
+
+                                broadcast_stage(
+                                    &modules,
+                                    &config_state,
+                                    "preprocess",
+                                    &next,
+                                )
+                                .await;
+
+                                let config =
+                                    get_config(
+                                        &config_state
+                                    );
+
+                                let next_modules =
+                                    pipeline_list(
+                                        &config,
+                                        "inprocess"
+                                    );
+
+                                if let Some(module) =
+                                    next_modules.first()
+                                {
+                                    send_to_instance_by_name(
+                                        &modules,
+                                        &module.name,
+                                        next,
+                                    )
+                                    .await;
+                                } else {
+
+                                    let mut final_container = container.clone();
+
+                                    final_container.payload =
+                                        Some(
+                                            Payload::MessagePostProcess(
+                                                cockatiel_protobuf::MessagePostProcess {
+                                                    platform: message.platform.clone(),
+                                                    raw_data: message.raw_data.clone(),
+                                                    user_uuid7: message.user_uuid7.clone(),
+                                                    raw_message: message.raw_message.clone(),
+                                                    processed_message: String::new(),
+                                                    command: message.command.clone(),
+                                                    user_data: message.user_data.clone(),
+                                                }
+                                            )
+                                        );
+
+                                    broadcast_stage(
+                                        &modules,
+                                        &config_state,
+                                        "postprocess",
+                                        &final_container,
+                                    )
+                                    .await;
+                                }
+                            }
+
+                            Some(
+                                Payload::MessageInProcess(ref message)
+                            ) => {
+                                if !authenticated {
+                                    continue;
+                                }
+
+                                let config =
+                                    get_config(
+                                        &config_state
+                                    );
+
+                                let modules_in_process =
+                                    pipeline_list(
+                                        &config,
+                                        "inprocess"
+                                    );
+
+                                let mut next_index = 0;
+
+                                for (
+                                    index,
+                                    entry
+                                ) in modules_in_process
+                                    .iter()
+                                    .enumerate()
+                                {
+                                    if entry.name
+                                        == module_name
+                                    {
+                                        next_index =
+                                            index + 1;
+                                        break;
+                                    }
+                                }
+
+        let mut final_container =
+                                        container.clone();
+
+                                    final_container.payload =
+                                        Some(
+                                            Payload::MessagePostProcess(
+                                                cockatiel_protobuf::MessagePostProcess {
+                                                    platform:
+                                                        message.platform.clone(), // Added .clone()
+                                                    raw_data:
+                                                        message.raw_data.clone(), // Added .clone()
+                                                    user_uuid7:
+                                                        message.user_uuid7.clone(), // Added .clone()
+                                                    raw_message:
+                                                        message.raw_message.clone(), // Added .clone()
+                                                    processed_message:
+                                                        String::new(),
+                                                    command:
+                                                        message.command.clone(), // Added .clone()
+                                                    user_data:
+                                                        message.user_data.clone(), // Added .clone()
+                                                }
+                                            )
+                                        );
+                            }
+
+                            Some(
+                                Payload::MessagePostProcess(ref message)
+                            ) => {
+                                if !authenticated {
+                                    continue;
+                                }
+
+                                broadcast_stage(
+                                    &modules,
+                                    &config_state,
+                                    "postprocess",
+                                    &container,
+                                )
+                                .await;
+
+                                log_event(
+                                    &ui_state,
+                                    format!(
+                                        "Message finalized from {}",
+                                        message.user_uuid7
+                                    ),
+                                );
+                            }
+
+                            Some(
+                                Payload::TimelineEvent(ref event)
+                            ) => {
+                                if !authenticated {
+                                    continue;
+                                }
+
+                                log_event(
+                                    &ui_state,
+                                    format!(
+                                        "Timeline: {}",
+                                        event.i
+                                    ),
+                                );
+
+                                // Timeline database is a normal module.
+                                broadcast_stage(
+                                    &modules,
+                                    &config_state,
+                                    "postprocess",
+                                    &container,
+                                )
+                                .await;
+                            }
+
+                            Some(
+                                Payload::Log(log)
+                            ) => {
+                                if authenticated {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "[{}] {}",
+                                            module_name,
+                                            log.log
+                                        ),
+                                    );
+                                }
+                            }
+
+                            Some(
+                                Payload::Err(error)
+                            ) => {
+                                if authenticated {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "[{}] ERROR: {}",
+                                            module_name,
+                                            error.log
+                                        ),
+                                    );
+                                }
+                            }
+
+                            Some(
+                                Payload::Shutdown(shutdown)
+                            ) => {
+                                if authenticated {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "{} shut down: {}",
+                                            module_name,
+                                            shutdown.reason
+                                        ),
+                                    );
+                                }
+
+                                break;
+                            }
+
+                           Some(Payload::CommandPayload(command)) => { if authenticated {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "{} registered {} commands",
+                                            module_name,
+                                            command.command_flags.len()
+                                        ),
+                                    );
+                                }
+                            }
+
+                            Some(Payload::CommandsPayload(commands)) => {
+                                if authenticated {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "{} registered {} commands",
+                                            module_name,
+                                            commands.commands.len()
+                                        ),
+                                    );
+                                }
+                            }
+
+                            Some(Payload::UserData(user)) => {
+                                if authenticated {
+                                    log_event(
+                                        &ui_state,
+                                        format!(
+                                            "User update: {}",
+                                            user.username
+                                        ),
+                                    );
+                                }
+                            }
+
+                            Some(Payload::AuthVerify(_))
+                            | Some(Payload::AuthNew(_))
+                            | Some(Payload::ConnectionRequestReturn(_))
+                            | None => {}
                         }
                     }
 
-                    if is_authenticated {
-                        p!(
-                            "Module {} disconnected. Cleaning up active connections.",
-                            current_module_name
-                        );
-                        let mut conn_map = active_connections.lock().unwrap();
-                        conn_map.remove(&current_module_name);
+                    outbound = rx.recv() => {
+                        let Some(outbound) =
+                            outbound
+                        else {
+                            break;
+                        };
+
+                        let mut bytes =
+                            Vec::new();
+
+                        outbound.encode(
+                            &mut bytes
+                        )?;
+
+                        if websocket
+                            .send(
+                                Message::Binary(
+                                    bytes.into()
+                                )
+                            )
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
-                });
-            }
-            Err(e) => p!("Error accepting connection: {}", e),
+                }
+    }
+
+    if authenticated {
+        let mut modules_guard = modules.lock().unwrap();
+
+        if let Some(module) = modules_guard.get_mut(&instance_uuid7) {
+            module.state = ModuleState::Crashed;
+
+            module.sender = None;
         }
+
+        drop(modules_guard);
+
+        refresh_ui_modules(&ui_state, &modules);
+
+        log_event(
+            &ui_state,
+            format!("{} [{}] disconnected", module_name, instance_uuid7),
+        );
+    }
+
+    Ok(())
+}
+
+async fn send_to_instance_by_name(
+    modules: &Arc<Mutex<HashMap<String, ModuleInfo>>>,
+    name: &str,
+    container: Container,
+) {
+    let sender = {
+        modules
+            .lock()
+            .unwrap()
+            .values()
+            .find(|module| module.name == name && module.state == ModuleState::Running)
+            .and_then(|module| module.sender.clone())
+    };
+
+    if let Some(sender) = sender {
+        let _ = sender.send(container).await;
     }
 }
