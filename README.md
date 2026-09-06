@@ -22,7 +22,6 @@ misc:
 - [ ] - impliment something where you can set your mic input, then if you stop talking for x amount of seconds, it'll play the next tts message instead of just going off on a timer
 
 ## tldr:
-
 tts and chat management for streamers
 
 > why make this?
@@ -82,3 +81,47 @@ twitch: curl-http [docs](https://dev.twitch.tv/docs/chat/send-receive-messages/)
 twitter: curl-http/webhook [docs i think](https://docs.x.com/x-api/introduction?search=livestream+messages),
 vimeo: no idea [i beleive these are the docs](https://help.vimeo.com/hc/en-us/articles/12427783601937-How-to-use-the-Vimeo-Live-API),
 youtube connection standard: [curl-http](https://developers.google.com/youtube/v3/live/docs/liveChatMessages)/[grpc](https://developers.google.com/youtube/v3/live/streaming-live-chat) ,
+
+
+---
+
+new readme.md (need to reformat, so this is a work in progress)
+
+# Cockatiel - chat automation engine
+
+## bluhbluhbluh
+
+### creating a module
+
+to connect with the engine all you need to do is attempt to connect to the engine with a given ip/port/pin, HOWEVER if you want the user to be able to start/stop/whatever else with the module, you'll need to create a `cockatiel_module_info.json` within your module to tell cockatiel how to interact with it. here's an example, and you will have to infer how to create your module from it. 
+> NOTE: if your module is being ran remotely (ie on a different computer), or is managed by a different application (ie for in game communication) this will be ignored and is not needed. however if a user imports it into their ./modules/<your_module> folder, then this is crutial or else your module will be "invisable" to cockatiel.
+```json
+{
+    // This is the name presented to Cockatiel.
+    "name": "example-module", // REQUIRED, no spaces, name is concerted to all lowercase for standardization 
+
+    // Human-readable description of what this module does.
+    "description": "An example Cockatiel module.", // optional
+
+    // Version of this module.
+    "version": "0.1.0", // optional, just a string, no formatting is enforeced
+
+    // What this module is responsivle for
+    "capabilities" = (if you're unfamiliar with json, the value should be something like: `"capabilities": "postprocess",` )
+        "input"         // for modules that provide chats that need to be processed. cockatiel_expects: Authmessages,Log,Err,
+        "preprocess"    // mainly for archival modules
+        "inprocess"     // for modules that wish to modify the chat in flight, ie: censoring, swapping words, telling cockatiel to drop the mesasge due to a flag etc
+        "postprocess"   // THIS IS PROBABLY WHAT YOU WANT, used for after the message has been processed, ie for chatbots, sending message to a chat display application, passing a processed command to a game engine, etc
+
+    "root_file" = "./main.rs" //whatever file the launcher needs to run 
+    "launch_command" = "cargo", // make this whatever your program needs, such as: node, python3, cargo, etc. IF IS A COMPILED PROGRAM, THEN THE VALUE MUST BE ""
+    "command_flags" = [
+        "--flag value",
+        "--flag value",
+        "--flag value"
+    ];
+
+    // Whether Cockatiel should consider this module safe to automatically launch when configured.
+    "autostart": true | false
+}
+```

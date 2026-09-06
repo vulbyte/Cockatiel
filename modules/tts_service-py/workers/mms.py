@@ -28,4 +28,4 @@ def synthesize(model, message: str, output_path: str) -> None:
         sample_width=2,
         channels=1,
     )
-    segment.export(output_path, format="mp3")  run_inference(sys.argv[1], sys.argv[2])
+    segment.export(output_path, format="mp3")

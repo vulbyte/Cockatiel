@@ -18,6 +18,9 @@ message Command {/* used to communicate commands with sub-Flag's to Cockatiel_se
   string command_description = 3; /*take a guess*/
   repeated Flag command_flags = 4; /*array of Flag's*/
 }
+message Commands {/**/
+    repeated Command commands = 1; /*array of commands for the purpose of communicating module capibilites*/
+  }
 
 message Ban {
   string commender_uuid7 = 1; /*user id of who gave the commendment*/
@@ -37,12 +40,16 @@ message UserStylingTemplate{/*TO IMPL*/}
 /*PAYLOADS*/
 message ConnectionRequest {/*used on first request to request connection*/
     int32 pin = 1; /*pin must match one from config, if not connection is refused*/
-    string process_position = 2; /*preprocess:returns MessageRaw, inprocess:returns processedMessage(inflight), postprocess: returns processedMessage (finished processing)*/
+    string process_position = 2; /*input:cockatiel will not use it for processing, and will expect RawMessage or ProcessedMesasge events. preprocess:returns MessageRaw, inprocess:returns processedMessage(inflight), postprocess: returns processedMessage (finished processing)*/
     int32 priority = 3; /*lower number = higher prioritoty, already connected modules get priority*/
+    string module_instance_uuid7 = 4; /*incase multiple modules connect with the same name, this is so the module can still be unique. if is blank will blindly accept whatever from the engine. uuid7 so that way the module cna be timestamped for whenever it was init'd*/
   }
+
 message ConnectionRequestReturn {/*return from ConnectionRequest to module*/
     int32 new_port = 1; /*if value is 0000, then that means connection rejected*/
+    string module_instance_uuid7 = 2; /*this is a return if the module_instance_id clashes with another id. if the program attempts to communicate without this new id then cockatiel will reject the data from the module. if is empty or = 0 then the module can assume the suggested module_instance_id was fine and accepted*/
   }
+
   // POST-AUTH
 message AuthVerify {/*when asked to verify auth, will return this, pull id from header*/
     string cur_auth = 1; /*the current token*/
@@ -50,31 +57,48 @@ message AuthVerify {/*when asked to verify auth, will return this, pull id from 
 message AuthNew {/*is given from a new jwt,*/
     string new_auth = 1; /*the new token*/
   }
-message Commands {/**/
-    repeated Command commands = 1; /*array of commands for the purpose of communicating module capibilites*/
-  }
 
 // Stage 1: Raw payload coming in from an external platform adapter
 message MessagePreProcess {
   string platform = 1;
   string raw_data = 2; /* due to platform vagueness, raw key-data pairs or json string */
   string raw_message = 3; /*message from the user in the raw with no transforamtions, parsing, or anything at all.*/
+  string user_uuid7 = 4; /*used in conjunction with the userDB, allowing account consolodation and across platform consolodation*/
+  Command command = 5;
 }
 // Stage 2: Intermediate state as filters and transforms act on the message sequentially
 message MessageInProcess {
   string platform = 1;
-  string user_uuid = 2; /* user id + timestamp of their first appearance */
-  string raw_message = 3; /* raw json for debugging */
-  string processed_message = 4; /* message modified AFTER transforms */
-  bool is_final = 5; /* flag for in-flight status */
+  string raw_data = 2; /* due to platform vagueness, raw key-data pairs or json string */
+  string user_uuid7 = 3; /* user id + timestamp of their first appearance */
+  string raw_message = 4; /* raw json for debugging */
+  string processed_message = 5; /* message modified AFTER transforms */
+  bool abandon_message = 6; /*if this flag is true, cockatiel will ignore further processing steps and simply archive the message (good for if user used banned language or should be absorbed for other reasons)*/
+  Command command = 7;
 }
 // Stage 3: Fully finalized message ready for database commit (timeline events) and broadcasting
 message MessagePostProcess {
   string platform = 1;
-  string user_uuid = 2;
-  string raw_message = 3;
-  string processed_message = 4;
-  bool is_final = 5; /* set to true */
+  string raw_data = 2; /* due to platform vagueness, raw key-data pairs or json string */
+  string user_uuid7 = 3;
+  string raw_message = 4;
+  string processed_message = 5;
+  Command command = 6;
+  string user_data = 7;
+}
+
+//general communication
+message Shutdown {
+    string reason = 1;
+}
+message Log {
+  string log = 1; /*generic message*/
+  string blob = 2; /*if there's a some sorta media/blob/whatever what the module considers to be important to store, ie maybe a new config for archival reasons.*/
+}
+message Err {
+  string log = 1; /*for the message like "could not parse string" ala: err.msg*/
+  string blob = 2; /*if there was an error with data, this can be used to pass the failed data (ie, failed to parse json: <json in question>)*/
+  string trace = 3; /*whatever the language spits out as the generic stack ala: err.trace*/
 }
 
 message TimelineEvent{/*event stored in the timeline*/
@@ -99,24 +123,25 @@ message UserData {/*used for transfering user data*/
 
 
 // MESSAGE SHAPE
-// MESSAGE SHAPE
 message Container { /* general template for communicating messages */
   int32 version = 1; /* version for disbatching */
-  string type = 2; /* event type for logging and infra */
   string auth_token = 3; /* JWT for auth */
-  string error = 4; /* errors if any for logging */
-  string module_name = 5; /* used for displaying to user and for internal resource mgmt */
+  string module_name = 4; /* used for displaying to user and for internal resource mgmt */
+  string module_instance_uuid7 = 5; /*if is a connection request, will ignore this*/
   
   oneof payload {
-    ConnectionRequest connection_request = 6;
-    ConnectionRequestReturn connection_request_return = 7;
-    AuthVerify auth_verify = 8;
-    AuthNew auth_new = 9;
-    Commands commands_payload = 10;
-    MessagePreProcess message_pre_process = 11;
-    MessageInProcess message_in_process = 12;
-    MessagePostProcess message_post_process = 13;
-    TimelineEvent timeline_event = 14;
-    UserData user_data = 15;
+    ConnectionRequest connection_request = 7;
+    ConnectionRequestReturn connection_request_return = 8;
+    AuthVerify auth_verify = 9;
+    AuthNew auth_new = 10;
+    Commands commands_payload = 11;
+    MessagePreProcess message_pre_process = 12;
+    MessageInProcess message_in_process = 13;
+    MessagePostProcess message_post_process = 14;
+    TimelineEvent timeline_event = 15;
+    UserData user_data = 16;
+    Shutdown shutdown = 17;
+    Log log = 18;
+    Err err = 19;
   }
 }

@@ -1,0 +1,29 @@
+{
+    // This is the name presented to Cockatiel.
+    "name": "example-module", // REQUIRED, no spaces, name is concerted to all lowercase for standardization 
+
+    // Human-readable description of what this module does.
+    "description": "An example Cockatiel module.", // optional
+
+    // Version of this module.
+    "version": "0.1.0", // optional, just a string, no formatting is enforeced
+
+    // What this module is responsivle for
+    "capabilities" = (if you're unfamiliar with json, the value should be something like: `"capabilities": "postprocess",` )
+        "input"         // for modules that provide chats that need to be processed. cockatiel_expects: Authmessages,Log,Err,
+        "preprocess"    // mainly for archival modules
+        "inprocess"     // for modules that wish to modify the chat in flight, ie: censoring, swapping words, telling cockatiel to drop the mesasge due to a flag etc
+        "postprocess"   // THIS IS PROBABLY WHAT YOU WANT, used for after the message has been processed, ie for chatbots, sending message to a chat display application, passing a processed command to a game engine, etc
+
+    "root_file" = "./main.rs" //whatever file the launcher needs to run 
+    "launch_command" = "cargo", // make this whatever your program needs, such as: node, python3, cargo, etc. IF IS A COMPILED PROGRAM, THEN THE VALUE MUST BE ""
+    "command_flags" = [
+        "--flag value",
+        "--flag value",
+        "--flag value"
+    ];
+
+    // Whether Cockatiel should consider this module safe to automatically launch when configured.
+    "autostart": true | false
+}
+

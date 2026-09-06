@@ -5,27 +5,18 @@ use crossterm::{
 };
 
 use lib_cockatiel::{container::Payload, CockatielClient};
-
 use std::io::{self, Write};
-
 use std::sync::Arc;
-
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-
 use tracing::{error, Level};
-
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Clone, Debug)]
-
 struct ChatMessageItem {
     username: String,
-
     platform: String,
-
     role_letter: Option<String>,
-
     content: String,
 }
 
@@ -63,11 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let messages: Arc<Mutex<Vec<ChatMessageItem>>> = Arc::new(Mutex::new(Vec::new()));
-
     let messages_clone = messages.clone();
-
     let status: Arc<Mutex<AppStatus>> = Arc::new(Mutex::new(AppStatus::default()));
-
     let status_clone = status.clone();
 
     // Spawn listener for incoming engine events
@@ -136,19 +124,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Enter alternate screen and setup terminal interface
 
     let mut stdout = io::stdout();
-
     stdout.execute(terminal::EnterAlternateScreen)?;
-
     terminal::enable_raw_mode()?;
-
     let result = run_tui(&mut stdout, messages, status).await;
 
     // Restore terminal state on exit
 
     terminal::disable_raw_mode()?;
-
     stdout.execute(terminal::LeaveAlternateScreen)?;
-
     if let Err(err) = result {
         eprintln!("Error in terminal display: {}", err);
     }
@@ -165,9 +148,7 @@ struct RenderedLine {
 
 async fn run_tui(
     stdout: &mut io::Stdout,
-
     messages: Arc<Mutex<Vec<ChatMessageItem>>>,
-
     status: Arc<Mutex<AppStatus>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // crossterm::event::read() blocks the OS thread until an event arrives,
@@ -193,9 +174,7 @@ async fn run_tui(
     // pick up newly arrived chat messages even if the terminal itself is
     // untouched. Resize/key events short-circuit this via `select!` below.
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(250));
-
     let mut needs_redraw = true; // Draw once immediately on startup
-
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -232,36 +211,25 @@ async fn run_tui(
         }
 
         needs_redraw = false;
-
         let (cols, rows) = terminal::size()?;
-
         if cols < 10 || rows < 6 {
             continue;
         }
 
         let cols_usize = cols as usize;
-
         // Redraw screen
-
         stdout.execute(cursor::MoveTo(0, 0))?;
-
         stdout.execute(terminal::Clear(ClearType::All))?;
-
         // 1. Top of the window: Header
-
         let header = " Cockatiel Term Chat Display ";
-
         let padded_header = format!("{:^width$}", header, width = cols_usize);
-
         print!("\x1b[44m\x1b[37m{}\x1b[0m\r\n", padded_header);
-
         // 2. Middle: Chat messages area
         //
         // Reserved rows: Header (1) + Status bar (1) + Footer (1).
         // Everything else is available for messages.
 
         let current_msgs = messages.lock().await;
-
         let max_chat_rows = (rows as usize).saturating_sub(3);
 
         // Walk backwards from the newest message, working out how many
@@ -272,9 +240,7 @@ async fn run_tui(
         // room for, which is what let the header scroll off the top over
         // time.
         let mut selected: Vec<RenderedLine> = Vec::new();
-
         let mut used_rows = 0usize;
-
         for msg in current_msgs.iter().rev() {
             let pl_code: String = if msg.platform.chars().count() > 2 {
                 msg.platform.chars().take(2).collect() // ie: discord -> di
@@ -291,13 +257,9 @@ async fn run_tui(
             // Now rendered as two lines: "[user | platform | perm]:" on its
             // own line, then the message content below it.
             let bracket_line = format!("[{}]:", bracket_content);
-
             let bracket_rows = (bracket_line.chars().count().max(1) + cols_usize - 1) / cols_usize;
-
             let content_rows = (msg.content.chars().count().max(1) + cols_usize - 1) / cols_usize;
-
             let rows_needed = bracket_rows + content_rows + 1; // +1 for the spacer line after it
-
             if used_rows + rows_needed > max_chat_rows {
                 // This message doesn't fit in what's left of the budget.
                 // If nothing has been selected yet, it means even the
@@ -309,7 +271,6 @@ async fn run_tui(
                     // reserving rows for the bracket line and the spacer
                     // beneath it.
                     let content_area_rows = (max_chat_rows - 1).saturating_sub(bracket_rows).max(1);
-
                     let max_visible_chars = cols_usize.saturating_mul(content_area_rows).max(1);
 
                     let truncated_content: String = msg
@@ -338,7 +299,6 @@ async fn run_tui(
         selected.reverse(); // Back to chronological order (oldest visible first)
 
         let color_code = "\x1b[35m";
-
         for line in &selected {
             print!(
                 "{}[{}]:\x1b[0m\r\n\x1b[37m{}\x1b[0m\r\n\r\n",
@@ -352,9 +312,7 @@ async fn run_tui(
         // rest of the text -- all on a shared gray background that's set
         // once and only reset (\x1b[0m) at the very end, so switching the
         // foreground color for the dot doesn't disturb it.
-
         let status_guard = status.lock().await;
-
         let dot_color = if status_guard.connected {
             "\x1b[32m" // green
         } else {
@@ -374,9 +332,7 @@ async fn run_tui(
 
         // Reserve 2 visible columns for the leading space + dot, fit/pad the rest into what's left.
         let avail_for_rest = cols_usize.saturating_sub(2);
-
         let mut rest_chars: Vec<char> = rest_text.chars().collect();
-
         if rest_chars.len() > avail_for_rest {
             rest_chars.truncate(avail_for_rest);
         } else {
@@ -384,9 +340,7 @@ async fn run_tui(
         }
 
         let rest_str: String = rest_chars.into_iter().collect();
-
         stdout.execute(cursor::MoveTo(0, rows.saturating_sub(2)))?;
-
         print!(
             "\x1b[100m\x1b[37m {}●\x1b[37m{}\x1b[0m",
             dot_color, rest_str
@@ -395,13 +349,9 @@ async fn run_tui(
         // 4. Bottom of the window: Footer in dark terminal safe gray (\x1b[90m)
 
         stdout.execute(cursor::MoveTo(0, rows.saturating_sub(1)))?;
-
         let footer = " press ctrl+c to exit ";
-
         let padded_footer = format!("{:^width$}", footer, width = cols_usize);
-
         print!("\x1b[90m{}\x1b[0m", padded_footer);
-
         stdout.flush()?;
     }
 

@@ -1,0 +1,15 @@
+
+{
+    "name": "bannedWords-module",
+    "description": "a module that takes in a string, alters the message based on the config.json, and returns it.", 
+    "version": "0.1.0",
+    "capabilities" = "inProccess",
+    "root_file" = "./main.cpp",
+    "launch_command" = "cargo",    
+    "command_flags" = [
+        "--replaceChar *",
+        "--repalceType word",
+        ""
+    ],
+    "autostart": true
+}
