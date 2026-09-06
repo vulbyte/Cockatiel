@@ -69,9 +69,9 @@ pub struct PipelineTracker {
 }
 
 macro_rules! p {
-    ($($arg:tt)*) => {
-        println!("\x1b[31m[Cockatiel]:\x1b[0m {}\n", format!($($arg)*))
-    };
+($($arg:tt)*) => {
+println!("\x1b[31m[Cockatiel]:\x1b[0m {}\n", format!($($arg)*))
+};
 }
 
 fn confirm_input(prompt: &str, yes_dialog: &str, no_dialog: &str) -> bool {
@@ -116,15 +116,15 @@ async fn create_config(config_path: PathBuf) -> Result<String, String> {
 
     let default_config = format!(
         r#"{{
-            "database_location": "./",
-            "backup_database_location": "./",
-            "paring_pin": {},
-            "port": {},
-            "inputs": [],
-            "preprocessModules": [],
-            "inprocessModules": [],
-            "postprocessModules": []
-        }}"#,
+"database_location": "./",
+"backup_database_location": "./",
+"paring_pin": {},
+"port": {},
+"inputs": [],
+"preprocessModules": [],
+"inprocessModules": [],
+"postprocessModules": []
+}}"#,
         pin, port
     );
 
@@ -274,20 +274,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/cockatiel_protobuf.proto");
 
     p!("
-                        X
-              XXXXXXXXXXX     XXX
-            XXXXXXXXXXXXXXXXXX 
-          XXX    XXXXXXXXXXXX 
-        XXXX      XXXXXXXXXXXXXX
-       XXXXXX    XXXXXXXXXXX   
-        XXXXXXXXXXXXXXXXX      
-          XXXXXXXXXXXXXXX      
-          XXX XXXXXXX XXX      
-          XX    XXXX   XX      
+X
+XXXXXXXXXXX     XXX
+XXXXXXXXXXXXXXXXXX 
+XXX    XXXXXXXXXXXX 
+XXXX      XXXXXXXXXXXXXX
+XXXXXX    XXXXXXXXXXX   
+XXXXXXXXXXXXXXXXX      
+XXXXXXXXXXXXXXX      
+XXX XXXXXXX XXX      
+XX    XXXX   XX      
 
-          cockatiel
-             -by vulbyte
-    ");
+cockatiel
+-by vulbyte
+");
 
     let (config_string, config_path) = verify_config().await;
 
@@ -300,10 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 e
             );
             let overwrite = confirm_input(
-                "The config file is corrupted or empty. Do you want to overwrite it with a new default config?",
-                "Creating new default config...",
-                "Exiting so you can fix the config file manually."
-            );
+"The config file is corrupted or empty. Do you want to overwrite it with a new default config?",
+"Creating new default config...",
+"Exiting so you can fix the config file manually."
+);
 
             if overwrite {
                 let target_dir = config_path.parent().unwrap().to_path_buf();
@@ -357,229 +357,228 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     loop {
                         tokio::select! {
-                                                                                                                                                                                                                                                    Some(pkg) = websocket_stream.next() => {                                                                                                        let msg = match pkg {
-                                                                                                                                                                                                                                                        Ok(Message::Binary(data)) => data,
-                                                                                                                                                                                                                                                            Ok(Message::Close(_)) | Err(_) => break,
-                                                                                                                                                                                                                                                            _ => continue,
-                                                                                                                                                                                                                                                        };
+                            Some(pkg) = websocket_stream.next() => {
+                                let msg = match pkg {
+                                    Ok(Message::Binary(data)) => data,
+                                    Ok(Message::Close(_)) | Err(_) => break,
+                                    _ => continue,
+                                };
 
-                                                                                                                                                                                                                                                        let decode = match cockatiel_protobuf::Container::decode(msg.as_ref()) {
-                                                                                                                                                                                                                                                            Ok(d) => d,
-                                                                                                                                                                                                                                                            Err(_) => continue,
-                                                                                                                                                                                                                                                        };
+                                let decode = match cockatiel_protobuf::Container::decode(msg.as_ref()) {
+                                    Ok(d) => d,
+                                    Err(_) => continue,
+                                };
 
-                                                                                                                                                                                                                                                        match decode.payload {
-                                                                                                                                                                                                                                                            Some(Payload::Shutdown(_)) => {println!("received a shutdown command!")}
-                                                                                                                                                                                                                                                            Some(Payload::Log(_)) => {println!("received a log")}
-                                                                                                                                                                                                                                                            Some(Payload::Err(_)) => {println!("received an err")}
+                                match decode.payload {
+                                    Some(Payload::Shutdown(_)) => {println!("received a shutdown command!")}
+                                    Some(Payload::Log(_)) => {println!("received a log")}
+                                    Some(Payload::Err(_)) => {println!("received an err")}
 
-                                                                                                                                                                                                                                                            Some(Payload::ConnectionRequest(data)) => {
-                                                                                                                                                                                                                                                                if data.pin == paring_pin as i32 {
-                                                                                                                                                                                                                                                                    is_authenticated = true;
-                                                                                                                                                                                                                                                                    current_module_name = decode.module_name.clone();
-                                                                                                                                                                                                                                                                    let current_priority = data.priority;
-                                                                                                                                                                                                                                                                    let current_position = data.process_position.to_lowercase();
+                                    Some(Payload::ConnectionRequest(data)) => {
+                                        if data.pin == paring_pin as i32 {
+                                            is_authenticated = true;
+                                            current_module_name = decode.module_name.clone();
+                                            let current_priority = data.priority;
+                                            let current_position = data.process_position.to_lowercase();
 
-                                                                                                                                                                                                                                                                    {
-                                                                                                                                                                                                                                                                        let mut conn_map = active_connections.lock().unwrap();
-                                                                                                                                                                                                                                                                        conn_map.insert(current_module_name.clone(), tx.clone());
-                                                                                                                                                                                                                                                                    }
+                                            {
+                                                let mut conn_map = active_connections.lock().unwrap();
+                                                conn_map.insert(current_module_name.clone(), tx.clone());
+                                            }
 
-                                                                                                                                                                                                                                                                    update_and_save_config(&config_state, |cfg| {
-                                                                                                                                                                                                                                                                        let list = match current_position.as_str() {
-                                                                                                                                                                                                                                                                            "input" | "inputs" => &mut cfg.inputs,
-                                                                                                                                                                                                                                                                            "preprocess" => &mut cfg.preprocess_modules,
-                                                                                                                                                                                                                                                                            "inprocess" => &mut cfg.inprocess_modules,
-                                                                                                                                                                                                                                                                            "postprocess" | "output" | "outputs" | "display" | "post" => &mut cfg.postprocess_modules,
-                                                                                                                                                                                                                                                                            _ => &mut cfg.inputs,
-                                                                                                                                                                                                                                                                        };
-                                                                                                                                                                                                                                                                        insert_module_entry(list, &current_module_name, current_priority);
-                                                                                                                                                                                                                                                                    });
+                                            update_and_save_config(&config_state, |cfg| {
+                                                let list = match current_position.as_str() {
+                                                    "input" | "inputs" => &mut cfg.inputs,
+                                                    "preprocess" => &mut cfg.preprocess_modules,
+                                                    "inprocess" => &mut cfg.inprocess_modules,
+                                                    "postprocess" | "output" | "outputs" | "display" | "post" => &mut cfg.postprocess_modules,
+                                                    _ => &mut cfg.inputs,
+                                                };
+                                                insert_module_entry(list, &current_module_name, current_priority);
+                                            });
 
-                                                                                                                                                                                                                                                                    p!("Authenticated {} at priority {}", current_module_name, current_priority);
+                                            p!("Authenticated {} at priority {}", current_module_name, current_priority);
 
-                                                                                                                                                let mut buf = Vec::new();
-                                                                                                                                                let response = cockatiel_protobuf::Container {
-                                                                                                                                                    version: 1,
-                                                                                                                                                    auth_token: "".into(),
-                                                                                                                                                    module_name: "cockatiel".into(),
-                                                                                                                                                    module_instance_uuid7: "".into(),
-                                                                                                                                                    payload: Some(Payload::ConnectionRequestReturn(
-                                                                                                                                                        cockatiel_protobuf::ConnectionRequestReturn {
-                                                                                                                                                            new_port: 0,
-                                                                                                                                                            module_instance_uuid7: "".into(),
-                                                                                                                                                        }
-                                                                                                                                                    )),
-                                                                                                                                                    ..Default::default()
-                                                                                                                                                };
-                                                                                                                                                response.encode(&mut buf).unwrap();
-                                                                                                                                                let _ = websocket_stream.send(Message::Binary(buf)).await;
-                        } else {
-                                                    p!("❌ Authentication REJECTED for '{}': Invalid PIN provided (received {}, expected {})",
-                                                        decode.module_name, data.pin, paring_pin);
-
-                                                    let mut buf = Vec::new();
-                                                    let response = cockatiel_protobuf::Container {
-                                                        version: 1,
-                                                        auth_token: "".into(),
-                                                        module_name: "cockatiel".into(),
+                                            let mut buf = Vec::new();
+                                            let response = cockatiel_protobuf::Container {
+                                                version: 1,
+                                                auth_token: "".into(),
+                                                module_name: "cockatiel".into(),
+                                                module_instance_uuid7: "".into(),
+                                                payload: Some(Payload::ConnectionRequestReturn(
+                                                    cockatiel_protobuf::ConnectionRequestReturn {
+                                                        new_port: 0,
                                                         module_instance_uuid7: "".into(),
-                                                        payload: None,
-                                                        ..Default::default()
-                                                    };
-                                                    response.encode(&mut buf).unwrap();
-                                                    let _ = websocket_stream.send(Message::Binary(buf)).await;
-                                                    break;
+                                                    }
+                                                )),
+                                                ..Default::default()
+                                            };
+                                            response.encode(&mut buf).unwrap();
+                                            let _ = websocket_stream.send(Message::Binary(buf)).await;
+                                        } else {
+                                            p!("❌ Authentication REJECTED for '{}': Invalid PIN provided (received {}, expected {})",
+                                            decode.module_name, data.pin, paring_pin);
+
+                                            let mut buf = Vec::new();
+                                            let response = cockatiel_protobuf::Container {
+                                                version: 1,
+                                                auth_token: "".into(),
+                                                module_name: "cockatiel".into(),
+                                                module_instance_uuid7: "".into(),
+                                                payload: None,
+                                                ..Default::default()
+                                            };
+                                            response.encode(&mut buf).unwrap();
+                                            let _ = websocket_stream.send(Message::Binary(buf)).await;
+                                            break;
+                                        }
+                                    },
+                                    Some(Payload::ConnectionRequestReturn(ret)) => {
+                                        p!("Received ConnectionRequestReturn: assigned port/status code = {}", ret.new_port);
+                                    },
+
+
+                                    Some(Payload::MessagePreProcess(ref msg)) => {
+                                        p!("Pipeline Stage 1 [PreProcess] Initiated | Platform: '{}'", msg.platform);
+
+                                        // Extract authorName from raw_data JSON string
+                                        let mut extracted_username = "".to_string();
+                                        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&msg.raw_data) {
+                                            if let Some(author_name) = json_val.get("authorName").and_then(|v| v.as_str()) {
+                                                extracted_username = author_name.to_string();
+                                            }
+                                        }
+
+                                        dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.preprocess_modules, &decode).await;
+
+                                        let inprocess_list: Vec<String> = {
+                                            let mut config = get_authoritative_config(&config_state);
+                                            config.inprocess_modules.sort_by_key(|m| m.priority);
+                                            config.inprocess_modules.into_iter().map(|m| m.name).collect()
+                                        };
+
+                                        if inprocess_list.is_empty() {
+                                            p!("No InProcess modules found. Skipping straight to Stage 3 [PostProcess].");
+
+                                            let mut post_container = decode.clone();
+                                            post_container.payload = Some(Payload::MessagePostProcess(
+                                                cockatiel_protobuf::MessagePostProcess {
+                                                    platform: msg.platform.clone(),
+                                                    raw_message: msg.raw_message.clone(),
+                                                    processed_message: "".to_string(),
+                                                    user_uuid7: extracted_username,
+                                                    ..Default::default()
                                                 }
-                                                                                                                                                                                                                                                            },
-                                                                                                                                                                                                                                                            Some(Payload::ConnectionRequestReturn(ret)) => {
-                                                                                                                                                                                                                                                                p!("Received ConnectionRequestReturn: assigned port/status code = {}", ret.new_port);
-                                                                                                                                                                                                                                                            },
+                                            ));
+                                            dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &post_container).await;
+                                        }
+                                        else {
+                                            let msg_id = format!("msg_{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
+                                            let target_module = inprocess_list[0].clone();
 
+                                            active_pipelines.lock().unwrap().insert(msg_id, PipelineTracker {
+                                                inprocess_waterfall: inprocess_list,
+                                                current_step: 0,
+                                            });
 
-                                                                                                                                                                                                Some(Payload::MessagePreProcess(ref msg)) => {
-                                                                                                                                                                                                    p!("Pipeline Stage 1 [PreProcess] Initiated | Platform: '{}'", msg.platform);
+                                            send_to_specific_module(&target_module, &active_connections, &decode).await;
+                                        }
+                                    },
 
-                                                                                                                                                                                                    // Extract authorName from raw_data JSON string
-                                                                                                                                                                                                    let mut extracted_username = "".to_string();
-                                                                                                                                                                                                    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&msg.raw_data) {
-                                                                                                                                                                                                        if let Some(author_name) = json_val.get("authorName").and_then(|v| v.as_str()) {
-                                                                                                                                                                                                            extracted_username = author_name.to_string();
-                                                                                                                                                                                                        }
-                                                                                                                                                                                                    }
+                                    Some(Payload::MessageInProcess(ref msg)) => {
+                                        if !is_authenticated { continue; }
 
-                                                                                                                                                                                                    dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.preprocess_modules, &decode).await;
+                                        enum NextAction {
+                                            Forward(String),
+                                            Complete(cockatiel_protobuf::MessagePostProcess),
+                                        }
 
-                                                                                                                                                                                                    let inprocess_list: Vec<String> = {
-                                                                                                                                                                                                        let mut config = get_authoritative_config(&config_state);
-                                                                                                                                                                                                        config.inprocess_modules.sort_by_key(|m| m.priority);
-                                                                                                                                                                                                        config.inprocess_modules.into_iter().map(|m| m.name).collect()
-                                                                                                                                                                                                    };
+                                        let action = {
+                                            let mut pipelines = active_pipelines.lock().unwrap();
+                                            let first_key = pipelines.keys().next().cloned();
 
-                                                                                                                                                                                                    if inprocess_list.is_empty() {
-                                                                                                                                                                                                        p!("No InProcess modules found. Skipping straight to Stage 3 [PostProcess].");
+                                            if let Some(msg_id) = first_key {
+                                                if let Some(tracker) = pipelines.get_mut(&msg_id) {
+                                                    tracker.current_step += 1;
 
-                                                                                                let mut post_container = decode.clone();
-                                                                                                post_container.payload = Some(Payload::MessagePostProcess(
-                                                                                                    cockatiel_protobuf::MessagePostProcess {
-                                                                                                        platform: msg.platform.clone(),
-                                                                                                        raw_message: msg.raw_message.clone(),
-                                                                                                        processed_message: "".to_string(),
-                                                                                                        user_uuid7: extracted_username,
-                                                                                                        ..Default::default()
-                                                                                                    }
-                                                                                                ));
-                                                                                                                                                                                                        dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &post_container).await;
-                                                                                                                                                                                                    }
-                                                                                                                                                                                                    else {
-                                                                                                                                                                                                        let msg_id = format!("msg_{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos());
-                                                                                                                                                                                                        let target_module = inprocess_list[0].clone();
+                                                    if tracker.current_step < tracker.inprocess_waterfall.len() {
+                                                        let next_module = tracker.inprocess_waterfall[tracker.current_step].clone();
+                                                        Some(NextAction::Forward(next_module))
 
-                                                                                                                                                                                                        active_pipelines.lock().unwrap().insert(msg_id, PipelineTracker {
-                                                                                                                                                                                                            inprocess_waterfall: inprocess_list,
-                                                                                                                                                                                                            current_step: 0,
-                                                                                                                                                                                                        });
+                                                    } else {
+                                                        pipelines.remove(&msg_id);
 
-                                                                                                                                                                                                        send_to_specific_module(&target_module, &active_connections, &decode).await;
-                                                                                                                                                                                                    }
-                                                                                                                                                                                                },
+                                                        // Inside MessageInProcess mapping
+                                                        Some(NextAction::Complete(cockatiel_protobuf::MessagePostProcess {
+                                                            platform: msg.platform.clone(),
+                                                            raw_message: msg.raw_message.clone(),
+                                                            processed_message: msg.processed_message.clone(),
+                                                            user_uuid7: msg.user_uuid7.clone(),
+                                                            ..Default::default()
+                                                        }))
+                                                    }
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        };
 
-                                                                                                                                                                                                                                                            Some(Payload::MessageInProcess(ref msg)) => {
-                                                                                                                                                                                                                                                                if !is_authenticated { continue; }
+                                        match action {
+                                            Some(NextAction::Forward(next_module)) => {
+                                                p!("Pipeline Stage 2 [InProcess] -> Advancing to '{}'", next_module);
+                                                send_to_specific_module(&next_module, &active_connections, &decode).await;
+                                            }
+                                            Some(NextAction::Complete(post_payload)) => {
+                                                p!("Pipeline Stage 2 [InProcess] Complete. Broadcasting to Stage 3 [PostProcess].");
+                                                let mut final_container = decode.clone();
+                                                final_container.payload = Some(Payload::MessagePostProcess(post_payload));
+                                                dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &final_container).await;
+                                            }
+                                            None => {}
+                                        }
+                                    },
 
-                                                                                                                                                                                                                                                                enum NextAction {
-                                                                                                                                                                                                                                                                    Forward(String),
-                                                                                                                                                                                                                                                                    Complete(cockatiel_protobuf::MessagePostProcess),
-                                                                                                                                                                                                                                                                }
+                                    Some(Payload::MessagePostProcess(ref msg)) => {
+                                        if !is_authenticated { continue; }
+                                        p!("Pipeline Stage 3 [Processed] | Platform: '{}' | User: {}", msg.platform, msg.user_uuid7);
+                                        dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &decode).await;
+                                    },
+                                    Some(Payload::CommandsPayload(ref cmds)) => {
+                                        if !is_authenticated { continue; }
+                                        p!("Received Commands from '{}': {} command(s) declared", current_module_name, cmds.commands.len());
+                                    },
+                                    Some(Payload::TimelineEvent(event)) => {
+                                        if !is_authenticated { continue; }
+                                        p!("Received TimelineEvent record | Key: {}", event.uuid7_key);
+                                    },
+                                    Some(Payload::UserData(user)) => {
+                                        if !is_authenticated { continue; }
+                                        p!("Received UserData state update | User: {} | Sponsor: {}", user.username, user.is_sponsor);
+                                    },
+                                    Some(Payload::AuthVerify(_auth)) => {
+                                        if !is_authenticated { continue; }
+                                        p!("Received AuthVerify request from '{}'", current_module_name);
+                                    },
+                                    Some(Payload::AuthNew(_auth)) => {
+                                        if !is_authenticated { continue; }
+                                        p!("Received AuthNew token refresh for '{}'", current_module_name);
+                                    },
+                                    None => {
+                                        p!("Received container packet with empty payload from '{}'", current_module_name);
+                                    }
+                                }
+                            }
 
-                                                                                                                                                                                                                                                                let action = {
-                                                                                                                                                                                                                                                                    let mut pipelines = active_pipelines.lock().unwrap();
-                                                                                                                                                                                                                                                                    let first_key = pipelines.keys().next().cloned();
-
-                                                                                                                                                                                                                                                                    if let Some(msg_id) = first_key {
-                                                                                                                                                                                                                                                                        if let Some(tracker) = pipelines.get_mut(&msg_id) {
-                                                                                                                                                                                                                                                                            tracker.current_step += 1;
-
-                                                                                                                                                                                                                                                                            if tracker.current_step < tracker.inprocess_waterfall.len() {
-                                                                                                                                                                                                                                                                                let next_module = tracker.inprocess_waterfall[tracker.current_step].clone();
-                                                                                                                                                                                                                                                                                Some(NextAction::Forward(next_module))
-
-                                                                                                                                                                                                                                                                            } else {
-                                                                                                                                                                                                                                                                                pipelines.remove(&msg_id);
-
-                                                                        // Inside MessageInProcess mapping
-                                                                        Some(NextAction::Complete(cockatiel_protobuf::MessagePostProcess {
-                                                                            platform: msg.platform.clone(),
-                                                                            raw_message: msg.raw_message.clone(),
-                                                                            processed_message: msg.processed_message.clone(),
-                                                                            user_uuid7: msg.user_uuid7.clone(),
-                                                                            ..Default::default()
-                                                                        }))
-                                                                                                                                                                                                                                                                            }
-                                                                                                                                                                                                                                                                        } else {
-                                                                                                                                                                                                                                                                            None
-                                                                                                                                                                                                                                                                        }
-                                                                                                                                                                                                                                                                    } else {
-                                                                                                                                                                                                                                                                        None
-                                                                                                                                                                                                                                                                    }
-                                                                                                                                                                                                                                                                };
-
-                                                                                                                                                                                                                                                                match action {
-                                                                                                                                                                                                                                                                    Some(NextAction::Forward(next_module)) => {
-                                                                                                                                                                                                                                                                        p!("Pipeline Stage 2 [InProcess] -> Advancing to '{}'", next_module);
-                                                                                                                                                                                                                                                                        send_to_specific_module(&next_module, &active_connections, &decode).await;
-                                                                                                                                                                                                                                                                    }
-                                                                                                                                                                                                                                                                    Some(NextAction::Complete(post_payload)) => {
-                                                                                                                                                                                                                                                                        p!("Pipeline Stage 2 [InProcess] Complete. Broadcasting to Stage 3 [PostProcess].");
-                                                                                                                                                                                                                                                                        let mut final_container = decode.clone();
-                                                                                                                                                                                                                                                                        final_container.payload = Some(Payload::MessagePostProcess(post_payload));
-                                                                                                                                                                                                                                                                        dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &final_container).await;
-                                                                                                                                                                                                                                                                    }
-                                                                                                                                                                                                                                                                    None => {}
-                                                                                                                                                                                                                                                                }
-                                                                                                                                                                                                                                                            },
-
-                                                Some(Payload::MessagePostProcess(ref msg)) => {
-                                                    if !is_authenticated { continue; }
-                                                    p!("Pipeline Stage 3 [Processed] | Platform: '{}' | User: {}", msg.platform, msg.user_uuid7);
-                                                    dispatch_stage_message(&config_state, &active_connections, |c: &Config| &c.postprocess_modules, &decode).await;
-                                                },
-                                                                                                                                                                                                                                                            Some(Payload::CommandsPayload(ref cmds)) => {
-                                                                                                                                                                                                                                                                if !is_authenticated { continue; }
-                                                                                                                                                                                                                                                                p!("Received Commands from '{}': {} command(s) declared", current_module_name, cmds.commands.len());
-                                                                                                                                                                                                                                                            },
-
-                                                                                                                                                                                                                                                            Some(Payload::TimelineEvent(event)) => {
-                                                                                                                                                                                                                                                                if !is_authenticated { continue; }
-                                                                                                                                                                                                                                                                p!("Received TimelineEvent record | Key: {}", event.uuid7_key);
-                                                                                                                                                                                                                                                            },
-                                                                                                                                                                                                                                                            Some(Payload::UserData(user)) => {
-                                                                                                                                                                                                                                                                if !is_authenticated { continue; }
-                                                                                                                                                                                                                                                                p!("Received UserData state update | User: {} | Sponsor: {}", user.username, user.is_sponsor);
-                                                                                                                                                                                                                                                            },
-                                                                                                                                                                                                                                                            Some(Payload::AuthVerify(_auth)) => {
-                                                                                                                                                                                                                                                                if !is_authenticated { continue; }
-                                                                                                                                                                                                                                                                p!("Received AuthVerify request from '{}'", current_module_name);
-                                                                                                                                                                                                                                                            },
-                                                                                                                                                                                                                                                            Some(Payload::AuthNew(_auth)) => {
-                                                                                                                                                                                                                                                                if !is_authenticated { continue; }
-                                                                                                                                                                                                                                                                p!("Received AuthNew token refresh for '{}'", current_module_name);
-                                                                                                                                                                                                                                                            },
-
-                                                                                                                                                                                                                                                            None => {
-                                                                                                                                                                                                                                                                p!("Received container packet with empty payload from '{}'", current_module_name);
-                                                                                                                                                                                                                                                            }
-                                                                                                                                                                                                                                                        }
-                                                                                                                                                                                                                                                    }
-
-                                                                                                                                                                                                                                                    Some(outbound_msg) = rx.recv() => {
-                                                                                                                                                                                                                                                        let mut buf = Vec::new();
-                                                                                                                                                                                                                                                        outbound_msg.encode(&mut buf).unwrap();
-                                                                                                                                                                                                                                                        if websocket_stream.send(Message::Binary(buf)).await.is_err() {
-                                                                                                                                                                                                                                                            break;
-                                                                                                                                                                                                                                                        }
-                                                                                                                                                                                                                                                    }
-                                                                                                                                                                                                                                                }
+                            Some(outbound_msg) = rx.recv() => {
+                                let mut buf = Vec::new();
+                                outbound_msg.encode(&mut buf).unwrap();
+                                if websocket_stream.send(Message::Binary(buf)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     if is_authenticated {
