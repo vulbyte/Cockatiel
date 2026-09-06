@@ -1,0 +1,12 @@
+websockets
+grpcio-tools   # compiles cockatiel_protobuf.proto for lib_cockatiel.py
+protobuf
+pydub
+simpleaudio    # pydub's playback backend
+numpy
+torch
+transformers
+datasets       # needed by workers/speecht5.py for speaker embeddings
+
+# System dependency (not pip-installable): ffmpeg, required by pydub for
+# mp3 export/decoding.

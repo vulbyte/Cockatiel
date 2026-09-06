@@ -1,30 +1,29 @@
+"""
+VibeVoice worker (microsoft/VibeVoice-1.5B).
+"""
+
+import numpy as np
 import torch
-import soundfile as sf
+from pydub import AudioSegment
 from transformers import pipeline
 
-def run_tts(text, output_path):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Load pipeline (this handles all internal tokenizer + diffusion logic)
-    pipe = pipeline(
-        task="text-to-speech",
-        model="microsoft/VibeVoice-1.5B",
-        device=0 if device == "cuda" else -1
-    )
+def load():
+    device = 0 if torch.cuda.is_available() else -1
+    return pipeline(task="text-to-speech", model="microsoft/VibeVoice-1.5B", device=device)
 
-    print("Generating audio...")
-    result = pipe(text)
 
-    # HuggingFace TTS pipelines usually return:
-    # {"audio": np.array, "sampling_rate": int}
-    audio = result["audio"]
+def synthesize(model, message: str, output_path: str) -> None:
+    result = model(message)
+    audio = np.clip(np.asarray(result["audio"]), -1.0, 1.0)
     sr = result["sampling_rate"]
 
-    sf.write(output_path, audio, sr)
+    audio = (audio * 32767).astype(np.int16)
 
-    print(f"Saved to {output_path}")
-
-
-if __name__ == "__main__":
-    import sys
-    run_tts(sys.argv[1], sys.argv[2])
+    segment = AudioSegment(
+        audio.tobytes(),
+        frame_rate=sr,
+        sample_width=2,
+        channels=1,
+    )
+    segment.export(output_path, format="mp3")
