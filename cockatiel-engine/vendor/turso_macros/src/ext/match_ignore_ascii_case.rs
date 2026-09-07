@@ -1,5 +1,5 @@
 use quote::quote;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, spanned::Spanned, Arm, ExprMatch, Lit, Pat};
@@ -74,24 +74,31 @@ pub fn match_ignore_ascci_case(input: TokenStream) -> TokenStream {
 
     struct PathEntry {
         result: Option<Arm>,
-        sub_entries: BTreeMap<u8, Box<PathEntry>>,
+        sub_entries: HashMap<u8, Box<PathEntry>>,
     }
 
     let mut paths = Box::new(PathEntry {
         result: None,
-        sub_entries: BTreeMap::new(),
+        sub_entries: HashMap::new(),
     });
 
     for (keyword_b, arm) in arms.drain(..) {
         let mut current = &mut paths;
 
         for b in keyword_b {
-            current = current.sub_entries.entry(b).or_insert_with(|| {
-                Box::new(PathEntry {
-                    result: None,
-                    sub_entries: BTreeMap::new(),
-                })
-            });
+            match current.sub_entries.get(&b) {
+                Some(_) => {
+                    current = current.sub_entries.get_mut(&b).unwrap();
+                }
+                None => {
+                    let new_entry = Box::new(PathEntry {
+                        result: None,
+                        sub_entries: HashMap::new(),
+                    });
+                    current.sub_entries.insert(b, new_entry);
+                    current = current.sub_entries.get_mut(&b).unwrap();
+                }
+            }
         }
 
         assert!(current.result.is_none());

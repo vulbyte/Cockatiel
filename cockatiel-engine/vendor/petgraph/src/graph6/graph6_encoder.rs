@@ -1,11 +1,5 @@
 //! [graph6 format](https://users.cecs.anu.edu.au/~bdm/data/formats.txt) encoder for undirected graphs.
 
-use alloc::{
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
-
 use crate::{
     csr::Csr,
     graph::IndexType,
@@ -17,7 +11,7 @@ use crate::{
 use crate::graphmap::{GraphMap, NodeTrait};
 
 #[cfg(feature = "graphmap")]
-use core::hash::BuildHasher;
+use std::hash::BuildHasher;
 
 #[cfg(feature = "matrix_graph")]
 use crate::matrix_graph::{MatrixGraph, Nullable};
@@ -142,12 +136,11 @@ impl<N: NodeTrait, E, S: BuildHasher> ToGraph6 for GraphMap<N, E, Undirected, S>
 }
 
 #[cfg(feature = "matrix_graph")]
-impl<N, E, S, Null, Ix> ToGraph6 for MatrixGraph<N, E, S, Undirected, Null, Ix>
+impl<N, E, Null, Ix> ToGraph6 for MatrixGraph<N, E, Undirected, Null, Ix>
 where
     N: NodeTrait,
     Null: Nullable<Wrapped = E>,
     Ix: IndexType,
-    S: BuildHasher + Default,
 {
     fn graph6_string(&self) -> String {
         get_graph6_representation(self)

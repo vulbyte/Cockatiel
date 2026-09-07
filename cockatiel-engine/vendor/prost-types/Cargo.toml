@@ -11,9 +11,9 @@
 
 [package]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.71.1"
 name = "prost-types"
-version = "0.14.4"
+version = "0.13.5"
 authors = [
     "Dan Burkert <dan@danburkert.com>",
     "Lucio Franco <luciofranco14@gmail.com>",
@@ -46,22 +46,13 @@ version = "1.4"
 features = ["derive"]
 optional = true
 
-[dependencies.chrono]
-version = "0.4.34"
-optional = true
-default-features = false
-
 [dependencies.prost]
-version = "0.14.4"
-features = ["derive"]
+version = "0.13.5"
+features = ["prost-derive"]
 default-features = false
 
 [dev-dependencies.proptest]
 version = "1"
-
-[lints.clippy]
-collapsible_if = "allow"
-manual_is_multiple_of = "allow"
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

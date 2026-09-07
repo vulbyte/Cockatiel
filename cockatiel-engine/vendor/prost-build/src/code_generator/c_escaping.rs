@@ -17,7 +17,10 @@ pub(super) fn unescape_c_escape_string(s: &str) -> Vec<u8> {
         } else {
             p += 1;
             if p == len {
-                panic!("invalid c-escaped default binary value ({s}): ends with '\'")
+                panic!(
+                    "invalid c-escaped default binary value ({}): ends with '\'",
+                    s
+                )
             }
             match src[p] {
                 b'a' => {
@@ -69,7 +72,7 @@ pub(super) fn unescape_c_escape_string(s: &str) -> Vec<u8> {
                     let mut octal = 0;
                     for _ in 0..3 {
                         if p < len && src[p] >= b'0' && src[p] <= b'7' {
-                            debug!("\toctal: {octal}");
+                            debug!("\toctal: {}", octal);
                             octal = octal * 8 + (src[p] - b'0');
                             p += 1;
                         } else {
@@ -80,7 +83,10 @@ pub(super) fn unescape_c_escape_string(s: &str) -> Vec<u8> {
                 }
                 b'x' | b'X' => {
                     if p + 3 > len {
-                        panic!("invalid c-escaped default binary value ({s}): incomplete hex value")
+                        panic!(
+                            "invalid c-escaped default binary value ({}): incomplete hex value",
+                            s
+                        )
                     }
                     match u8::from_str_radix(&s[p + 1..p + 3], 16) {
                         Ok(b) => dst.push(b),
@@ -91,7 +97,10 @@ pub(super) fn unescape_c_escape_string(s: &str) -> Vec<u8> {
                     }
                     p += 3;
                 }
-                _ => panic!("invalid c-escaped default binary value ({s}): invalid escape"),
+                _ => panic!(
+                    "invalid c-escaped default binary value ({}): invalid escape",
+                    s
+                ),
             }
         }
     }

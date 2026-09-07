@@ -1,38 +1,12 @@
-use crate::types::AsValueRef;
 use crate::types::Value;
-use crate::types::ValueType;
 use crate::vdbe::Register;
+use crate::vector::distance::{euclidean::Euclidean, DistanceCalculator};
 use crate::LimboError;
 use crate::Result;
-use crate::ValueRef;
 
-pub mod operations;
+pub mod distance;
 pub mod vector_types;
 use vector_types::*;
-
-pub fn parse_vector<'a>(
-    value: &'a (impl AsValueRef + 'a),
-    type_hint: Option<VectorType>,
-) -> Result<Vector<'a>> {
-    let value = value.as_value_ref();
-    match value.value_type() {
-        ValueType::Text => operations::text::vector_from_text(
-            type_hint.unwrap_or(VectorType::Float32Dense),
-            value.to_text().expect("value must be text"),
-        ),
-        ValueType::Blob => {
-            let Some(blob) = value.to_blob() else {
-                return Err(LimboError::ConversionError(
-                    "Invalid vector value".to_string(),
-                ));
-            };
-            Vector::from_slice(blob)
-        }
-        _ => Err(LimboError::ConversionError(
-            "Invalid vector type".to_string(),
-        )),
-    }
-}
 
 pub fn vector32(args: &[Register]) -> Result<Value> {
     if args.len() != 1 {
@@ -40,22 +14,15 @@ pub fn vector32(args: &[Register]) -> Result<Value> {
             "vector32 requires exactly one argument".to_string(),
         ));
     }
-    let value = args[0].get_value();
-    let vector = parse_vector(value, Some(VectorType::Float32Dense))?;
-    let vector = operations::convert::vector_convert(vector, VectorType::Float32Dense)?;
-    Ok(operations::serialize::vector_serialize(vector))
-}
-
-pub fn vector32_sparse(args: &[Register]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(LimboError::ConversionError(
-            "vector32_sparse requires exactly one argument".to_string(),
-        ));
+    let x = parse_vector(&args[0], Some(VectorType::Float32))?;
+    // Extract the Vec<u8> from Value
+    if let Value::Blob(data) = vector_serialize_f32(x) {
+        Ok(Value::Blob(data))
+    } else {
+        Err(LimboError::ConversionError(
+            "Failed to serialize vector".to_string(),
+        ))
     }
-    let value = args[0].get_value();
-    let vector = parse_vector(value, Some(VectorType::Float32Sparse))?;
-    let vector = operations::convert::vector_convert(vector, VectorType::Float32Sparse)?;
-    Ok(operations::serialize::vector_serialize(vector))
 }
 
 pub fn vector64(args: &[Register]) -> Result<Value> {
@@ -64,34 +31,15 @@ pub fn vector64(args: &[Register]) -> Result<Value> {
             "vector64 requires exactly one argument".to_string(),
         ));
     }
-    let value = args[0].get_value();
-    let vector = parse_vector(value, Some(VectorType::Float64Dense))?;
-    let vector = operations::convert::vector_convert(vector, VectorType::Float64Dense)?;
-    Ok(operations::serialize::vector_serialize(vector))
-}
-
-pub fn vector8(args: &[Register]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(LimboError::ConversionError(
-            "vector8 requires exactly one argument".to_string(),
-        ));
+    let x = parse_vector(&args[0], Some(VectorType::Float64))?;
+    // Extract the Vec<u8> from Value
+    if let Value::Blob(data) = vector_serialize_f64(x) {
+        Ok(Value::Blob(data))
+    } else {
+        Err(LimboError::ConversionError(
+            "Failed to serialize vector".to_string(),
+        ))
     }
-    let value = args[0].get_value();
-    let vector = parse_vector(value, Some(VectorType::Float8))?;
-    let vector = operations::convert::vector_convert(vector, VectorType::Float8)?;
-    Ok(operations::serialize::vector_serialize(vector))
-}
-
-pub fn vector1bit(args: &[Register]) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(LimboError::ConversionError(
-            "vector1bit requires exactly one argument".to_string(),
-        ));
-    }
-    let value = args[0].get_value();
-    let vector = parse_vector(value, Some(VectorType::Float1Bit))?;
-    let vector = operations::convert::vector_convert(vector, VectorType::Float1Bit)?;
-    Ok(operations::serialize::vector_serialize(vector))
 }
 
 pub fn vector_extract(args: &[Register]) -> Result<Value> {
@@ -101,9 +49,8 @@ pub fn vector_extract(args: &[Register]) -> Result<Value> {
         ));
     }
 
-    let value = args[0].get_value().as_value_ref();
-    let blob = match value {
-        ValueRef::Blob(b) => b,
+    let blob = match &args[0].get_value() {
+        Value::Blob(b) => b,
         _ => {
             return Err(LimboError::ConversionError(
                 "Expected blob value".to_string(),
@@ -115,8 +62,9 @@ pub fn vector_extract(args: &[Register]) -> Result<Value> {
         return Ok(Value::build_text("[]"));
     }
 
-    let vector = Vector::from_slice(blob)?;
-    Ok(Value::build_text(operations::text::vector_to_text(&vector)))
+    let vector_type = vector_type(blob)?;
+    let vector = vector_deserialize(vector_type, blob)?;
+    Ok(Value::build_text(vector_to_text(&vector)))
 }
 
 pub fn vector_distance_cos(args: &[Register]) -> Result<Value> {
@@ -126,12 +74,10 @@ pub fn vector_distance_cos(args: &[Register]) -> Result<Value> {
         ));
     }
 
-    let value_0 = args[0].get_value();
-    let value_1 = args[1].get_value();
-    let x = parse_vector(value_0, None)?;
-    let y = parse_vector(value_1, None)?;
-    let dist = operations::distance_cos::vector_distance_cos(&x, &y)?;
-    Ok(Value::from_f64(dist))
+    let x = parse_vector(&args[0], None)?;
+    let y = parse_vector(&args[1], None)?;
+    let dist = do_vector_distance_cos(&x, &y)?;
+    Ok(Value::Float(dist))
 }
 
 pub fn vector_distance_l2(args: &[Register]) -> Result<Value> {
@@ -141,42 +87,22 @@ pub fn vector_distance_l2(args: &[Register]) -> Result<Value> {
         ));
     }
 
-    let value_0 = args[0].get_value();
-    let value_1 = args[1].get_value();
-    let x = parse_vector(value_0, None)?;
-    let y = parse_vector(value_1, None)?;
-    let dist = operations::distance_l2::vector_distance_l2(&x, &y)?;
-    Ok(Value::from_f64(dist))
-}
-
-pub fn vector_distance_jaccard(args: &[Register]) -> Result<Value> {
-    if args.len() != 2 {
+    let x = parse_vector(&args[0], None)?;
+    let y = parse_vector(&args[1], None)?;
+    // Validate that both vectors have the same dimensions and type
+    if x.dims != y.dims {
         return Err(LimboError::ConversionError(
-            "distance_jaccard requires exactly two arguments".to_string(),
+            "Vectors must have the same dimensions".to_string(),
+        ));
+    }
+    if x.vector_type != y.vector_type {
+        return Err(LimboError::ConversionError(
+            "Vectors must be of the same type".to_string(),
         ));
     }
 
-    let value_0 = args[0].get_value();
-    let value_1 = args[1].get_value();
-    let x = parse_vector(value_0, None)?;
-    let y = parse_vector(value_1, None)?;
-    let dist = operations::jaccard::vector_distance_jaccard(&x, &y)?;
-    Ok(Value::from_f64(dist))
-}
-
-pub fn vector_distance_dot(args: &[Register]) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(LimboError::ConversionError(
-            "distance_dot requires exactly two arguments".to_string(),
-        ));
-    }
-
-    let value_0 = args[0].get_value();
-    let value_1 = args[1].get_value();
-    let x = parse_vector(value_0, None)?;
-    let y = parse_vector(value_1, None)?;
-    let dist = operations::distance_dot::vector_distance_dot(&x, &y)?;
-    Ok(Value::from_f64(dist))
+    let dist = Euclidean::calculate(&x, &y)?;
+    Ok(Value::Float(dist))
 }
 
 pub fn vector_concat(args: &[Register]) -> Result<Value> {
@@ -186,12 +112,20 @@ pub fn vector_concat(args: &[Register]) -> Result<Value> {
         ));
     }
 
-    let value_0 = args[0].get_value();
-    let value_1 = args[1].get_value();
-    let x = parse_vector(value_0, None)?;
-    let y = parse_vector(value_1, None)?;
-    let vector = operations::concat::vector_concat(&x, &y)?;
-    Ok(operations::serialize::vector_serialize(vector))
+    let x = parse_vector(&args[0], None)?;
+    let y = parse_vector(&args[1], None)?;
+
+    if x.vector_type != y.vector_type {
+        return Err(LimboError::InvalidArgument(
+            "Vectors must be of the same type".into(),
+        ));
+    }
+
+    let vector = vector_types::vector_concat(&x, &y)?;
+    match vector.vector_type {
+        VectorType::Float32 => Ok(vector_serialize_f32(vector)),
+        VectorType::Float64 => Ok(vector_serialize_f64(vector)),
+    }
 }
 
 pub fn vector_slice(args: &[Register]) -> Result<Value> {
@@ -200,17 +134,16 @@ pub fn vector_slice(args: &[Register]) -> Result<Value> {
             "vector_slice requires exactly three arguments".into(),
         ));
     }
-    let value_0 = args[0].get_value();
-    let value_1 = args[1].get_value().as_value_ref();
-    let value_2 = args[2].get_value().as_value_ref();
 
-    let vector = parse_vector(value_0, None)?;
+    let vector = parse_vector(&args[0], None)?;
 
-    let start_index = value_1
+    let start_index = args[1]
+        .get_value()
         .as_int()
         .ok_or_else(|| LimboError::InvalidArgument("start index must be an integer".into()))?;
 
-    let end_index = value_2
+    let end_index = args[2]
+        .get_value()
         .as_int()
         .ok_or_else(|| LimboError::InvalidArgument("end_index must be an integer".into()))?;
 
@@ -220,8 +153,10 @@ pub fn vector_slice(args: &[Register]) -> Result<Value> {
         ));
     }
 
-    let result =
-        operations::slice::vector_slice(&vector, start_index as usize, end_index as usize)?;
+    let result = vector_types::vector_slice(&vector, start_index as usize, end_index as usize)?;
 
-    Ok(operations::serialize::vector_serialize(result))
+    Ok(match result.vector_type {
+        VectorType::Float32 => vector_serialize_f32(result),
+        VectorType::Float64 => vector_serialize_f64(result),
+    })
 }

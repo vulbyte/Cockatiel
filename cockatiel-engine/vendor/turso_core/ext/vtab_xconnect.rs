@@ -1,4 +1,4 @@
-use crate::{types::Value, Connection, LimboError, Statement};
+use crate::{types::Value, Connection, Statement, StepResult};
 use std::{
     boxed::Box,
     ffi::{c_char, c_void, CStr, CString},
@@ -41,37 +41,37 @@ pub unsafe extern "C" fn execute(
                 if arg_count > 0 {
                     let args_slice = &mut std::slice::from_raw_parts_mut(args, arg_count as usize);
                     for (i, val) in args_slice.iter_mut().enumerate() {
-                        if let Err(err) = stmt.bind_at(
+                        stmt.bind_at(
                             NonZeroUsize::new(i + 1).unwrap(),
                             Value::from_ffi(std::mem::take(val)).unwrap_or(Value::Null),
-                        ) {
-                            tracing::error!("execute: failed to bind argument: {:?}", err);
+                        );
+                    }
+                }
+                loop {
+                    match stmt.step() {
+                        Ok(StepResult::Row) => {
+                            tracing::error!("execute used for query returning a row");
+                            return ResultCode::Error;
+                        }
+                        Ok(StepResult::Done) => {
+                            *last_insert_rowid = conn.last_insert_rowid();
+                            return ResultCode::OK;
+                        }
+                        Ok(StepResult::IO) => {
+                            let res = stmt.run_once();
+                            if res.is_err() {
+                                return ResultCode::Error;
+                            }
+                            continue;
+                        }
+                        Ok(StepResult::Interrupt) => return ResultCode::Interrupt,
+                        Ok(StepResult::Busy) => return ResultCode::Busy,
+                        Err(e) => {
+                            tracing::error!("execute: failed to execute query: {:?}", e);
                             return ResultCode::Error;
                         }
                     }
                 }
-                let result = stmt.run_with_row_callback(|_| {
-                    Err(crate::LimboError::InternalError(String::from(
-                        "execute used for query returning a row",
-                    )))
-                });
-                let rc = match result {
-                    Ok(_) => {
-                        *last_insert_rowid = conn.last_insert_rowid();
-                        ResultCode::OK
-                    }
-                    Err(err) => match err {
-                        crate::LimboError::Busy | crate::LimboError::StatementsInProgress(_) => {
-                            ResultCode::Busy
-                        }
-                        crate::LimboError::Interrupt => ResultCode::Interrupt,
-                        _ => {
-                            tracing::error!("execute: failed to execute query: {:?}", err);
-                            ResultCode::Error
-                        }
-                    },
-                };
-                return rc;
             }
             Ok(None) => tracing::error!("query: no statement returned"),
             Err(e) => tracing::error!("query: failed to execute query: {:?}", e),
@@ -144,17 +144,13 @@ pub unsafe extern "C" fn stmt_bind_args_fn(ctx: *mut Stmt, idx: i32, arg: ExtVal
         tracing::error!("stmt_bind_args_fn: invalid index");
         return ResultCode::Error;
     };
-    if let Err(err) = stmt_ctx.bind_at(idx, owned_val) {
-        tracing::error!("stmt_bind_args_fn: failed to bind arg: {:?}", err);
-        return ResultCode::Error;
-    }
+    stmt_ctx.bind_at(idx, owned_val);
     ResultCode::OK
 }
 
 /// Wraps the functionality of the core Statement::step function,
 /// preferring to handle the IO step result internally to prevent having to expose
 /// run_once. Returns the equivalent ResultCode which then maps to an external StepResult.
-/// This function is blocking
 pub unsafe extern "C" fn stmt_step(stmt: *mut Stmt) -> ResultCode {
     let Ok(stmt) = Stmt::from_ptr(stmt) else {
         tracing::error!("stmt_step: failed to convert stmt to Stmt");
@@ -165,17 +161,23 @@ pub unsafe extern "C" fn stmt_step(stmt: *mut Stmt) -> ResultCode {
         return ResultCode::Error;
     }
     let stmt_ctx: &mut Statement = unsafe { &mut *(stmt._ctx as *mut Statement) };
-    let res = stmt_ctx.run_one_step_blocking(|| Ok(()), || Ok(()));
-    match res {
-        Ok(Some(_)) => ResultCode::Row,
-        Ok(None) => {
-            // Done
-            ResultCode::EOF
+    while let Ok(res) = stmt_ctx.step() {
+        match res {
+            StepResult::Row => return ResultCode::Row,
+            StepResult::Done => return ResultCode::EOF,
+            StepResult::IO => {
+                // always handle IO step result internally.
+                let res = stmt_ctx.run_once();
+                if res.is_err() {
+                    return ResultCode::Error;
+                }
+                continue;
+            }
+            StepResult::Interrupt => return ResultCode::Interrupt,
+            StepResult::Busy => return ResultCode::Busy,
         }
-        Err(LimboError::Interrupt) => ResultCode::Interrupt,
-        Err(LimboError::Busy) | Err(LimboError::StatementsInProgress(_)) => ResultCode::Busy,
-        Err(_) => ResultCode::Error,
     }
+    ResultCode::Error
 }
 
 /// Instead of returning a pointer to the row, sets the Stmt's 'cursor'/current_row
@@ -276,5 +278,5 @@ pub unsafe extern "C" fn stmt_close(stmt: *mut Stmt) {
     }
     // free the managed internal context
     let mut internal = Box::<Statement>::from_raw(wrapper._ctx.cast());
-    internal.reset_best_effort();
+    internal.reset();
 }

@@ -1,4 +1,5 @@
-#![doc(html_root_url = "https://docs.rs/prost-build/0.14.4")]
+#![doc(html_root_url = "https://docs.rs/prost-build/0.13.5")]
+#![allow(clippy::option_as_ref_deref, clippy::format_push_string)]
 
 //! `prost-build` compiles `.proto` files into Rust.
 //!
@@ -114,7 +115,7 @@
 //! PROTOC=/usr/local/bin/protoc
 //! ```
 //!
-//! Alternatively, the path to `protoc` executable can be explicitly set
+//! Alternatively, the path to `protoc` execuatable can be explicitly set
 //! via [`Config::protoc_executable()`].
 //!
 //! If `prost-build` can not find `protoc`
@@ -125,12 +126,11 @@
 //! ### Compiling `protoc` from source
 //!
 //! To compile `protoc` from source you can use the `protobuf-src` crate and
-//! set the path to `protoc`.
+//! set the correct environment variables.
 //! ```no_run,ignore, rust
-//! let mut prost_build = prost_build::Config::new();
-//! prost_build.protoc_executable(protobuf_src::protoc());
+//! std::env::set_var("PROTOC", protobuf_src::protoc());
 //!
-//! // Now compile your proto files with the configuration
+//! // Now compile your proto files via prost-build
 //! ```
 //!
 //! [`protobuf-src`]: https://docs.rs/protobuf-src
@@ -245,9 +245,9 @@ pub trait ServiceGenerator {
 /// ```
 ///
 /// [1]: https://doc.rust-lang.org/std/macro.include.html
-/// [2]: https://doc.rust-lang.org/cargo/reference/build-script-examples.html
-/// [3]: https://protobuf.dev/programming-guides/proto3/#importing
-/// [4]: https://protobuf.dev/programming-guides/proto3/#packages
+/// [2]: http://doc.crates.io/build-script.html#case-study-code-generation
+/// [3]: https://developers.google.com/protocol-buffers/docs/proto3#importing-definitions
+/// [4]: https://developers.google.com/protocol-buffers/docs/proto#packages
 pub fn compile_protos(protos: &[impl AsRef<Path>], includes: &[impl AsRef<Path>]) -> Result<()> {
     Config::new().compile_protos(protos, includes)
 }
@@ -275,7 +275,7 @@ pub fn compile_protos(protos: &[impl AsRef<Path>], includes: &[impl AsRef<Path>]
 ///
 /// [`protox`]: https://github.com/andrewhickman/protox
 /// [1]: https://doc.rust-lang.org/std/macro.include.html
-/// [2]: https://doc.rust-lang.org/cargo/reference/build-script-examples.html
+/// [2]: http://doc.crates.io/build-script.html#case-study-code-generation
 pub fn compile_fds(fds: FileDescriptorSet) -> Result<()> {
     Config::new().compile_fds(fds)
 }
@@ -283,13 +283,15 @@ pub fn compile_fds(fds: FileDescriptorSet) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::fs::File;
+    use std::io::Read;
     use std::rc::Rc;
 
     use super::*;
 
     macro_rules! assert_eq_fixture_file {
         ($expected_path:expr, $actual_path:expr) => {{
-            let actual = std::fs::read_to_string($actual_path).expect("Failed to read actual file");
+            let actual = std::fs::read_to_string($actual_path).unwrap();
 
             // Normalizes windows and Linux-style EOL
             let actual = actual.replace("\r\n", "\n");
@@ -300,14 +302,13 @@ mod tests {
 
     macro_rules! assert_eq_fixture_contents {
         ($expected_path:expr, $actual:expr) => {{
-            let expected =
-                std::fs::read_to_string($expected_path).expect("Failed to read expected file");
+            let expected = std::fs::read_to_string($expected_path).unwrap();
 
             // Normalizes windows and Linux-style EOL
             let expected = expected.replace("\r\n", "\n");
 
             if expected != $actual {
-                std::fs::write($expected_path, &$actual).expect("Failed to write expected file");
+                std::fs::write($expected_path, &$actual).unwrap();
             }
 
             assert_eq!(expected, $actual);
@@ -388,22 +389,6 @@ mod tests {
             .out_dir(tempdir.path())
             .compile_protos(&["src/fixtures/smoke_test/smoke_test.proto"], &["src"])
             .unwrap();
-
-        // Check all generated files against fixture
-        for entry in std::fs::read_dir(tempdir.path()).unwrap() {
-            let file = entry.unwrap();
-            let file_name = file.file_name().into_string().unwrap();
-
-            assert_eq!(file_name, "smoke_test.rs");
-            assert_eq_fixture_file!(
-                if cfg!(feature = "format") {
-                    "src/fixtures/smoke_test/_expected_smoke_test_formatted.rs"
-                } else {
-                    "src/fixtures/smoke_test/_expected_smoke_test.rs"
-                },
-                file.path()
-            );
-        }
     }
 
     #[test]
@@ -412,10 +397,10 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
 
         let state = Rc::new(RefCell::new(MockState::default()));
-        let generator = MockServiceGenerator::new(Rc::clone(&state));
+        let gen = MockServiceGenerator::new(Rc::clone(&state));
 
         Config::new()
-            .service_generator(Box::new(generator))
+            .service_generator(Box::new(gen))
             .include_file("_protos.rs")
             .out_dir(tempdir.path())
             .compile_protos(
@@ -468,29 +453,27 @@ mod tests {
 
         config.compile_fds(fds).unwrap();
 
-        // Check all generated files against fixture
-        for entry in std::fs::read_dir(tempdir.path()).unwrap() {
-            let file = entry.unwrap();
-            let file_name = file.file_name().into_string().unwrap();
-
-            assert_eq_fixture_file!(
-                format!("src/fixtures/helloworld/_expected_{file_name}"),
-                file.path()
-            );
-        }
+        assert_eq_fixture_file!(
+            if cfg!(feature = "format") {
+                "src/fixtures/helloworld/_expected_helloworld_formatted.rs"
+            } else {
+                "src/fixtures/helloworld/_expected_helloworld.rs"
+            },
+            tempdir.path().join("helloworld.rs")
+        );
     }
 
     #[test]
     fn test_generate_no_empty_outputs() {
         let _ = env_logger::try_init();
         let state = Rc::new(RefCell::new(MockState::default()));
-        let generator = MockServiceGenerator::new(Rc::clone(&state));
+        let gen = MockServiceGenerator::new(Rc::clone(&state));
         let include_file = "_include.rs";
         let tempdir = tempfile::tempdir().unwrap();
         let previously_empty_proto_path = tempdir.path().join(Path::new("google.protobuf.rs"));
 
         Config::new()
-            .service_generator(Box::new(generator))
+            .service_generator(Box::new(gen))
             .include_file(include_file)
             .out_dir(tempdir.path())
             .compile_protos(
@@ -501,25 +484,17 @@ mod tests {
 
         // Prior to PR introducing this test, the generated include file would have the file
         // google.protobuf.rs which was an empty file. Now that file should only exist if it has content
-        assert!(!std::fs::exists(previously_empty_proto_path).unwrap());
-
-        // Check all generated files against fixture
-        for entry in std::fs::read_dir(tempdir.path()).unwrap() {
-            let file = entry.unwrap();
-            let file_name = file.file_name().into_string().unwrap();
-            if file_name == include_file {
-                // `google.protobuf.rs` wasn't generated so the result include file should not reference it
-                assert_eq_fixture_file!(
-                    "src/fixtures/imports_empty/_expected_include.rs",
-                    file.path()
-                );
-            } else if file_name == "com.prost_test.test.v1.rs" {
-                let content = std::fs::read_to_string(file.path()).unwrap();
-                assert!(content.contains("struct TestConfig"));
-                assert!(content.contains("struct GetTestResponse"));
-            } else {
-                panic!("Found unexpected file: {}", file_name);
-            }
+        if let Ok(mut f) = File::open(previously_empty_proto_path) {
+            // Since this file was generated, it should not be empty.
+            let mut contents = String::new();
+            f.read_to_string(&mut contents).unwrap();
+            assert!(!contents.is_empty());
+        } else {
+            // The file wasn't generated so the result include file should not reference it
+            assert_eq_fixture_file!(
+                "src/fixtures/imports_empty/_expected_include.rs",
+                tempdir.path().join(Path::new(include_file))
+            );
         }
     }
 
@@ -554,12 +529,12 @@ mod tests {
 
         for _ in 1..10 {
             let state = Rc::new(RefCell::new(MockState::default()));
-            let generator = MockServiceGenerator::new(Rc::clone(&state));
+            let gen = MockServiceGenerator::new(Rc::clone(&state));
             let include_file = "_include.rs";
             let tempdir = tempfile::tempdir().unwrap();
 
             Config::new()
-                .service_generator(Box::new(generator))
+                .service_generator(Box::new(gen))
                 .include_file(include_file)
                 .out_dir(tempdir.path())
                 .compile_protos(
@@ -606,24 +581,5 @@ mod tests {
             .unwrap();
         let actual = String::from_utf8(buf).unwrap();
         assert_eq_fixture_contents!("src/fixtures/write_includes/_.includes.rs", actual);
-    }
-
-    #[test]
-    fn test_generate_deprecated() {
-        let _ = env_logger::try_init();
-        let tempdir = tempfile::tempdir().unwrap();
-
-        Config::new()
-            .out_dir(tempdir.path())
-            .compile_protos(
-                &["src/fixtures/deprecated/all_deprecated.proto"],
-                &["src/fixtures/deprecated"],
-            )
-            .unwrap();
-
-        assert_eq_fixture_file!(
-            "src/fixtures/deprecated/_all_deprecated.rs",
-            tempdir.path().join("all_deprecated.rs")
-        );
     }
 }

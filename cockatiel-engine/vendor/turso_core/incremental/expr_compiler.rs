@@ -2,19 +2,18 @@
 // This module provides utilities to compile SQL expressions into VDBE subprograms
 // that can be executed efficiently in the incremental computation context.
 
-use crate::numeric::Numeric;
 use crate::schema::Schema;
 use crate::storage::pager::Pager;
-use crate::sync::Arc;
-use crate::translate::emitter::{DoubleQuotedDml, Resolver};
+use crate::translate::emitter::Resolver;
 use crate::translate::expr::translate_expr;
 use crate::types::Text;
 use crate::vdbe::builder::{ProgramBuilder, ProgramBuilderOpts};
 use crate::vdbe::insn::Insn;
 use crate::vdbe::{Program, ProgramState, Register};
-use crate::{Connection, QueryMode, Result, Value};
-use crate::{DatabaseCatalog, RwLock, SymbolTable};
-use rustc_hash::FxHashMap as HashMap;
+use crate::SymbolTable;
+use crate::{CaptureDataChangesMode, Connection, QueryMode, Result, Value};
+use std::rc::Rc;
+use std::sync::Arc;
 use turso_parser::ast::{Expr, Literal, Operator};
 
 // Transform an expression to replace column references with Register expressions Why do we want to
@@ -62,7 +61,6 @@ fn transform_expr_for_dbsp(expr: &Expr, input_column_names: &[String]) -> Expr {
             distinctness,
             args,
             order_by,
-            within_group,
             filter_over,
         } => Expr::FunctionCall {
             name: name.clone(),
@@ -72,7 +70,6 @@ fn transform_expr_for_dbsp(expr: &Expr, input_column_names: &[String]) -> Expr {
                 .map(|arg| Box::new(transform_expr_for_dbsp(arg, input_column_names)))
                 .collect(),
             order_by: order_by.clone(),
-            within_group: within_group.clone(),
             filter_over: filter_over.clone(),
         },
         Expr::Parenthesized(exprs) => Expr::Parenthesized(
@@ -96,14 +93,14 @@ pub enum ExpressionExecutor {
 }
 
 /// Trivial expression that can be evaluated inline without VDBE
-/// Supports arithmetic operations with automatic type promotion (integer to float)
+/// Only supports operations where operands have the same type (no coercion)
 #[derive(Clone, Debug)]
 pub enum TrivialExpression {
     /// Direct column reference
     Column(usize),
     /// Immediate value
     Immediate(Value),
-    /// Binary operation on trivial expressions (supports type promotion)
+    /// Binary operation on trivial expressions (same-type operands only)
     Binary {
         left: Box<TrivialExpression>,
         op: Operator,
@@ -113,7 +110,7 @@ pub enum TrivialExpression {
 
 impl TrivialExpression {
     /// Evaluate the trivial expression with the given input values
-    /// Automatically promotes integers to floats when mixing types in arithmetic
+    /// Panics if type mismatch occurs (this indicates a bug in validation)
     pub fn evaluate(&self, values: &[Value]) -> Value {
         match self {
             TrivialExpression::Column(idx) => values.get(*idx).cloned().unwrap_or(Value::Null),
@@ -122,13 +119,44 @@ impl TrivialExpression {
                 let left_val = left.evaluate(values);
                 let right_val = right.evaluate(values);
 
-                // Use Value's exec_* methods which handle all type coercion
-                // (including Text → Numeric) consistently with SQLite semantics
+                // Only perform operations on same-type operands
                 match op {
-                    Operator::Add => left_val.exec_add(&right_val),
-                    Operator::Subtract => left_val.exec_subtract(&right_val),
-                    Operator::Multiply => left_val.exec_multiply(&right_val),
-                    Operator::Divide => left_val.exec_divide(&right_val),
+                    Operator::Add => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Value::Integer(a + b),
+                        (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                        (Value::Null, _) | (_, Value::Null) => Value::Null,
+                        _ => panic!("Type mismatch in trivial expression: {left_val:?} + {right_val:?}. This is a bug in trivial expression validation."),
+                    },
+                    Operator::Subtract => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Value::Integer(a - b),
+                        (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+                        (Value::Null, _) | (_, Value::Null) => Value::Null,
+                        _ => panic!("Type mismatch in trivial expression: {left_val:?} - {right_val:?}. This is a bug in trivial expression validation."),
+                    },
+                    Operator::Multiply => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => Value::Integer(a * b),
+                        (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+                        (Value::Null, _) | (_, Value::Null) => Value::Null,
+                        _ => panic!("Type mismatch in trivial expression: {left_val:?} * {right_val:?}. This is a bug in trivial expression validation."),
+                    },
+                    Operator::Divide => match (&left_val, &right_val) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            if *b != 0 {
+                                Value::Integer(a / b)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            if *b != 0.0 {
+                                Value::Float(a / b)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        (Value::Null, _) | (_, Value::Null) => Value::Null,
+                        _ => panic!("Type mismatch in trivial expression: {left_val:?} / {right_val:?}. This is a bug in trivial expression validation."),
+                    },
                     _ => panic!("Unsupported operator in trivial expression: {op:?}"),
                 }
             }
@@ -174,8 +202,8 @@ impl CompiledExpression {
         match expr {
             TrivialExpression::Column(_) => None, // Can't know column type statically
             TrivialExpression::Immediate(val) => match val {
-                Value::Numeric(Numeric::Integer(_)) => Some(TrivialType::Integer),
-                Value::Numeric(Numeric::Float(_)) => Some(TrivialType::Float),
+                Value::Integer(_) => Some(TrivialType::Integer),
+                Value::Float(_) => Some(TrivialType::Float),
                 Value::Text(_) => Some(TrivialType::Text),
                 Value::Null => Some(TrivialType::Null),
                 _ => None,
@@ -212,15 +240,15 @@ impl CompiledExpression {
                 let value = match lit {
                     Literal::Numeric(n) => {
                         if let Ok(i) = n.parse::<i64>() {
-                            Value::from_i64(i)
+                            Value::Integer(i)
                         } else if let Ok(f) = n.parse::<f64>() {
-                            Value::from_f64(f)
+                            Value::Float(f)
                         } else {
                             return None;
                         }
                     }
                     Literal::String(s) => {
-                        let cleaned = s.trim_matches('\'').trim_matches('"').to_string();
+                        let cleaned = s.trim_matches('\'').trim_matches('"');
                         Value::Text(Text::new(cleaned))
                     }
                     Literal::Null => Value::Null,
@@ -239,27 +267,23 @@ impl CompiledExpression {
                         let right_trivial = Self::try_get_trivial_expr(right, input_column_names)?;
 
                         // Check if we can determine types statically
-                        // For arithmetic operations, we allow mixing integers and floats
-                        // since we promote integers to floats as needed
+                        // If both are immediates, they must have the same type
+                        // If either is a column, we can't validate at compile time,
+                        // but we'll assert at runtime if there's a mismatch
                         if let (Some(left_type), Some(right_type)) = (
                             Self::get_trivial_type(&left_trivial),
                             Self::get_trivial_type(&right_trivial),
                         ) {
-                            // Both types are known - check if they're numeric or null
-                            let numeric_types = matches!(
-                                left_type,
-                                TrivialType::Integer | TrivialType::Float | TrivialType::Null
-                            ) && matches!(
-                                right_type,
-                                TrivialType::Integer | TrivialType::Float | TrivialType::Null
-                            );
-
-                            if !numeric_types {
-                                return None; // Non-numeric types - not trivial
+                            // Both types are known - they must match (or one is null)
+                            if left_type != right_type
+                                && left_type != TrivialType::Null
+                                && right_type != TrivialType::Null
+                            {
+                                return None; // Type mismatch - not trivial
                             }
                         }
                         // If we can't determine types (columns involved), we optimistically
-                        // assume they'll be compatible at runtime
+                        // assume they'll match at runtime (and assert if they don't)
 
                         Some(TrivialExpression::Binary {
                             left: Box::new(left_trivial),
@@ -303,8 +327,15 @@ impl CompiledExpression {
 
         // Fall back to VDBE compilation for complex expressions
         // Create a minimal program builder for expression compilation
-        let mut builder =
-            ProgramBuilder::new(QueryMode::Normal, None, ProgramBuilderOpts::new(0, 5, 0));
+        let mut builder = ProgramBuilder::new(
+            QueryMode::Normal,
+            CaptureDataChangesMode::Off,
+            ProgramBuilderOpts {
+                num_cursors: 0,
+                approx_num_insns: 5,  // Most expressions are simple
+                approx_num_labels: 0, // Expressions don't need labels
+            },
+        );
 
         // Allocate registers for input values
         let input_count = input_column_names.len();
@@ -321,18 +352,7 @@ impl CompiledExpression {
         let transformed_expr = transform_expr_for_dbsp(expr, input_column_names);
 
         // Create a resolver for translate_expr
-        let database_schemas = RwLock::new(HashMap::default());
-        let temp_database = RwLock::new(None);
-        let attached_databases = RwLock::new(DatabaseCatalog::new());
-        let resolver = Resolver::new(
-            schema,
-            &database_schemas,
-            &temp_database,
-            &attached_databases,
-            syms,
-            true,
-            DoubleQuotedDml::Enabled,
-        );
+        let resolver = Resolver::new(schema, syms);
 
         // Translate the transformed expression to bytecode
         translate_expr(
@@ -354,12 +374,10 @@ impl CompiledExpression {
         builder.emit_insn(Insn::Halt {
             err_code: 0,
             description: String::new(),
-            on_error: None,
-            description_reg: None,
         });
 
         // Build the program from the compiled expression bytecode
-        let program = Arc::new(builder.build(connection, false, "")?);
+        let program = Arc::new(builder.build(connection, false, ""));
 
         Ok(CompiledExpression {
             executor: ExpressionExecutor::Compiled(program),
@@ -368,7 +386,7 @@ impl CompiledExpression {
     }
 
     /// Execute the compiled expression with the given input values
-    pub fn execute(&self, values: &[Value], pager: Arc<Pager>) -> Result<Value> {
+    pub fn execute(&self, values: &[Value], pager: Rc<Pager>) -> Result<Value> {
         match &self.executor {
             ExpressionExecutor::Trivial(trivial) => {
                 // Fast path: evaluate trivial expression inline
@@ -394,12 +412,11 @@ impl CompiledExpression {
                 // Execute the program
                 let mut pc = 0usize;
                 while pc < program.insns.len() {
-                    let (insn, _) = &program.insns[pc];
-                    let insn_fn = insn.to_function();
+                    let (insn, insn_fn) = &program.insns[pc];
                     state.pc = pc as u32;
 
                     // Execute the instruction
-                    match insn_fn(program, &mut state, insn, &pager)? {
+                    match insn_fn(program, &mut state, insn, &pager, None)? {
                         crate::vdbe::execute::InsnFunctionStepResult::IO(_) => {
                             return Err(crate::LimboError::InternalError(
                                 "Expression evaluation encountered unexpected I/O".to_string(),
@@ -411,6 +428,16 @@ impl CompiledExpression {
                         crate::vdbe::execute::InsnFunctionStepResult::Row => {
                             return Err(crate::LimboError::InternalError(
                                 "Expression evaluation produced unexpected row".to_string(),
+                            ));
+                        }
+                        crate::vdbe::execute::InsnFunctionStepResult::Interrupt => {
+                            return Err(crate::LimboError::InternalError(
+                                "Expression evaluation was interrupted".to_string(),
+                            ));
+                        }
+                        crate::vdbe::execute::InsnFunctionStepResult::Busy => {
+                            return Err(crate::LimboError::InternalError(
+                                "Expression evaluation encountered busy state".to_string(),
                             ));
                         }
                         crate::vdbe::execute::InsnFunctionStepResult::Step => {
@@ -426,126 +453,5 @@ impl CompiledExpression {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_mixed_type_arithmetic() {
-        // Test integer - float
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-            op: Operator::Subtract,
-            right: Box::new(TrivialExpression::Immediate(Value::from_f64(0.5))),
-        };
-        let result = expr.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(0.5));
-
-        // Test float - integer
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_f64(2.5))),
-            op: Operator::Subtract,
-            right: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-        };
-        let result = expr.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(1.5));
-
-        // Test integer * float
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_i64(10))),
-            op: Operator::Multiply,
-            right: Box::new(TrivialExpression::Immediate(Value::from_f64(0.1))),
-        };
-        let result = expr.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(1.0));
-
-        // Test integer / float
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-            op: Operator::Divide,
-            right: Box::new(TrivialExpression::Immediate(Value::from_f64(2.0))),
-        };
-        let result = expr.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(0.5));
-
-        // Test integer + float
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-            op: Operator::Add,
-            right: Box::new(TrivialExpression::Immediate(Value::from_f64(0.5))),
-        };
-        let result = expr.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(1.5));
-    }
-
-    #[test]
-    fn test_nested_mixed_type_expressions() {
-        // Test nested expressions with mixed types: (1 - 0.04)
-        let one_minus_float = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-            op: Operator::Subtract,
-            right: Box::new(TrivialExpression::Immediate(Value::from_f64(0.04))),
-        };
-        let result = one_minus_float.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(0.96));
-
-        // Test multiplication with nested mixed-type expression: 100.0 * (1 - 0.04)
-        let nested_expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Immediate(Value::from_f64(100.0))),
-            op: Operator::Multiply,
-            right: Box::new(one_minus_float),
-        };
-        let result = nested_expr.evaluate(&[]);
-        assert_eq!(result, Value::from_f64(96.0));
-    }
-
-    #[test]
-    fn test_text_to_numeric_coercion_in_arithmetic() {
-        // Non-numeric text should coerce to 0 (SQLite behavior)
-        let values = vec![Value::Text(Text::new("hello".to_string()))];
-
-        // text - 1 => 0 - 1 = -1
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Column(0)),
-            op: Operator::Subtract,
-            right: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-        };
-        assert_eq!(expr.evaluate(&values), Value::from_i64(-1));
-
-        // text + 1 => 0 + 1 = 1
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Column(0)),
-            op: Operator::Add,
-            right: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-        };
-        assert_eq!(expr.evaluate(&values), Value::from_i64(1));
-
-        // text * 2 => 0 * 2 = 0
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Column(0)),
-            op: Operator::Multiply,
-            right: Box::new(TrivialExpression::Immediate(Value::from_i64(2))),
-        };
-        assert_eq!(expr.evaluate(&values), Value::from_i64(0));
-
-        // text / 2 => 0 / 2 = 0
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Column(0)),
-            op: Operator::Divide,
-            right: Box::new(TrivialExpression::Immediate(Value::from_i64(2))),
-        };
-        assert_eq!(expr.evaluate(&values), Value::from_i64(0));
-
-        // Numeric text "42" - 1 => 41
-        let numeric_text_values = vec![Value::Text(Text::new("42".to_string()))];
-        let expr = TrivialExpression::Binary {
-            left: Box::new(TrivialExpression::Column(0)),
-            op: Operator::Subtract,
-            right: Box::new(TrivialExpression::Immediate(Value::from_i64(1))),
-        };
-        assert_eq!(expr.evaluate(&numeric_text_values), Value::from_i64(41));
     }
 }

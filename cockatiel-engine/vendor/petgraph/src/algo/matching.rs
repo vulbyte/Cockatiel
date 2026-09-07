@@ -1,5 +1,5 @@
-use alloc::{collections::VecDeque, vec, vec::Vec};
-use core::hash::Hash;
+use std::collections::VecDeque;
+use std::hash::Hash;
 
 use crate::visit::{
     EdgeRef, GraphBase, IntoEdges, IntoNeighbors, IntoNodeIdentifiers, NodeCount, NodeIndexable,
@@ -184,28 +184,17 @@ where
     }
 }
 
-/// Compute a [*matching*](https://en.wikipedia.org/wiki/Matching_(graph_theory)) using a
+/// \[Generic\] Compute a
+/// [*matching*](https://en.wikipedia.org/wiki/Matching_(graph_theory)) using a
 /// greedy heuristic.
 ///
 /// The input graph is treated as if undirected. The underlying heuristic is
-/// unspecified, but is guaranteed to be bounded by **O(|V| + |E|)**. No
+/// unspecified, but is guaranteed to be bounded by *O(|V| + |E|)*. No
 /// guarantees about the output are given other than that it is a valid
 /// matching.
 ///
 /// If you require a maximum matching, use [`maximum_matching`][1] function
 /// instead.
-///
-/// # Arguments
-/// * `graph`: an undirected graph.
-///
-/// # Returns
-/// * [`struct@Matching`] calculated using greedy heuristic.
-///
-/// # Complexity
-/// * Time complexity: **O(|V| + |E|)**.
-/// * Auxiliary space: **O(|V|)**.
-///
-/// where **|V|** is the number of nodes and **|E|** is the number of edges.
 ///
 /// [1]: fn.maximum_matching.html
 pub fn greedy_matching<G>(graph: G) -> Matching<G>
@@ -266,9 +255,8 @@ where
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 enum Label<G: GraphBase> {
-    #[default]
     None,
     Start,
     // If node v is outer node, then label(v) = w is another outer node on path
@@ -284,7 +272,11 @@ enum Label<G: GraphBase> {
 
 impl<G: GraphBase> Label<G> {
     fn is_outer(&self) -> bool {
-        self != &Label::None && !matches!(self, Label::Flag(_))
+        self != &Label::None
+            && !match self {
+                Label::Flag(_) => true,
+                _ => false,
+            }
     }
 
     fn is_inner(&self) -> bool {
@@ -299,7 +291,16 @@ impl<G: GraphBase> Label<G> {
     }
 
     fn is_flagged(&self, edge: G::EdgeId) -> bool {
-        matches!(self, Label::Flag(flag) if flag == &edge)
+        match self {
+            Label::Flag(flag) if flag == &edge => true,
+            _ => false,
+        }
+    }
+}
+
+impl<G: GraphBase> Default for Label<G> {
+    fn default() -> Self {
+        Label::None
     }
 }
 
@@ -316,28 +317,17 @@ impl<G: GraphBase> PartialEq for Label<G> {
     }
 }
 
-/// Compute the [*maximum matching*](https://en.wikipedia.org/wiki/Matching_(graph_theory)) using
+/// \[Generic\] Compute the [*maximum
+/// matching*](https://en.wikipedia.org/wiki/Matching_(graph_theory)) using
 /// [Gabow's algorithm][1].
 ///
 /// [1]: https://dl.acm.org/doi/10.1145/321941.321942
 ///
 /// The input graph is treated as if undirected. The algorithm runs in
-/// **O(|V|³)**. An algorithm with a better time complexity might be used in the
+/// *O(|V|³)*. An algorithm with a better time complexity might be used in the
 /// future.
 ///
-/// **Panics** if `g.node_bound()` is `usize::MAX`.
-///
-/// # Arguments
-/// * `graph`: an undirected graph.
-///
-/// # Returns
-/// * [`struct@Matching`]: computed maximum matching.
-///
-/// # Complexity
-/// * Time complexity: **O(|V|³)**.
-/// * Auxiliary space: **O(|V| + |E|)**.
-///
-/// where **|V|** is the number of nodes and **|E|** is the number of edges.
+/// **Panics** if `g.node_bound()` is `std::usize::MAX`.
 ///
 /// # Examples
 ///
@@ -377,8 +367,8 @@ where
     // The dummy identifier needs an unused index
     assert_ne!(
         graph.node_bound(),
-        usize::MAX,
-        "The input graph capacity should be strictly less than core::usize::MAX."
+        std::usize::MAX,
+        "The input graph capacity should be strictly less than std::usize::MAX."
     );
 
     // Greedy algorithm should create a fairly good initial matching. The hope
@@ -392,12 +382,8 @@ where
     debug_assert_eq!(mate.len(), len);
 
     let mut label: Vec<Label<G>> = vec![Label::None; len];
-    let mut first_inner = vec![usize::MAX; len];
+    let mut first_inner = vec![std::usize::MAX; len];
     let visited = &mut graph.visit_map();
-
-    // Queue will contain outer vertices that should be processed next.
-    // The queue is cleared after each iteration of the main loop.
-    let mut queue = VecDeque::new();
 
     for start in 0..graph.node_bound() {
         if mate[start].is_some() {
@@ -413,7 +399,9 @@ where
         // start is never a dummy index
         let start = graph.from_index(start);
 
-        // The start vertex is considered a first outer vertex on each iteration.
+        // Queue will contain outer vertices that should be processed next. The
+        // start vertex is considered an outer vertex.
+        let mut queue = VecDeque::new();
         queue.push_back(start);
         // Mark the start vertex so it is not processed repeatedly.
         visited.visit(start);
@@ -489,8 +477,6 @@ where
         for lbl in label.iter_mut() {
             *lbl = Label::None;
         }
-
-        queue.clear();
     }
 
     // Discard the dummy node.
@@ -535,7 +521,7 @@ fn find_join<G, F>(
     let join = loop {
         // Swap the sides. Do not swap if the right side is already finished.
         if right != graph.dummy_idx() {
-            core::mem::swap(&mut left, &mut right);
+            std::mem::swap(&mut left, &mut right);
         }
 
         // Set left to the next inner vertex in P(source) or P(target).

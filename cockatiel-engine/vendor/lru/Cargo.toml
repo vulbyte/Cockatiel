@@ -10,9 +10,8 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-rust-version = "1.70.0"
 name = "lru"
-version = "0.16.4"
+version = "0.12.5"
 authors = ["Jerome Froelich <jeromefroelic@hotmail.com>"]
 description = "A LRU cache implementation"
 homepage = "https://github.com/jeromefroe/lru-rs"
@@ -30,7 +29,7 @@ license = "MIT"
 repository = "https://github.com/jeromefroe/lru-rs.git"
 
 [dependencies.hashbrown]
-version = "0.16.0"
+version = "0.15"
 optional = true
 
 [dev-dependencies.scoped_threadpool]

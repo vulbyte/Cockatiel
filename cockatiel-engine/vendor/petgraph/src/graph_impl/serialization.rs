@@ -1,15 +1,18 @@
-use alloc::vec::Vec;
-use core::marker::PhantomData;
+use serde::de::Error;
 
-use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use std::marker::PhantomData;
+
+use crate::prelude::*;
+
+use crate::graph::Node;
+use crate::graph::{Edge, IndexType};
+use crate::serde_utils::CollectSeqWithLength;
+use crate::serde_utils::MappedSequenceVisitor;
+use crate::serde_utils::{FromDeserialized, IntoSerializable};
+use crate::EdgeType;
 
 use super::{EdgeIndex, NodeIndex};
-use crate::graph::{Edge, IndexType, Node};
-use crate::prelude::*;
-use crate::serde_utils::{
-    CollectSeqWithLength, FromDeserialized, IntoSerializable, MappedSequenceVisitor,
-};
-use crate::EdgeType;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Serialization representation for Graph
 /// Keep in sync with deserialization and StableGraph
@@ -273,8 +276,9 @@ where
     E: Error,
 {
     E::custom(format_args!(
-        "invalid value: node index `{node_index}` does not exist in graph \
-         with node bound {len}",
+        "invalid value: node index `{}` does not exist in graph \
+         with node bound {}",
+        node_index, len
     ))
 }
 
@@ -283,7 +287,8 @@ where
     E: Error,
 {
     E::custom(format_args!(
-        "invalid value: node hole `{node_index}` is not allowed.",
+        "invalid value: node hole `{}` is not allowed.",
+        node_index
     ))
 }
 
@@ -300,7 +305,7 @@ where
     ))
 }
 
-impl<N, E, Ty, Ix> FromDeserialized for Graph<N, E, Ty, Ix>
+impl<'a, N, E, Ty, Ix> FromDeserialized for Graph<N, E, Ty, Ix>
 where
     Ix: IndexType,
     Ty: EdgeType,
@@ -321,7 +326,11 @@ where
             Err(invalid_length_err::<Ix, _>("edge", edges.len()))?
         }
 
-        let mut gr = Graph { nodes, edges, ty };
+        let mut gr = Graph {
+            nodes: nodes,
+            edges: edges,
+            ty: ty,
+        };
         let nc = gr.node_count();
         gr.link_edges()
             .map_err(|i| invalid_node_err(i.index(), nc))?;

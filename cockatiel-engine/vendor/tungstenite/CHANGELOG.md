@@ -1,8 +1,25 @@
-# Unreleased
+# 0.24.0
+
+- Raised MSRV to 1.63 to match `tokio-tungstenite`.
+- Connecting to WSS URL without TLS features specified results in a better error.
+- Handshake will now flush after completion to be safe (works better with buffered streams).
+
+# 0.23.0
+
+- Disable default features for `rustls` giving the user more flexibility.
+
+# 0.22.0
+- Make `url` optional.
+- Add a builder for convenient headers and subprotocols construction.
+- Update `rustls` dependency.
+
+# 0.21.0
 - Fix read-predominant auto pong responses not flushing when hitting WouldBlock errors.
 - Improve `FrameHeader::format` write correctness.
-- Up minimum _rustls_ to `0.21.6`.
-- Update _webpki-roots_ to `0.26`.
+- Update `rustls` to `0.22`.
+- Update `webpki-roots` to `0.26`.
+- Update `rustls-native-certs` to `0.7`.
+- Update `http` to `1.0.0`.
 
 # 0.20.1
 - Fixes [CVE-2023-43669](https://github.com/snapview/tungstenite-rs/pull/379).

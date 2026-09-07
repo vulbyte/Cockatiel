@@ -202,10 +202,9 @@ fn time_date_internal(args: &[Value]) -> Value {
         FixedOffset::east_opt(0).unwrap(),
     );
 
-    match tri!(t) {
-        Some(t) => t.into_blob(),
-        None => Value::null(),
-    }
+    let t = tri!(t);
+
+    t.into_blob()
 }
 
 #[scalar(name = "time_date")]
@@ -836,10 +835,7 @@ fn time_trunc(args: &[Value]) -> Value {
 
             let field = tri!(TimeRoundField::from_str(field));
 
-            match tri!(t.trunc_field(field)) {
-                Some(t) => t.into_blob(),
-                None => Value::null(),
-            }
+            tri!(t.trunc_field(field)).into_blob()
         }
         ValueType::Integer => {
             let duration = ok_tri!(args[1].to_integer());

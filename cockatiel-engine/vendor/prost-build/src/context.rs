@@ -19,7 +19,6 @@ pub struct Context<'a> {
     config: &'a mut Config,
     message_graph: MessageGraph,
     extern_paths: ExternPaths,
-    prost_path_attribute: Option<String>,
 }
 
 impl<'a> Context<'a> {
@@ -28,16 +27,10 @@ impl<'a> Context<'a> {
         message_graph: MessageGraph,
         extern_paths: ExternPaths,
     ) -> Self {
-        let prost_path_attribute = config
-            .prost_path
-            .as_deref()
-            .map(|prost_path| format!(r#"#[prost(prost_path = "{prost_path}")]"#));
-
         Self {
             config,
             message_graph,
             extern_paths,
-            prost_path_attribute,
         }
     }
 
@@ -50,11 +43,7 @@ impl<'a> Context<'a> {
     }
 
     pub fn prost_path(&self) -> &str {
-        self.config.prost_path_or_default()
-    }
-
-    pub fn prost_path_attribute(&self) -> Option<&str> {
-        self.prost_path_attribute.as_deref()
+        self.config.prost_path.as_deref().unwrap_or("::prost")
     }
 
     pub fn resolve_extern_ident(&self, pb_ident: &str) -> Option<String> {
@@ -152,12 +141,10 @@ impl<'a> Context<'a> {
         oneof: Option<&str>,
         field: &FieldDescriptorProto,
     ) -> bool {
-        if field.label() == Label::Repeated {
-            // Repeated field are stored in Vec, therefore it is already heap allocated
-            return false;
-        }
+        let repeated = field.label() == Label::Repeated;
         let fd_type = field.r#type();
-        if (fd_type == Type::Message || fd_type == Type::Group)
+        if !repeated
+            && (fd_type == Type::Message || fd_type == Type::Group)
             && self
                 .message_graph
                 .is_nested(field.type_name(), fq_message_name)
@@ -174,6 +161,13 @@ impl<'a> Context<'a> {
             .get_first_field(&config_path, field.name())
             .is_some()
         {
+            if repeated {
+                println!(
+                    "cargo:warning=\
+                    Field X is repeated and manually marked as boxed. \
+                    This is deprecated and support will be removed in a later release"
+                );
+            }
             return true;
         }
         false
@@ -236,51 +230,6 @@ impl<'a> Context<'a> {
                     | Type::Sfixed64
                     | Type::Bool
                     | Type::Enum
-            )
-        }
-    }
-
-    /// Returns `true` if this message can automatically derive Eq trait.
-    pub fn can_message_derive_eq(&self, fq_message_name: &str) -> bool {
-        assert_eq!(".", &fq_message_name[..1]);
-
-        let msg = self.message_graph.get_message(fq_message_name).unwrap();
-        msg.field
-            .iter()
-            .all(|field| self.can_field_derive_eq(fq_message_name, field))
-    }
-
-    /// Returns `true` if the type of this field allows deriving the Eq trait.
-    pub fn can_field_derive_eq(&self, fq_message_name: &str, field: &FieldDescriptorProto) -> bool {
-        assert_eq!(".", &fq_message_name[..1]);
-
-        if field.r#type() == Type::Message {
-            if field.label() == Label::Repeated
-                || self
-                    .message_graph
-                    .is_nested(field.type_name(), fq_message_name)
-            {
-                false
-            } else {
-                self.can_message_derive_eq(field.type_name())
-            }
-        } else {
-            matches!(
-                field.r#type(),
-                Type::Int32
-                    | Type::Int64
-                    | Type::Uint32
-                    | Type::Uint64
-                    | Type::Sint32
-                    | Type::Sint64
-                    | Type::Fixed32
-                    | Type::Fixed64
-                    | Type::Sfixed32
-                    | Type::Sfixed64
-                    | Type::Bool
-                    | Type::Enum
-                    | Type::String
-                    | Type::Bytes
             )
         }
     }

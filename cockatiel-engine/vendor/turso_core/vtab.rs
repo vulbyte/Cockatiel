@@ -1,11 +1,13 @@
+use crate::json::vtab::JsonEachVirtualTable;
 use crate::pragma::{PragmaVirtualTable, PragmaVirtualTableCursor};
 use crate::schema::Column;
-use crate::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use crate::sync::{Arc, RwLock, Weak};
 use crate::util::columns_from_create_table_body;
 use crate::{Connection, LimboError, SymbolTable, Value};
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::rc::Rc;
+use std::sync::Arc;
 use turso_ext::{ConstraintInfo, IndexInfo, OrderByInfo, ResultCode, VTabKind, VTabModuleImpl};
 use turso_parser::{ast, parser::Parser};
 
@@ -13,7 +15,7 @@ use turso_parser::{ast, parser::Parser};
 pub(crate) enum VirtualTableType {
     Pragma(PragmaVirtualTable),
     External(ExtVirtualTable),
-    Internal(Arc<RwLock<dyn InternalVirtualTable>>),
+    Internal(Arc<RefCell<dyn InternalVirtualTable>>),
 }
 
 #[derive(Clone, Debug)]
@@ -21,19 +23,11 @@ pub struct VirtualTable {
     pub(crate) name: String,
     pub(crate) columns: Vec<Column>,
     pub(crate) kind: VTabKind,
-    pub(crate) vtab_type: VirtualTableType,
-    // identifier to tie a cursor to a specific instantiated virtual table instance
-    pub(crate) vtab_id: u64,
-    // Whether this virtual table is safe to use from within triggers and views.
-    // Corresponds to SQLite's SQLITE_VTAB_INNOCUOUS flag.
-    pub(crate) innocuous: bool,
+    vtab_type: VirtualTableType,
 }
 
 impl VirtualTable {
-    pub(crate) fn id(&self) -> u64 {
-        self.vtab_id
-    }
-    pub(crate) fn readonly(&self) -> bool {
+    pub(crate) fn readonly(self: &Arc<VirtualTable>) -> bool {
         match &self.vtab_type {
             VirtualTableType::Pragma(_) => true,
             VirtualTableType::External(table) => table.readonly(),
@@ -41,25 +35,40 @@ impl VirtualTable {
         }
     }
 
-    /// Wrap an `InternalVirtualTable` implementation so it can appear in a
-    /// `Schema`'s catalog. The table's `name()` becomes the catalog name and
-    /// its `sql()` is parsed to derive the column metadata. Returns an error
-    /// if the SQL string is not a valid `CREATE TABLE` statement.
-    pub(crate) fn wrap_internal_table<T>(table: T) -> crate::Result<Arc<VirtualTable>>
-    where
-        T: InternalVirtualTable + 'static,
-    {
-        let name = table.name();
-        let sql = table.sql();
-        let columns = Self::resolve_columns(sql)?;
-        Ok(Arc::new(VirtualTable {
-            name,
-            columns,
+    pub(crate) fn builtin_functions() -> Vec<Arc<VirtualTable>> {
+        let mut vtables: Vec<Arc<VirtualTable>> = PragmaVirtualTable::functions()
+            .into_iter()
+            .map(|(tab, schema)| {
+                let vtab = VirtualTable {
+                    name: format!("pragma_{}", tab.pragma_name),
+                    columns: Self::resolve_columns(schema)
+                        .expect("pragma table-valued function schema resolution should not fail"),
+                    kind: VTabKind::TableValuedFunction,
+                    vtab_type: VirtualTableType::Pragma(tab),
+                };
+                Arc::new(vtab)
+            })
+            .collect();
+
+        #[cfg(feature = "json")]
+        vtables.extend(Self::json_virtual_tables());
+
+        vtables
+    }
+
+    #[cfg(feature = "json")]
+    fn json_virtual_tables() -> Vec<Arc<VirtualTable>> {
+        let json_each = JsonEachVirtualTable {};
+
+        let json_each_virtual_table = VirtualTable {
+            name: json_each.name(),
+            columns: Self::resolve_columns(json_each.sql())
+                .expect("internal table-valued function schema resolution should not fail"),
             kind: VTabKind::TableValuedFunction,
-            vtab_type: VirtualTableType::Internal(Arc::new(RwLock::new(table))),
-            vtab_id: 0,
-            innocuous: true,
-        }))
+            vtab_type: VirtualTableType::Internal(Arc::new(RefCell::new(json_each))),
+        };
+
+        vec![Arc::new(json_each_virtual_table)]
     }
 
     pub(crate) fn function(name: &str, syms: &SymbolTable) -> crate::Result<Arc<VirtualTable>> {
@@ -78,8 +87,6 @@ impl VirtualTable {
             columns: Self::resolve_columns(schema)?,
             kind: VTabKind::TableValuedFunction,
             vtab_type,
-            vtab_id: 0,
-            innocuous: false,
         };
         Ok(Arc::new(vtab))
     }
@@ -98,21 +105,15 @@ impl VirtualTable {
             columns: Self::resolve_columns(schema)?,
             kind: VTabKind::VirtualTable,
             vtab_type: VirtualTableType::External(table),
-            vtab_id: VTAB_ID_COUNTER.fetch_add(1, Ordering::Acquire),
-            innocuous: false,
         };
         Ok(Arc::new(vtab))
     }
 
-    pub(crate) fn resolve_columns(schema: String) -> crate::Result<Vec<Column>> {
+    fn resolve_columns(schema: String) -> crate::Result<Vec<Column>> {
         let mut parser = Parser::new(schema.as_bytes());
-        if let ast::Cmd::Stmt(ast::Stmt::CreateTable { body, .. }) =
-            parser.next_cmd()?.ok_or_else(|| {
-                LimboError::ParseError(
-                    "Failed to parse schema from virtual table module".to_string(),
-                )
-            })?
-        {
+        if let ast::Cmd::Stmt(ast::Stmt::CreateTable { body, .. }) = parser.next_cmd()?.ok_or(
+            LimboError::ParseError("Failed to parse schema from virtual table module".to_string()),
+        )? {
             columns_from_create_table_body(&body)
         } else {
             Err(LimboError::ParseError(
@@ -124,13 +125,13 @@ impl VirtualTable {
     pub(crate) fn open(&self, conn: Arc<Connection>) -> crate::Result<VirtualTableCursor> {
         match &self.vtab_type {
             VirtualTableType::Pragma(table) => {
-                Ok(VirtualTableCursor::new_pragma(table.open(conn)?))
+                Ok(VirtualTableCursor::Pragma(Box::new(table.open(conn)?)))
             }
-            VirtualTableType::External(table) => Ok(VirtualTableCursor::new_external(
-                table.open(conn, self.vtab_id)?,
-            )),
+            VirtualTableType::External(table) => {
+                Ok(VirtualTableCursor::External(table.open(conn.clone())?))
+            }
             VirtualTableType::Internal(table) => {
-                Ok(VirtualTableCursor::new_internal(table.read().open(conn)?))
+                Ok(VirtualTableCursor::Internal(table.borrow().open(conn)?))
             }
         }
     }
@@ -159,123 +160,39 @@ impl VirtualTable {
         match &self.vtab_type {
             VirtualTableType::Pragma(table) => table.best_index(constraints),
             VirtualTableType::External(table) => table.best_index(constraints, order_by),
-            VirtualTableType::Internal(table) => table.read().best_index(constraints, order_by),
-        }
-    }
-
-    pub(crate) fn begin(&self) -> crate::Result<()> {
-        match &self.vtab_type {
-            VirtualTableType::Pragma(_) => Err(LimboError::ExtensionError(
-                "Pragma virtual tables do not support transactions".to_string(),
-            )),
-            VirtualTableType::External(table) => table.begin(),
-            VirtualTableType::Internal(_) => Err(LimboError::ExtensionError(
-                "Internal virtual tables currently do not support transactions".to_string(),
-            )),
-        }
-    }
-
-    pub(crate) fn commit(&self) -> crate::Result<()> {
-        match &self.vtab_type {
-            VirtualTableType::Pragma(_) => Err(LimboError::ExtensionError(
-                "Pragma virtual tables do not support transactions".to_string(),
-            )),
-            VirtualTableType::External(table) => table.commit(),
-            VirtualTableType::Internal(_) => Err(LimboError::ExtensionError(
-                "Internal virtual tables currently do not support transactions".to_string(),
-            )),
-        }
-    }
-
-    pub(crate) fn rollback(&self) -> crate::Result<()> {
-        match &self.vtab_type {
-            VirtualTableType::Pragma(_) => Err(LimboError::ExtensionError(
-                "Pragma virtual tables do not support transactions".to_string(),
-            )),
-            VirtualTableType::External(table) => table.rollback(),
-            VirtualTableType::Internal(_) => Err(LimboError::ExtensionError(
-                "Internal virtual tables currently do not support transactions".to_string(),
-            )),
-        }
-    }
-
-    pub(crate) fn rename(&self, new_name: &str) -> crate::Result<()> {
-        match &self.vtab_type {
-            VirtualTableType::Pragma(_) => Err(LimboError::ExtensionError(
-                "Pragma virtual tables do not support renaming".to_string(),
-            )),
-            VirtualTableType::External(table) => table.rename(new_name),
-            VirtualTableType::Internal(_) => Err(LimboError::ExtensionError(
-                "Internal virtual tables currently do not support renaming".to_string(),
-            )),
+            VirtualTableType::Internal(table) => table.borrow().best_index(constraints, order_by),
         }
     }
 }
 
-enum VirtualTableCursorInner {
+pub enum VirtualTableCursor {
     Pragma(Box<PragmaVirtualTableCursor>),
     External(ExtVirtualTableCursor),
-    Internal(Arc<RwLock<dyn InternalVirtualTableCursor>>),
+    Internal(Arc<RefCell<dyn InternalVirtualTableCursor>>),
 }
-
-pub struct VirtualTableCursor {
-    inner: VirtualTableCursorInner,
-    null_flag: bool,
-}
-
-crate::assert::assert_send_sync!(VirtualTableCursor);
 
 impl VirtualTableCursor {
-    pub(crate) fn new_pragma(cursor: PragmaVirtualTableCursor) -> Self {
-        Self {
-            inner: VirtualTableCursorInner::Pragma(Box::new(cursor)),
-            null_flag: false,
-        }
-    }
-
-    pub(crate) fn new_external(cursor: ExtVirtualTableCursor) -> Self {
-        Self {
-            inner: VirtualTableCursorInner::External(cursor),
-            null_flag: false,
-        }
-    }
-
-    pub(crate) fn new_internal(cursor: Arc<RwLock<dyn InternalVirtualTableCursor>>) -> Self {
-        Self {
-            inner: VirtualTableCursorInner::Internal(cursor),
-            null_flag: false,
-        }
-    }
-
-    pub(crate) fn set_null_flag(&mut self, flag: bool) {
-        self.null_flag = flag;
-    }
-
     pub(crate) fn next(&mut self) -> crate::Result<bool> {
-        self.null_flag = false;
-        match &mut self.inner {
-            VirtualTableCursorInner::Pragma(cursor) => cursor.next(),
-            VirtualTableCursorInner::External(cursor) => cursor.next(),
-            VirtualTableCursorInner::Internal(cursor) => cursor.write().next(),
+        match self {
+            VirtualTableCursor::Pragma(cursor) => cursor.next(),
+            VirtualTableCursor::External(cursor) => cursor.next(),
+            VirtualTableCursor::Internal(cursor) => cursor.borrow_mut().next(),
         }
     }
 
     pub(crate) fn rowid(&self) -> i64 {
-        match &self.inner {
-            VirtualTableCursorInner::Pragma(cursor) => cursor.rowid(),
-            VirtualTableCursorInner::External(cursor) => cursor.rowid(),
-            VirtualTableCursorInner::Internal(cursor) => cursor.read().rowid(),
+        match self {
+            VirtualTableCursor::Pragma(cursor) => cursor.rowid(),
+            VirtualTableCursor::External(cursor) => cursor.rowid(),
+            VirtualTableCursor::Internal(cursor) => cursor.borrow().rowid(),
         }
     }
 
     pub(crate) fn column(&self, column: usize) -> crate::Result<Value> {
-        if self.null_flag {
-            return Ok(Value::Null);
-        }
-        match &self.inner {
-            VirtualTableCursorInner::Pragma(cursor) => cursor.column(column),
-            VirtualTableCursorInner::External(cursor) => cursor.column(column),
-            VirtualTableCursorInner::Internal(cursor) => cursor.read().column(column),
+        match self {
+            VirtualTableCursor::Pragma(cursor) => cursor.column(column),
+            VirtualTableCursor::External(cursor) => cursor.column(column),
+            VirtualTableCursor::Internal(cursor) => cursor.borrow().column(column),
         }
     }
 
@@ -286,41 +203,22 @@ impl VirtualTableCursor {
         arg_count: usize,
         args: Vec<Value>,
     ) -> crate::Result<bool> {
-        self.null_flag = false;
-        match &mut self.inner {
-            VirtualTableCursorInner::Pragma(cursor) => cursor.filter(args),
-            VirtualTableCursorInner::External(cursor) => {
+        match self {
+            VirtualTableCursor::Pragma(cursor) => cursor.filter(args),
+            VirtualTableCursor::External(cursor) => {
                 cursor.filter(idx_num, idx_str, arg_count, args)
             }
-            VirtualTableCursorInner::Internal(cursor) => {
-                cursor.write().filter(&args, idx_str, idx_num)
+            VirtualTableCursor::Internal(cursor) => {
+                cursor.borrow_mut().filter(&args, idx_str, idx_num)
             }
         }
     }
-
-    pub(crate) fn vtab_id(&self) -> Option<u64> {
-        match &self.inner {
-            VirtualTableCursorInner::Pragma(_) => None,
-            VirtualTableCursorInner::External(cursor) => cursor.vtab_id.into(),
-            VirtualTableCursorInner::Internal(_) => None,
-        }
-    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ExtVirtualTable {
-    implementation: Arc<VTabModuleImpl>,
-    table_ptr: AtomicPtr<c_void>,
-}
-static VTAB_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-impl Clone for ExtVirtualTable {
-    fn clone(&self) -> Self {
-        Self {
-            implementation: self.implementation.clone(),
-            table_ptr: AtomicPtr::new(self.table_ptr.load(Ordering::SeqCst)),
-        }
-    }
+    implementation: Rc<VTabModuleImpl>,
+    table_ptr: *const c_void,
 }
 
 impl ExtVirtualTable {
@@ -345,13 +243,13 @@ impl ExtVirtualTable {
     /// takes ownership of the provided Args
     fn create(
         module_name: &str,
-        module: Option<&Arc<crate::ext::VTabImpl>>,
+        module: Option<&Rc<crate::ext::VTabImpl>>,
         args: Vec<turso_ext::Value>,
         kind: VTabKind,
     ) -> crate::Result<(Self, String)> {
-        let module = module.ok_or_else(|| {
-            LimboError::ExtensionError(format!("Virtual table module not found: {module_name}"))
-        })?;
+        let module = module.ok_or(LimboError::ExtensionError(format!(
+            "Virtual table module not found: {module_name}"
+        )))?;
         if kind != module.module_kind {
             let expected = match kind {
                 VTabKind::VirtualTable => "virtual table",
@@ -364,14 +262,14 @@ impl ExtVirtualTable {
         let (schema, table_ptr) = module.implementation.create(args)?;
         let vtab = ExtVirtualTable {
             implementation: module.implementation.clone(),
-            table_ptr: AtomicPtr::new(table_ptr as *mut c_void),
+            table_ptr,
         };
         Ok((vtab, schema))
     }
 
     /// Accepts a pointer connection that owns the VTable, that the module
     /// can optionally use to query the other tables.
-    fn open(&self, conn: Arc<Connection>, id: u64) -> crate::Result<ExtVirtualTableCursor> {
+    fn open(&self, conn: Arc<Connection>) -> crate::Result<ExtVirtualTableCursor> {
         // we need a Weak<Connection> to upgrade and call from the extension.
         let weak = Arc::downgrade(&conn);
         let weak_box = Box::into_raw(Box::new(weak));
@@ -383,14 +281,11 @@ impl ExtVirtualTable {
         let ext_conn_ptr = NonNull::new(Box::into_raw(Box::new(conn))).expect("null pointer");
         // store the leaked connection pointer on the table so it can be freed on drop
         let Some(cursor) = NonNull::new(unsafe {
-            (self.implementation.open)(
-                self.table_ptr.load(Ordering::SeqCst) as *const c_void,
-                ext_conn_ptr.as_ptr(),
-            ) as *mut c_void
+            (self.implementation.open)(self.table_ptr, ext_conn_ptr.as_ptr()) as *mut c_void
         }) else {
             return Err(LimboError::ExtensionError("Open returned null".to_string()));
         };
-        ExtVirtualTableCursor::new(cursor, ext_conn_ptr, self.implementation.clone(), id)
+        ExtVirtualTableCursor::new(cursor, ext_conn_ptr, self.implementation.clone())
     }
 
     fn update(&self, args: &[Value]) -> crate::Result<Option<i64>> {
@@ -399,7 +294,7 @@ impl ExtVirtualTable {
         let newrowid = 0i64;
         let rc = unsafe {
             (self.implementation.update)(
-                self.table_ptr.load(Ordering::SeqCst) as *const c_void,
+                self.table_ptr,
                 arg_count as i32,
                 ext_args.as_ptr(),
                 &newrowid as *const _ as *mut i64,
@@ -418,47 +313,10 @@ impl ExtVirtualTable {
     }
 
     fn destroy(&self) -> crate::Result<()> {
-        let rc = unsafe {
-            (self.implementation.destroy)(self.table_ptr.load(Ordering::SeqCst) as *const c_void)
-        };
+        let rc = unsafe { (self.implementation.destroy)(self.table_ptr) };
         match rc {
             ResultCode::OK => Ok(()),
             _ => Err(LimboError::ExtensionError(rc.to_string())),
-        }
-    }
-
-    fn commit(&self) -> crate::Result<()> {
-        let rc = unsafe { (self.implementation.commit)(self.table_ptr.load(Ordering::SeqCst)) };
-        match rc {
-            ResultCode::OK => Ok(()),
-            _ => Err(LimboError::ExtensionError("Commit failed".to_string())),
-        }
-    }
-
-    fn begin(&self) -> crate::Result<()> {
-        let rc = unsafe { (self.implementation.begin)(self.table_ptr.load(Ordering::SeqCst)) };
-        match rc {
-            ResultCode::OK => Ok(()),
-            _ => Err(LimboError::ExtensionError("Begin failed".to_string())),
-        }
-    }
-
-    fn rollback(&self) -> crate::Result<()> {
-        let rc = unsafe { (self.implementation.rollback)(self.table_ptr.load(Ordering::SeqCst)) };
-        match rc {
-            ResultCode::OK => Ok(()),
-            _ => Err(LimboError::ExtensionError("Rollback failed".to_string())),
-        }
-    }
-
-    fn rename(&self, new_name: &str) -> crate::Result<()> {
-        let c_new_name = std::ffi::CString::new(new_name).unwrap();
-        let rc = unsafe {
-            (self.implementation.rename)(self.table_ptr.load(Ordering::SeqCst), c_new_name.as_ptr())
-        };
-        match rc {
-            ResultCode::OK => Ok(()),
-            _ => Err(LimboError::ExtensionError("Rename failed".to_string())),
         }
     }
 }
@@ -468,28 +326,19 @@ pub struct ExtVirtualTableCursor {
     // the core `[Connection]` pointer the vtab module needs to
     // query other internal tables.
     conn_ptr: Option<NonNull<turso_ext::Conn>>,
-    implementation: Arc<VTabModuleImpl>,
-    vtab_id: u64,
+    implementation: Rc<VTabModuleImpl>,
 }
-
-// SAFETY: Extension provider must guarantee Send + Sync on their side
-// we cannot properly infer Send + Sync for dynamic libraries
-unsafe impl Send for ExtVirtualTableCursor {}
-unsafe impl Sync for ExtVirtualTableCursor {}
-crate::assert::assert_send_sync!(ExtVirtualTableCursor);
 
 impl ExtVirtualTableCursor {
     fn new(
         cursor: NonNull<c_void>,
         conn_ptr: NonNull<turso_ext::Conn>,
-        implementation: Arc<VTabModuleImpl>,
-        id: u64,
+        implementation: Rc<VTabModuleImpl>,
     ) -> crate::Result<Self> {
         Ok(Self {
             cursor,
             conn_ptr: Some(conn_ptr),
             implementation,
-            vtab_id: id,
         })
     }
 
@@ -507,22 +356,16 @@ impl ExtVirtualTableCursor {
     ) -> crate::Result<bool> {
         tracing::trace!("xFilter");
         let ext_args = args.iter().map(|arg| arg.to_ffi()).collect::<Vec<_>>();
-        let idx_str = match idx_str {
-            Some(idx_str) => Some(std::ffi::CString::new(idx_str).map_err(|e| {
-                crate::LimboError::InternalError(format!("failed to convert idx_str string: {e}"))
-            })?),
-            None => None,
-        };
-        let c_idx_str_ptr = idx_str
-            .as_ref()
-            .map(|s| s.as_ptr())
+        let c_idx_str = idx_str
+            .map(|s| std::ffi::CString::new(s).unwrap())
+            .map(|cstr| cstr.into_raw())
             .unwrap_or(std::ptr::null_mut());
         let rc = unsafe {
             (self.implementation.filter)(
                 self.cursor.as_ptr(),
                 arg_count as i32,
                 ext_args.as_ptr(),
-                c_idx_str_ptr,
+                c_idx_str,
                 idx_num,
             )
         };
@@ -560,7 +403,7 @@ impl Drop for ExtVirtualTableCursor {
             let conn = unsafe { Box::from_raw(ptr.as_ptr()) };
             if !conn._ctx.is_null() {
                 // we also leaked the Weak 'ctx' pointer, so free this as well
-                let _ = unsafe { Box::from_raw(conn._ctx as *mut Weak<Connection>) };
+                let _ = unsafe { Box::from_raw(conn._ctx as *mut std::sync::Weak<Connection>) };
             }
         }
         let result = unsafe { (self.implementation.close)(self.cursor.as_ptr()) };
@@ -570,12 +413,12 @@ impl Drop for ExtVirtualTableCursor {
     }
 }
 
-pub trait InternalVirtualTable: std::fmt::Debug + Send + Sync {
+pub trait InternalVirtualTable: std::fmt::Debug {
     fn name(&self) -> String;
     fn open(
         &self,
         conn: Arc<Connection>,
-    ) -> crate::Result<Arc<RwLock<dyn InternalVirtualTableCursor>>>;
+    ) -> crate::Result<Arc<RefCell<dyn InternalVirtualTableCursor>>>;
     /// best_index is used by the optimizer. See the comment on `Table::best_index`.
     fn best_index(
         &self,
@@ -585,7 +428,7 @@ pub trait InternalVirtualTable: std::fmt::Debug + Send + Sync {
     fn sql(&self) -> String;
 }
 
-pub trait InternalVirtualTableCursor: Send + Sync {
+pub trait InternalVirtualTableCursor {
     /// next returns `Ok(true)` if there are more rows, and `Ok(false)` otherwise.
     fn next(&mut self) -> Result<bool, LimboError>;
     fn rowid(&self) -> i64;
@@ -596,159 +439,4 @@ pub trait InternalVirtualTableCursor: Send + Sync {
         idx_str: Option<String>,
         idx_num: i32,
     ) -> Result<bool, LimboError>;
-}
-
-#[cfg(all(test, feature = "fs"))]
-mod tests {
-    use super::*;
-    use crate::{Database, DatabaseOpts, MemoryIO, OpenFlags};
-
-    /// Minimal `InternalVirtualTable` that exposes a fixed two-row table. Used
-    /// to verify that callers can register an arbitrary catalog table at
-    /// database open time and query it like any other table.
-    #[derive(Debug)]
-    struct StaticTable {
-        name: &'static str,
-    }
-
-    impl InternalVirtualTable for StaticTable {
-        fn name(&self) -> String {
-            self.name.to_string()
-        }
-        fn sql(&self) -> String {
-            format!("CREATE TABLE {}(key TEXT, value INTEGER)", self.name)
-        }
-        fn open(
-            &self,
-            _conn: Arc<Connection>,
-        ) -> crate::Result<Arc<RwLock<dyn InternalVirtualTableCursor>>> {
-            Ok(Arc::new(RwLock::new(StaticCursor {
-                rows: vec![("alpha".to_string(), 1), ("beta".to_string(), 2)],
-                position: -1,
-            })))
-        }
-        fn best_index(
-            &self,
-            constraints: &[turso_ext::ConstraintInfo],
-            _order_by: &[turso_ext::OrderByInfo],
-        ) -> std::result::Result<turso_ext::IndexInfo, ResultCode> {
-            Ok(turso_ext::IndexInfo {
-                idx_num: 0,
-                idx_str: None,
-                order_by_consumed: false,
-                estimated_cost: 1.0,
-                estimated_rows: 2,
-                constraint_usages: constraints
-                    .iter()
-                    .map(|_| turso_ext::ConstraintUsage {
-                        argv_index: None,
-                        omit: false,
-                    })
-                    .collect(),
-            })
-        }
-    }
-
-    struct StaticCursor {
-        rows: Vec<(String, i64)>,
-        position: i64,
-    }
-
-    impl InternalVirtualTableCursor for StaticCursor {
-        fn next(&mut self) -> Result<bool, LimboError> {
-            self.position += 1;
-            Ok((self.position as usize) < self.rows.len())
-        }
-        fn rowid(&self) -> i64 {
-            self.position
-        }
-        fn column(&self, column: usize) -> Result<Value, LimboError> {
-            let (key, value) = &self.rows[self.position as usize];
-            match column {
-                0 => Ok(Value::build_text(key.clone())),
-                1 => Ok(Value::from_i64(*value)),
-                _ => Err(LimboError::InternalError(format!(
-                    "column index {column} out of range"
-                ))),
-            }
-        }
-        fn filter(
-            &mut self,
-            _args: &[Value],
-            _idx_str: Option<String>,
-            _idx_num: i32,
-        ) -> Result<bool, LimboError> {
-            self.position = -1;
-            self.next()
-        }
-    }
-
-    #[test]
-    fn registered_internal_vtab_is_visible_to_connections() {
-        let io: Arc<dyn crate::IO> = Arc::new(MemoryIO::new());
-        let db = Database::open_file_with_flags(
-            io,
-            crate::util::MEMORY_PATH,
-            OpenFlags::Create,
-            DatabaseOpts::new(),
-            None,
-        )
-        .unwrap();
-        let name = db
-            .register_internal_vtab(StaticTable {
-                name: "external_metadata",
-            })
-            .unwrap();
-        assert_eq!(name, "external_metadata");
-
-        let conn = db.connect().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT key, value FROM external_metadata")
-            .unwrap();
-        let rows = stmt.run_collect_rows().unwrap();
-        let mapped: Vec<(String, i64)> = rows
-            .into_iter()
-            .map(|cols| {
-                let key = match &cols[0] {
-                    Value::Text(t) => t.as_str().to_string(),
-                    other => panic!("unexpected key type {other:?}"),
-                };
-                let value = match &cols[1] {
-                    Value::Numeric(crate::Numeric::Integer(i)) => *i,
-                    other => panic!("unexpected value type {other:?}"),
-                };
-                (key, value)
-            })
-            .collect();
-        assert_eq!(
-            mapped,
-            vec![("alpha".to_string(), 1), ("beta".to_string(), 2)]
-        );
-    }
-
-    #[test]
-    fn registered_internal_vtab_lookup_folds_ascii_only() {
-        let io: Arc<dyn crate::IO> = Arc::new(MemoryIO::new());
-        let db = Database::open_file_with_flags(
-            io,
-            crate::util::MEMORY_PATH,
-            OpenFlags::Create,
-            DatabaseOpts::new(),
-            None,
-        )
-        .unwrap();
-        let name = db
-            .register_internal_vtab(StaticTable {
-                name: "External_ΔΥΣ",
-            })
-            .unwrap();
-        assert_eq!(name, "External_ΔΥΣ");
-
-        let conn = db.connect().unwrap();
-        let mut stmt = conn.prepare("SELECT key, value FROM external_ΔΥΣ").unwrap();
-        let rows = stmt.run_collect_rows().unwrap();
-        assert_eq!(rows.len(), 2);
-
-        assert!(conn.prepare("SELECT key, value FROM external_δυσ").is_err());
-    }
 }

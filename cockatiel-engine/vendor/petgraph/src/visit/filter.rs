@@ -1,17 +1,15 @@
-use core::marker::PhantomData;
+use crate::prelude::*;
 
 use fixedbitset::FixedBitSet;
-use hashbrown::HashSet;
+use std::collections::HashSet;
+use std::marker::PhantomData;
 
-use crate::{
-    data::DataMap,
-    prelude::*,
-    visit::{
-        Data, EdgeIndexable, GraphBase, GraphProp, IntoEdgeReferences, IntoEdges,
-        IntoEdgesDirected, IntoNeighbors, IntoNeighborsDirected, IntoNodeIdentifiers,
-        IntoNodeReferences, NodeCompactIndexable, NodeCount, NodeIndexable, NodeRef, VisitMap,
-        Visitable,
-    },
+use crate::data::DataMap;
+use crate::visit::{Data, NodeCompactIndexable, NodeCount};
+use crate::visit::{
+    EdgeIndexable, GraphBase, GraphProp, IntoEdgeReferences, IntoEdges, IntoEdgesDirected,
+    IntoNeighbors, IntoNeighborsDirected, IntoNodeIdentifiers, IntoNodeReferences, NodeIndexable,
+    NodeRef, VisitMap, Visitable,
 };
 
 /// A graph filter for nodes.

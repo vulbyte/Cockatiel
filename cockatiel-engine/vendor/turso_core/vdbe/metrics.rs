@@ -1,66 +1,5 @@
 use std::fmt;
 
-/// Hash join spill/probe metrics.
-#[derive(Debug, Default, Clone)]
-pub struct HashJoinMetrics {
-    // Spill metrics
-    pub spill_bytes_written: u64,
-    pub spill_chunks: u64,
-    pub spill_max_chunks_per_partition: u64,
-    pub spill_max_partition_bytes: u64,
-
-    // Load metrics
-    pub load_bytes_read: u64,
-
-    // Probe metrics
-    pub probe_calls: u64,
-
-    // Grace hash join metrics
-    pub probe_spill_bytes_written: u64,
-    pub probe_spill_chunks: u64,
-    pub grace_partitions_processed: u64,
-    pub grace_probe_rows_streamed: u64,
-    pub grace_probe_rows_buffered: u64,
-    pub grace_matches: u64,
-}
-
-impl HashJoinMetrics {
-    pub fn merge(&mut self, other: &HashJoinMetrics) {
-        self.spill_bytes_written = self
-            .spill_bytes_written
-            .saturating_add(other.spill_bytes_written);
-        self.spill_chunks = self.spill_chunks.saturating_add(other.spill_chunks);
-        self.spill_max_chunks_per_partition = self
-            .spill_max_chunks_per_partition
-            .max(other.spill_max_chunks_per_partition);
-        self.spill_max_partition_bytes = self
-            .spill_max_partition_bytes
-            .max(other.spill_max_partition_bytes);
-        self.load_bytes_read = self.load_bytes_read.saturating_add(other.load_bytes_read);
-        self.probe_calls = self.probe_calls.saturating_add(other.probe_calls);
-        self.probe_spill_bytes_written = self
-            .probe_spill_bytes_written
-            .saturating_add(other.probe_spill_bytes_written);
-        self.probe_spill_chunks = self
-            .probe_spill_chunks
-            .saturating_add(other.probe_spill_chunks);
-        self.grace_partitions_processed = self
-            .grace_partitions_processed
-            .saturating_add(other.grace_partitions_processed);
-        self.grace_probe_rows_streamed = self
-            .grace_probe_rows_streamed
-            .saturating_add(other.grace_probe_rows_streamed);
-        self.grace_probe_rows_buffered = self
-            .grace_probe_rows_buffered
-            .saturating_add(other.grace_probe_rows_buffered);
-        self.grace_matches = self.grace_matches.saturating_add(other.grace_matches);
-    }
-
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-}
-
 /// Statement-level execution metrics
 ///
 /// These metrics are collected unconditionally during statement execution
@@ -75,7 +14,6 @@ pub struct StatementMetrics {
     // Execution statistics
     pub vm_steps: u64,
     pub insn_executed: u64,
-    pub reprepares: u64,
 
     // Table scan metrics
     pub fullscan_steps: u64,
@@ -89,13 +27,6 @@ pub struct StatementMetrics {
     pub btree_seeks: u64,
     pub btree_next: u64,
     pub btree_prev: u64,
-
-    /// Signed counter tracking seeks and cursor advances, decremented on sort
-    /// rewind to avoid double-counting. Exposed as `sqlite3_search_count`.
-    pub search_count: i64,
-
-    // Hash join spill/probe metrics
-    pub hash_join: HashJoinMetrics,
 }
 
 impl StatementMetrics {
@@ -114,7 +45,6 @@ impl StatementMetrics {
         self.rows_written = self.rows_written.saturating_add(other.rows_written);
         self.vm_steps = self.vm_steps.saturating_add(other.vm_steps);
         self.insn_executed = self.insn_executed.saturating_add(other.insn_executed);
-        self.reprepares = self.reprepares.saturating_add(other.reprepares);
         self.fullscan_steps = self.fullscan_steps.saturating_add(other.fullscan_steps);
         self.index_steps = self.index_steps.saturating_add(other.index_steps);
         self.sort_operations = self.sort_operations.saturating_add(other.sort_operations);
@@ -124,8 +54,6 @@ impl StatementMetrics {
         self.btree_seeks = self.btree_seeks.saturating_add(other.btree_seeks);
         self.btree_next = self.btree_next.saturating_add(other.btree_next);
         self.btree_prev = self.btree_prev.saturating_add(other.btree_prev);
-        self.search_count = self.search_count.saturating_add(other.search_count);
-        self.hash_join.merge(&other.hash_join);
     }
 
     /// Reset all counters to zero
@@ -143,7 +71,6 @@ impl fmt::Display for StatementMetrics {
         writeln!(f, "  Execution:")?;
         writeln!(f, "    VM steps:         {}", self.vm_steps)?;
         writeln!(f, "    Instructions:     {}", self.insn_executed)?;
-        writeln!(f, "    Reprepares:       {}", self.reprepares)?;
         writeln!(f, "  Table Access:")?;
         writeln!(f, "    Full scan steps:  {}", self.fullscan_steps)?;
         writeln!(f, "    Index steps:      {}", self.index_steps)?;
@@ -154,55 +81,6 @@ impl fmt::Display for StatementMetrics {
         writeln!(f, "    Seeks:            {}", self.btree_seeks)?;
         writeln!(f, "    Next:             {}", self.btree_next)?;
         writeln!(f, "    Prev:             {}", self.btree_prev)?;
-        writeln!(f, "  Hash Join:")?;
-        writeln!(
-            f,
-            "    Spill bytes:      {}",
-            self.hash_join.spill_bytes_written
-        )?;
-        writeln!(f, "    Spill chunks:     {}", self.hash_join.spill_chunks)?;
-        writeln!(
-            f,
-            "    Max chunks/part:  {}",
-            self.hash_join.spill_max_chunks_per_partition
-        )?;
-        writeln!(
-            f,
-            "    Max part bytes:   {}",
-            self.hash_join.spill_max_partition_bytes
-        )?;
-        writeln!(
-            f,
-            "    Load bytes:       {}",
-            self.hash_join.load_bytes_read
-        )?;
-        writeln!(f, "    Probes:           {}", self.hash_join.probe_calls)?;
-        writeln!(
-            f,
-            "    Probe spill bytes: {}",
-            self.hash_join.probe_spill_bytes_written
-        )?;
-        writeln!(
-            f,
-            "    Probe spill chunks: {}",
-            self.hash_join.probe_spill_chunks
-        )?;
-        writeln!(
-            f,
-            "    Grace partitions:  {}",
-            self.hash_join.grace_partitions_processed
-        )?;
-        writeln!(
-            f,
-            "    Grace streamed:    {}",
-            self.hash_join.grace_probe_rows_streamed
-        )?;
-        writeln!(
-            f,
-            "    Grace buffered:    {}",
-            self.hash_join.grace_probe_rows_buffered
-        )?;
-        writeln!(f, "    Grace matches:     {}", self.hash_join.grace_matches)?;
         Ok(())
     }
 }
@@ -216,6 +94,9 @@ pub struct ConnectionMetrics {
     /// Aggregate metrics from all statements
     pub aggregate: StatementMetrics,
 
+    /// Metrics from the last executed statement
+    pub last_statement: Option<StatementMetrics>,
+
     /// High-water marks for monitoring
     pub max_vm_steps_per_statement: u64,
     pub max_rows_read_per_statement: u64,
@@ -226,8 +107,8 @@ impl ConnectionMetrics {
         Self::default()
     }
 
-    /// Record a completed statement's metrics (borrows, no clone).
-    pub fn record_statement(&mut self, metrics: &StatementMetrics) {
+    /// Record a completed statement's metrics
+    pub fn record_statement(&mut self, metrics: StatementMetrics) {
         self.total_statements = self.total_statements.saturating_add(1);
 
         // Update high-water marks
@@ -235,7 +116,10 @@ impl ConnectionMetrics {
         self.max_rows_read_per_statement = self.max_rows_read_per_statement.max(metrics.rows_read);
 
         // Aggregate into total
-        self.aggregate.merge(metrics);
+        self.aggregate.merge(&metrics);
+
+        // Keep last statement for debugging
+        self.last_statement = Some(metrics);
     }
 
     /// Reset connection metrics
@@ -262,6 +146,13 @@ impl fmt::Display for ConnectionMetrics {
         writeln!(f)?;
         writeln!(f, "Aggregate Statistics:")?;
         write!(f, "{}", self.aggregate)?;
+
+        if let Some(ref last) = self.last_statement {
+            writeln!(f)?;
+            writeln!(f, "Last Statement:")?;
+            write!(f, "{last}")?;
+        }
+
         Ok(())
     }
 }
@@ -275,19 +166,14 @@ mod tests {
         let mut m1 = StatementMetrics::new();
         m1.rows_read = 100;
         m1.vm_steps = 50;
-        m1.hash_join.spill_bytes_written = 42;
 
         let mut m2 = StatementMetrics::new();
         m2.rows_read = 200;
         m2.vm_steps = 75;
-        m2.hash_join.spill_bytes_written = 8;
-        m2.hash_join.spill_max_partition_bytes = 1024;
 
         m1.merge(&m2);
         assert_eq!(m1.rows_read, 300);
         assert_eq!(m1.vm_steps, 125);
-        assert_eq!(m1.hash_join.spill_bytes_written, 50);
-        assert_eq!(m1.hash_join.spill_max_partition_bytes, 1024);
     }
 
     #[test]
@@ -297,12 +183,12 @@ mod tests {
         let mut stmt1 = StatementMetrics::new();
         stmt1.vm_steps = 100;
         stmt1.rows_read = 50;
-        conn_metrics.record_statement(&stmt1);
+        conn_metrics.record_statement(stmt1);
 
         let mut stmt2 = StatementMetrics::new();
         stmt2.vm_steps = 75;
         stmt2.rows_read = 100;
-        conn_metrics.record_statement(&stmt2);
+        conn_metrics.record_statement(stmt2);
 
         assert_eq!(conn_metrics.max_vm_steps_per_statement, 100);
         assert_eq!(conn_metrics.max_rows_read_per_statement, 100);

@@ -1,16 +1,14 @@
-use alloc::{collections::BinaryHeap, vec, vec::Vec};
-use core::hash::Hash;
+use std::collections::hash_map::Entry::{Occupied, Vacant};
+use std::collections::{BinaryHeap, HashMap};
 
-use hashbrown::hash_map::{
-    Entry::{Occupied, Vacant},
-    HashMap,
-};
+use std::hash::Hash;
 
-use crate::algo::Measure;
 use crate::scored::MinScored;
 use crate::visit::{EdgeRef, GraphBase, IntoEdges, Visitable};
 
-/// A* shortest path algorithm.
+use crate::algo::Measure;
+
+/// \[Generic\] A* shortest path algorithm.
 ///
 /// Computes the shortest path from `start` to `finish`, including the total path cost.
 ///
@@ -25,21 +23,7 @@ use crate::visit::{EdgeRef, GraphBase, IntoEdges, Visitable};
 /// it should never overestimate the actual cost to get to the nearest goal node. Estimate costs
 /// must also be non-negative.
 ///
-/// # Arguments
-/// * `graph`: weighted graph.
-/// * `start`: the start node.
-/// * `is_goal`: the callback defines the goal node.
-/// * `edge_cost`: closure that returns cost of a particular edge.
-/// * `estimate_cost`: closure that returns the estimated cost to the finish for particular node.
-///
-/// # Returns
-/// * `Some(K, Vec<G::NodeId>)` - the total cost and path from start to finish, if one was found.
-/// * `None` - if such a path was not found.
-///
-/// # Complexity
-/// The time complexity largely depends on the heuristic used. Feel free to contribute and provide the exact time complexity :)
-///
-/// With a trivial heuristic, the algorithm will behave like [`fn@crate::algo::dijkstra`].
+/// The graph should be `Visitable` and implement `IntoEdges`.
 ///
 /// # Example
 /// ```
@@ -76,6 +60,9 @@ use crate::visit::{EdgeRef, GraphBase, IntoEdges, Visitable};
 /// let path = astar(&g, a, |finish| finish == f, |e| *e.weight(), |_| 0);
 /// assert_eq!(path, Some((6, vec![a, d, e, f])));
 /// ```
+///
+/// Returns the total cost + the path of subsequent `NodeId` from start to finish, if one was
+/// found.
 pub fn astar<G, F, H, K, IsGoal>(
     graph: G,
     start: G::NodeId,
@@ -91,69 +78,61 @@ where
     H: FnMut(G::NodeId) -> K,
     K: Measure + Copy,
 {
-    // The Open set
     let mut visit_next = BinaryHeap::new();
-    // A node -> (f, h, g) mapping
-    // TODO: Derive `g` from `f` and `h`.
-    let mut scores = HashMap::new();
-    // The search tree
+    let mut scores = HashMap::new(); // g-values, cost to reach the node
+    let mut estimate_scores = HashMap::new(); // f-values, cost to reach + estimate cost to goal
     let mut path_tracker = PathTracker::<G>::new();
 
-    let zero: K = K::default();
-    let g: K = zero;
-    let h: K = estimate_cost(start);
-    let f: K = g + h;
-    scores.insert(start, (f, h, g));
-    visit_next.push(MinScored((f, h, g), start));
+    let zero_score = K::default();
+    scores.insert(start, zero_score);
+    visit_next.push(MinScored(estimate_cost(start), start));
 
-    while let Some(MinScored((f, h, g), node)) = visit_next.pop() {
+    while let Some(MinScored(estimate_score, node)) = visit_next.pop() {
         if is_goal(node) {
             let path = path_tracker.reconstruct_path_to(node);
-            let (goal_f, goal_h, goal_g) = scores[&node];
-            debug_assert_eq!(goal_h, zero);
-            debug_assert_eq!(goal_f, goal_g);
-            return Some((goal_f, path));
+            let cost = scores[&node];
+            return Some((cost, path));
         }
 
-        match scores.entry(node) {
+        // This lookup can be unwrapped without fear of panic since the node was necessarily scored
+        // before adding it to `visit_next`.
+        let node_score = scores[&node];
+
+        match estimate_scores.entry(node) {
             Occupied(mut entry) => {
-                let (_, _, old_g) = *entry.get();
-                // The node has already been expanded with a better cost.
-                if old_g < g {
+                // If the node has already been visited with an equal or lower score than now, then
+                // we do not need to re-visit it.
+                if *entry.get() <= estimate_score {
                     continue;
                 }
-                // NOTE: Because there's no closed set, we don't know if we expanded this node.
-                // if old_g = g we may be re-expanding this node, but won't insert new neigbours.
-                entry.insert((f, h, g));
+                entry.insert(estimate_score);
             }
             Vacant(entry) => {
-                entry.insert((f, h, g));
+                entry.insert(estimate_score);
             }
         }
 
         for edge in graph.edges(node) {
-            let neigh = edge.target();
-            let neigh_g = g + edge_cost(edge);
-            let neigh_h = estimate_cost(neigh);
-            let neigh_f = neigh_g + neigh_h;
-            let neigh_score = (neigh_f, neigh_h, neigh_g);
+            let next = edge.target();
+            let next_score = node_score + edge_cost(edge);
 
-            match scores.entry(neigh) {
+            match scores.entry(next) {
                 Occupied(mut entry) => {
-                    let (_, _, old_neigh_g) = *entry.get();
-                    if neigh_g >= old_neigh_g {
-                        // New cost isn't better
+                    // No need to add neighbors that we have already reached through a shorter path
+                    // than now.
+                    if *entry.get() <= next_score {
                         continue;
                     }
-                    entry.insert(neigh_score);
+                    entry.insert(next_score);
                 }
                 Vacant(entry) => {
-                    entry.insert(neigh_score);
+                    entry.insert(next_score);
                 }
             }
 
-            path_tracker.set_predecessor(neigh, node);
-            visit_next.push(MinScored(neigh_score, neigh));
+            path_tracker.set_predecessor(next, node);
+            let next_estimate_score = next_score + estimate_cost(next);
+            visit_next.push(MinScored(next_estimate_score, next));
         }
     }
 

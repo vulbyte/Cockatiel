@@ -123,6 +123,19 @@ impl Name for Timestamp {
     }
 }
 
+/// Implements the unstable/naive version of `Eq`: a basic equality check on the internal fields of the `Timestamp`.
+/// This implies that `normalized_ts != non_normalized_ts` even if `normalized_ts == non_normalized_ts.normalized()`.
+#[cfg(feature = "std")]
+impl Eq for Timestamp {}
+
+#[cfg(feature = "std")]
+impl std::hash::Hash for Timestamp {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.seconds.hash(state);
+        self.nanos.hash(state);
+    }
+}
+
 #[cfg(feature = "std")]
 impl From<std::time::SystemTime> for Timestamp {
     fn from(system_time: std::time::SystemTime) -> Timestamp {
@@ -172,7 +185,8 @@ impl fmt::Display for TimestampError {
             TimestampError::OutOfSystemRange(timestamp) => {
                 write!(
                     f,
-                    "{timestamp} is not representable as a `SystemTime` because it is out of range",
+                    "{} is not representable as a `SystemTime` because it is out of range",
+                    timestamp
                 )
             }
             TimestampError::ParseFailure => {
@@ -185,7 +199,8 @@ impl fmt::Display for TimestampError {
     }
 }
 
-impl core::error::Error for TimestampError {}
+#[cfg(feature = "std")]
+impl std::error::Error for TimestampError {}
 
 #[cfg(feature = "std")]
 impl TryFrom<Timestamp> for std::time::SystemTime {
@@ -273,7 +288,7 @@ mod tests {
         // Representative tests for the case of timestamps before the UTC Epoch time:
         // validate the expected behaviour that "negative second values with fractions
         // must still have non-negative nanos values that count forward in time"
-        // https://protobuf.dev/reference/protobuf/google.protobuf/#timestamp
+        // https://developers.google.com/protocol-buffers/docs/reference/google.protobuf#google.protobuf.Timestamp
         //
         // To ensure cross-platform compatibility, all nanosecond values in these
         // tests are in minimum 100 ns increments.  This does not affect the general

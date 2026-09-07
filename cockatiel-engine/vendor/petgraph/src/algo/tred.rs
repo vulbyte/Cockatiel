@@ -8,27 +8,22 @@
 //! closure of **Gr** is the same as that of **G**.
 //! The transitive reduction is well-defined for acyclic graphs only.
 
-use alloc::{vec, vec::Vec};
-
-use fixedbitset::FixedBitSet;
-
 use crate::adj::{List, UnweightedList};
 use crate::graph::IndexType;
 use crate::visit::{
     GraphBase, IntoNeighbors, IntoNeighborsDirected, NodeCompactIndexable, NodeCount,
 };
 use crate::Direction;
+use fixedbitset::FixedBitSet;
 
 /// Creates a representation of the same graph respecting topological order for use in `tred::dag_transitive_reduction_closure`.
 ///
-/// # Arguments
-/// * `g`: a directed acyclic graph.
-/// * `toposort`: a topological order on the node indices of `g` (for example obtained from [`toposort`](fn@crate::algo::toposort)).
+/// `toposort` must be a topological order on the node indices of `g` (for example obtained
+/// from [`toposort`]).
 ///
-/// # Returns
-/// Returns a tuple of:
-/// * [`UnweightedList`](type@crate::adj::UnweightedList) `res` graph.
-/// * `Vec`: reciprocal of the topological sort `revmap`.
+/// [`toposort`]: ../fn.toposort.html
+///
+/// Returns a pair of a graph `res` and the reciprocal of the topological sort `revmap`.
 ///
 /// `res` is the same graph as `g` with the following differences:
 /// * Node and edge weights are stripped,
@@ -36,16 +31,7 @@ use crate::Direction;
 /// * Iterating on the neighbors of a node respects topological order.
 ///
 /// `revmap` is handy to get back to map indices in `g` to indices in `res`.
-///
-/// # Complexity
-/// * Time complexity: **O(|V| + |E|)**.
-/// * Auxiliary space: **O(|V| + |E|)**.
-///
-/// where **|V|** is the number of nodes and **|E|** is the number of edges.
-///
-/// # Example
-///
-/// ```rust
+/// ```
 /// use petgraph::prelude::*;
 /// use petgraph::graph::DefaultIx;
 /// use petgraph::visit::IntoNeighbors;
@@ -68,6 +54,10 @@ use crate::Direction;
 ///     .collect();
 /// assert_eq!(children, vec![first, second])
 /// ```
+///
+/// Runtime: **O(|V| + |E|)**.
+///
+/// Space complexity: **O(|V| + |E|)**.
 pub fn dag_to_toposorted_adjacency_list<G, Ix: IndexType>(
     g: G,
     toposort: &[G::NodeId],
@@ -100,23 +90,23 @@ where
 /// orders](https://www.sciencedirect.com/science/article/pii/0012365X9390164O) by Habib, Morvan
 /// and Rampon.
 ///
-/// # Arguments
-/// * `g`: an input graph in a very specific format: an adjacency
-///   list such that node indices are a toposort, and the neighbors of all nodes are stored in topological order.
-///   To get such a representation, use the function [`dag_to_toposorted_adjacency_list`].
+/// The input graph must be in a very specific format: an adjacency
+/// list such that:
+/// * Node indices are a toposort, and
+/// * The neighbors of all nodes are stored in topological order.
 ///
-/// # Returns
+/// To get such a representation, use the function [`dag_to_toposorted_adjacency_list`].
+///
+/// [`dag_to_toposorted_adjacency_list`]: ./fn.dag_to_toposorted_adjacency_list.html
+///
 /// The output is the pair of the transitive reduction and the transitive closure.
 ///
-/// # Complexity
-/// * Time complexity: **O(|V| + \sum_{(x, y) \in Er} d(y))** where **d(y)**
-///   denotes the outgoing degree of **y** in the transitive closure of **G**
-///   and **Er** the edge set of the transitive reduction.
-///   This is still **O(|V|³)** in the worst case like the naive algorithm but
-///   should perform better for some classes of graphs.
-/// * Auxiliary space: **O(|E|)**.
+/// Runtime complexity: **O(|V| + \sum_{(x, y) \in Er} d(y))** where **d(y)**
+/// denotes the outgoing degree of **y** in the transitive closure of **G**.
+/// This is still **O(|V|³)** in the worst case like the naive algorithm but
+/// should perform better for some classes of graphs.
 ///
-/// where **|V|** is the number of nodes and **|E|** is the number of edges.
+/// Space complexity: **O(|E|)**.
 pub fn dag_transitive_reduction_closure<E, Ix: IndexType>(
     g: &List<E, Ix>,
 ) -> (UnweightedList<Ix>, UnweightedList<Ix>) {

@@ -9,9 +9,9 @@ use multimap::MultiMap;
 use prost_types::field_descriptor_proto::{Label, Type};
 use prost_types::source_code_info::Location;
 use prost_types::{
-    DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, EnumValueOptions,
-    FieldDescriptorProto, FieldOptions, FileDescriptorProto, OneofDescriptorProto,
-    ServiceDescriptorProto, SourceCodeInfo,
+    DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto,
+    FieldOptions, FileDescriptorProto, OneofDescriptorProto, ServiceDescriptorProto,
+    SourceCodeInfo,
 };
 
 use crate::ast::{Comments, Method, Service};
@@ -65,41 +65,19 @@ struct OneofField {
     descriptor: OneofDescriptorProto,
     fields: Vec<Field>,
     path_index: i32,
-    // This type has the same name as another nested type at the same level
-    has_type_name_conflict: bool,
 }
 
 impl OneofField {
-    fn new(
-        parent: &DescriptorProto,
-        descriptor: OneofDescriptorProto,
-        fields: Vec<Field>,
-        path_index: i32,
-    ) -> Self {
-        let nested_type_names = parent.nested_type.iter().map(DescriptorProto::name);
-        let nested_enum_names = parent.enum_type.iter().map(EnumDescriptorProto::name);
-        let has_type_name_conflict = nested_type_names
-            .chain(nested_enum_names)
-            .any(|type_name| to_upper_camel(type_name) == to_upper_camel(descriptor.name()));
-
+    fn new(descriptor: OneofDescriptorProto, fields: Vec<Field>, path_index: i32) -> Self {
         Self {
             descriptor,
             fields,
             path_index,
-            has_type_name_conflict,
         }
     }
 
     fn rust_name(&self) -> String {
         to_snake(self.descriptor.name())
-    }
-
-    fn type_name(&self) -> String {
-        let mut name = to_upper_camel(self.descriptor.name());
-        if self.has_type_name_conflict {
-            name.push_str("OneOf");
-        }
-        name
     }
 }
 
@@ -189,7 +167,7 @@ impl<'b> CodeGenerator<'_, 'b> {
         type MapTypes = HashMap<String, (FieldDescriptorProto, FieldDescriptorProto)>;
         let (nested_types, map_types): (NestedTypes, MapTypes) = message
             .nested_type
-            .iter()
+            .into_iter()
             .enumerate()
             .partition_map(|(idx, nested_type)| {
                 if nested_type
@@ -206,7 +184,7 @@ impl<'b> CodeGenerator<'_, 'b> {
                     let name = format!("{}.{}", &fq_message_name, nested_type.name());
                     Either::Right((name, (key, value)))
                 } else {
-                    Either::Left((nested_type.clone(), idx))
+                    Either::Left((nested_type, idx))
                 }
             });
 
@@ -215,28 +193,28 @@ impl<'b> CodeGenerator<'_, 'b> {
         type OneofFieldsByIndex = MultiMap<i32, Field>;
         let (fields, mut oneof_map): (Vec<Field>, OneofFieldsByIndex) = message
             .field
-            .iter()
+            .into_iter()
             .enumerate()
             .partition_map(|(idx, proto)| {
                 let idx = idx as i32;
                 if proto.proto3_optional.unwrap_or(false) {
-                    Either::Left(Field::new(proto.clone(), idx))
+                    Either::Left(Field::new(proto, idx))
                 } else if let Some(oneof_index) = proto.oneof_index {
-                    Either::Right((oneof_index, Field::new(proto.clone(), idx)))
+                    Either::Right((oneof_index, Field::new(proto, idx)))
                 } else {
-                    Either::Left(Field::new(proto.clone(), idx))
+                    Either::Left(Field::new(proto, idx))
                 }
             });
         // Optional fields create a synthetic oneof that we want to skip
         let oneof_fields: Vec<OneofField> = message
             .oneof_decl
-            .iter()
+            .into_iter()
             .enumerate()
-            .filter_map(|(idx, proto)| {
+            .filter_map(move |(idx, proto)| {
                 let idx = idx as i32;
                 oneof_map
                     .remove(&idx)
-                    .map(|fields| OneofField::new(&message, proto.clone(), fields, idx))
+                    .map(|fields| OneofField::new(proto, fields, idx))
             })
             .collect();
 
@@ -245,20 +223,14 @@ impl<'b> CodeGenerator<'_, 'b> {
         self.append_message_attributes(&fq_message_name);
         self.push_indent();
         self.buf.push_str(&format!(
-            "#[derive(Clone, {}PartialEq, {}{}::Message)]\n",
+            "#[derive(Clone, {}PartialEq, {}::Message)]\n",
             if self.context.can_message_derive_copy(&fq_message_name) {
                 "Copy, "
             } else {
                 ""
             },
-            if self.context.can_message_derive_eq(&fq_message_name) {
-                "Eq, Hash, "
-            } else {
-                ""
-            },
             self.context.prost_path()
         ));
-        self.append_prost_path_attribute();
         self.append_skip_debug(&fq_message_name);
         self.push_indent();
         self.buf.push_str("pub struct ");
@@ -333,8 +305,10 @@ impl<'b> CodeGenerator<'_, 'b> {
         ));
         self.depth += 1;
 
-        self.buf
-            .push_str(&format!("const NAME: &'static str = \"{message_name}\";\n"));
+        self.buf.push_str(&format!(
+            "const NAME: &'static str = \"{}\";\n",
+            message_name,
+        ));
         self.buf.push_str(&format!(
             "const PACKAGE: &'static str = \"{}\";\n",
             self.package,
@@ -377,13 +351,6 @@ impl<'b> CodeGenerator<'_, 'b> {
         for attribute in self.context.message_attributes(fq_message_name) {
             push_indent(self.buf, self.depth);
             self.buf.push_str(attribute);
-            self.buf.push('\n');
-        }
-    }
-
-    fn append_prost_path_attribute(&mut self) {
-        if let Some(prost_path_attribute) = self.context.prost_path_attribute() {
-            self.buf.push_str(prost_path_attribute);
             self.buf.push('\n');
         }
     }
@@ -448,7 +415,7 @@ impl<'b> CodeGenerator<'_, 'b> {
                 .context
                 .bytes_type(fq_message_name, field.descriptor.name());
             self.buf
-                .push_str(&format!(" = {:?}", bytes_type.annotation()));
+                .push_str(&format!("={:?}", bytes_type.annotation()));
         }
 
         match field.descriptor.label() {
@@ -467,7 +434,7 @@ impl<'b> CodeGenerator<'_, 'b> {
                         .as_ref()
                         .map_or(self.syntax == Syntax::Proto3, |options| options.packed())
                 {
-                    self.buf.push_str(", packed = \"false\"");
+                    self.buf.push_str(", packed=\"false\"");
                 }
             }
         }
@@ -475,11 +442,11 @@ impl<'b> CodeGenerator<'_, 'b> {
         if boxed {
             self.buf.push_str(", boxed");
         }
-        self.buf.push_str(", tag = \"");
+        self.buf.push_str(", tag=\"");
         self.buf.push_str(&field.descriptor.number().to_string());
 
         if let Some(ref default) = field.descriptor.default_value {
-            self.buf.push_str("\", default = \"");
+            self.buf.push_str("\", default=\"");
             if type_ == Type::Bytes {
                 self.buf.push_str("b\\\"");
                 for b in unescape_c_escape_string(default) {
@@ -498,7 +465,7 @@ impl<'b> CodeGenerator<'_, 'b> {
                         .descriptor
                         .type_name
                         .as_ref()
-                        .and_then(|ty| ty.split('.').next_back())
+                        .and_then(|ty| ty.split('.').last())
                         .unwrap();
 
                     enum_value = strip_enum_prefix(&to_upper_camel(enum_type), &enum_value)
@@ -520,13 +487,13 @@ impl<'b> CodeGenerator<'_, 'b> {
 
         if repeated {
             self.buf
-                .push_str(&format!("{prost_path}::alloc::vec::Vec<"));
+                .push_str(&format!("{}::alloc::vec::Vec<", prost_path));
         } else if optional {
             self.buf.push_str("::core::option::Option<");
         }
         if boxed {
             self.buf
-                .push_str(&format!("{prost_path}::alloc::boxed::Box<"));
+                .push_str(&format!("{}::alloc::boxed::Box<", prost_path));
         }
         self.buf.push_str(&ty);
         if boxed {
@@ -565,7 +532,7 @@ impl<'b> CodeGenerator<'_, 'b> {
         let value_tag = self.map_value_type_tag(value);
 
         self.buf.push_str(&format!(
-            "#[prost({} = \"{}, {}\", tag = \"{}\")]\n",
+            "#[prost({}=\"{}, {}\", tag=\"{}\")]\n",
             map_type.annotation(),
             key_tag,
             value_tag,
@@ -573,25 +540,13 @@ impl<'b> CodeGenerator<'_, 'b> {
         ));
         self.append_field_attributes(fq_message_name, field.descriptor.name());
         self.push_indent();
-        match map_type {
-            crate::MapType::HashMap => {
-                self.buf.push_str(&format!(
-                    "pub {}: ::std::collections::HashMap<{}, {}>,\n",
-                    field.rust_name(),
-                    key_ty,
-                    value_ty
-                ));
-            }
-            crate::MapType::BTreeMap => {
-                self.buf.push_str(&format!(
-                    "pub {}: {}::alloc::collections::BTreeMap<{}, {}>,\n",
-                    field.rust_name(),
-                    self.context.prost_path(),
-                    key_ty,
-                    value_ty
-                ));
-            }
-        }
+        self.buf.push_str(&format!(
+            "pub {}: {}<{}, {}>,\n",
+            field.rust_name(),
+            map_type.rust_type(),
+            key_ty,
+            value_ty
+        ));
     }
 
     fn append_oneof_field(
@@ -600,11 +555,15 @@ impl<'b> CodeGenerator<'_, 'b> {
         fq_message_name: &str,
         oneof: &OneofField,
     ) {
-        let type_name = format!("{}::{}", to_snake(message_name), oneof.type_name());
+        let type_name = format!(
+            "{}::{}",
+            to_snake(message_name),
+            to_upper_camel(oneof.descriptor.name())
+        );
         self.append_doc(fq_message_name, None);
         self.push_indent();
         self.buf.push_str(&format!(
-            "#[prost(oneof = \"{}\", tags = \"{}\")]\n",
+            "#[prost(oneof=\"{}\", tags=\"{}\")]\n",
             type_name,
             oneof
                 .fields
@@ -637,25 +596,15 @@ impl<'b> CodeGenerator<'_, 'b> {
             self.context
                 .can_field_derive_copy(fq_message_name, &field.descriptor)
         });
-        let can_oneof_derive_eq = oneof.fields.iter().all(|field| {
-            self.context
-                .can_field_derive_eq(fq_message_name, &field.descriptor)
-        });
         self.buf.push_str(&format!(
-            "#[derive(Clone, {}PartialEq, {}{}::Oneof)]\n",
+            "#[derive(Clone, {}PartialEq, {}::Oneof)]\n",
             if can_oneof_derive_copy { "Copy, " } else { "" },
-            if can_oneof_derive_eq {
-                "Eq, Hash, "
-            } else {
-                ""
-            },
             self.context.prost_path()
         ));
-        self.append_prost_path_attribute();
         self.append_skip_debug(fq_message_name);
         self.push_indent();
         self.buf.push_str("pub enum ");
-        self.buf.push_str(&oneof.type_name());
+        self.buf.push_str(&to_upper_camel(oneof.descriptor.name()));
         self.buf.push_str(" {\n");
 
         self.path.push(2);
@@ -665,15 +614,10 @@ impl<'b> CodeGenerator<'_, 'b> {
             self.append_doc(fq_message_name, Some(field.descriptor.name()));
             self.path.pop();
 
-            if self.deprecated(&field.descriptor) {
-                self.push_indent();
-                self.buf.push_str("#[deprecated]\n");
-            }
-
             self.push_indent();
             let ty_tag = self.field_type_tag(&field.descriptor);
             self.buf.push_str(&format!(
-                "#[prost({}, tag = \"{}\")]\n",
+                "#[prost({}, tag=\"{}\")]\n",
                 ty_tag,
                 field.descriptor.number()
             ));
@@ -697,9 +641,8 @@ impl<'b> CodeGenerator<'_, 'b> {
 
             if boxed {
                 self.buf.push_str(&format!(
-                    "{}({}::alloc::boxed::Box<{}>),\n",
+                    "{}(::prost::alloc::boxed::Box<{}>),\n",
                     to_upper_camel(field.descriptor.name()),
-                    self.context.prost_path(),
                     ty
                 ));
             } else {
@@ -765,7 +708,6 @@ impl<'b> CodeGenerator<'_, 'b> {
             dbg,
             self.context.prost_path(),
         ));
-        self.append_prost_path_attribute();
         self.push_indent();
         self.buf.push_str("#[repr(i32)]\n");
         self.push_indent();
@@ -783,10 +725,6 @@ impl<'b> CodeGenerator<'_, 'b> {
 
             self.append_doc(&fq_proto_enum_name, Some(variant.proto_name));
             self.append_field_attributes(&fq_proto_enum_name, variant.proto_name);
-            if variant.deprecated {
-                self.push_indent();
-                self.buf.push_str("#[deprecated]\n");
-            }
             self.push_indent();
             self.buf.push_str(&variant.generated_variant_name);
             self.buf.push_str(" = ");
@@ -833,10 +771,6 @@ impl<'b> CodeGenerator<'_, 'b> {
         self.depth += 1;
 
         for variant in variant_mappings.iter() {
-            if variant.deprecated {
-                self.push_indent();
-                self.buf.push_str("#[allow(deprecated)]\n");
-            }
             self.push_indent();
             self.buf.push_str("Self::");
             self.buf.push_str(&variant.generated_variant_name);
@@ -870,11 +804,7 @@ impl<'b> CodeGenerator<'_, 'b> {
             self.push_indent();
             self.buf.push('\"');
             self.buf.push_str(variant.proto_name);
-            self.buf.push_str("\" => Some(");
-            if variant.deprecated {
-                self.buf.push_str("#[allow(deprecated)] ");
-            }
-            self.buf.push_str("Self::");
+            self.buf.push_str("\" => Some(Self::");
             self.buf.push_str(&variant.generated_variant_name);
             self.buf.push_str("),\n");
         }
@@ -897,7 +827,7 @@ impl<'b> CodeGenerator<'_, 'b> {
 
     fn push_service(&mut self, service: ServiceDescriptorProto) {
         let name = service.name().to_owned();
-        debug!("  service: {name:?}");
+        debug!("  service: {:?}", name);
 
         let comments = self
             .location()
@@ -996,12 +926,11 @@ impl<'b> CodeGenerator<'_, 'b> {
             Type::Int64 | Type::Sfixed64 | Type::Sint64 => String::from("i64"),
             Type::Bool => String::from("bool"),
             Type::String => format!("{}::alloc::string::String", self.context.prost_path()),
-            Type::Bytes => match self.context.bytes_type(fq_message_name, field.name()) {
-                crate::BytesType::Vec => {
-                    format!("{}::alloc::vec::Vec<u8>", self.context.prost_path())
-                }
-                crate::BytesType::Bytes => format!("{}::bytes::Bytes", self.context.prost_path()),
-            },
+            Type::Bytes => self
+                .context
+                .bytes_type(fq_message_name, field.name())
+                .rust_type()
+                .to_owned(),
             Type::Group | Type::Message => self.resolve_ident(field.type_name()),
         }
     }
@@ -1064,7 +993,7 @@ impl<'b> CodeGenerator<'_, 'b> {
             Type::Group => Cow::Borrowed("group"),
             Type::Message => Cow::Borrowed("message"),
             Type::Enum => Cow::Owned(format!(
-                "enumeration = \"{}\"",
+                "enumeration={:?}",
                 self.resolve_ident(field.type_name())
             )),
         }
@@ -1139,7 +1068,6 @@ struct EnumVariantMapping<'a> {
     proto_name: &'a str,
     proto_number: i32,
     generated_variant_name: String,
-    deprecated: bool,
 }
 
 fn build_enum_value_mappings<'a>(
@@ -1175,15 +1103,7 @@ fn build_enum_value_mappings<'a>(
             proto_name: value.name(),
             proto_number: value.number(),
             generated_variant_name,
-            deprecated: enum_field_deprecated(value),
         })
     }
     mappings
-}
-
-fn enum_field_deprecated(value: &EnumValueDescriptorProto) -> bool {
-    value
-        .options
-        .as_ref()
-        .is_some_and(EnumValueOptions::deprecated)
 }

@@ -43,36 +43,36 @@
 
 #![allow(clippy::arc_with_non_send_sync)]
 
-use crate::{
-    io_yield_one, turso_assert, turso_assert_eq, turso_assert_greater_than,
-    types::{IOCompletions, IOResult},
-    util::IOExt as _,
-};
-use branches::{mark_unlikely, unlikely};
 use bytemuck::{Pod, Zeroable};
 use pack1::{I32BE, U16BE, U32BE};
 use tracing::{instrument, Level};
 
 use super::pager::PageRef;
-pub use super::pager::{PageContent, PageInner};
-use super::wal::{OverflowFallbackCoverage, TursoRwLock, WalSharedMetadata, WalSharedRuntime};
+use super::wal::TursoRwLock;
 use crate::error::LimboError;
 use crate::fast_lock::SpinLock;
-use crate::io::{Buffer, Completion, FileSyncType, ReadComplete};
-use crate::numeric::Numeric;
+use crate::io::{Buffer, Completion, ReadComplete};
+use crate::storage::btree::offset::{
+    BTREE_CELL_CONTENT_AREA, BTREE_CELL_COUNT, BTREE_FIRST_FREEBLOCK, BTREE_FRAGMENTED_BYTES_COUNT,
+    BTREE_PAGE_TYPE, BTREE_RIGHTMOST_PTR,
+};
 use crate::storage::btree::{payload_overflow_threshold_max, payload_overflow_threshold_min};
 use crate::storage::buffer_pool::BufferPool;
-use crate::storage::database::{DatabaseStorage, EncryptionOrChecksum};
+use crate::storage::database::DatabaseStorage;
 use crate::storage::pager::Pager;
 use crate::storage::wal::READMARK_NOT_USED;
-use crate::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use crate::sync::Arc;
-use crate::sync::RwLock;
-use crate::types::{SerialType, SerialTypeKind, TextRef, TextSubtype, ValueRef};
-use crate::{bail_corrupt_error, CompletionError, File, IOContext, Result, WalFileShared};
-use rustc_hash::FxHashMap;
-use std::collections::BTreeMap;
+use crate::types::{RawSlice, RefValue, SerialType, SerialTypeKind, TextRef, TextSubtype};
+use crate::{
+    bail_corrupt_error, turso_assert, CompletionError, File, IOContext, Result, WalFileShared,
+};
+use parking_lot::RwLock;
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap};
+use std::mem::MaybeUninit;
 use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// The minimum size of a cell in bytes.
 pub const MINIMUM_CELL_SIZE: usize = 4;
@@ -81,16 +81,6 @@ pub const CELL_PTR_SIZE_BYTES: usize = 2;
 pub const INTERIOR_PAGE_HEADER_SIZE_BYTES: usize = 12;
 pub const LEAF_PAGE_HEADER_SIZE_BYTES: usize = 8;
 pub const LEFT_CHILD_PTR_SIZE_BYTES: usize = 4;
-
-// Freelist trunk page layout:
-// - Bytes 0-3: Page number of next freelist trunk page (0 if none)
-// - Bytes 4-7: Number of leaf page pointers on this trunk page
-// - Bytes 8+: Array of 4-byte leaf page pointers
-pub const FREELIST_TRUNK_OFFSET_NEXT_TRUNK_PTR: usize = 0;
-pub const FREELIST_TRUNK_OFFSET_LEAF_COUNT: usize = 4;
-pub const FREELIST_TRUNK_OFFSET_FIRST_LEAF_PTR: usize = 8;
-pub const FREELIST_TRUNK_HEADER_SIZE: usize = 8;
-pub const FREELIST_LEAF_PTR_SIZE: usize = 4;
 
 #[derive(PartialEq, Eq, Zeroable, Pod, Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -142,11 +132,6 @@ impl PageSize {
             v => v as u32,
         }
     }
-
-    /// Get the raw u16 value stored internally
-    pub const fn get_raw(self) -> u16 {
-        self.0.get()
-    }
 }
 
 impl Default for PageSize {
@@ -166,7 +151,7 @@ impl CacheSize {
     pub const DEFAULT: i32 = -2000;
 
     // Minimum number of pages that cache can hold.
-    pub const MIN: i64 = super::page_cache::MINIMUM_PAGE_CACHE_SIZE_IN_PAGES as i64;
+    pub const MIN: i64 = 10;
 
     // SQLite uses this value as threshold for maximum cache size
     pub const MAX_SAFE: i64 = 2147450880;
@@ -192,68 +177,23 @@ impl Default for CacheSize {
     }
 }
 
-/// Read/Write file format version.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-#[repr(u8)]
-pub enum Version {
-    Legacy = 1,
-    Wal = 2,
-    Mvcc = 255,
-}
-
-impl Version {
-    #[inline]
-    pub fn wal(&self) -> bool {
-        matches!(self, Self::Wal)
-    }
-
-    #[inline]
-    pub fn mvcc(&self) -> bool {
-        matches!(self, Self::Mvcc)
-    }
-
-    #[inline]
-    pub fn legacy(&self) -> bool {
-        matches!(self, Self::Legacy)
-    }
-}
-
-impl TryFrom<u8> for Version {
-    type Error = u8;
-
-    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Version::Legacy),
-            2 => Ok(Version::Wal),
-            255 => Ok(Version::Mvcc),
-            v => Err(v),
-        }
-    }
-}
-
-/// Raw version byte for use in DatabaseHeader where Pod is required.
-/// Use `Version::try_from(raw.0)` to convert to the validated enum.
 #[derive(PartialEq, Eq, Zeroable, Pod, Clone, Copy)]
 #[repr(transparent)]
-pub struct RawVersion(pub u8);
+/// Read/Write file format version.
+pub struct Version(u8);
 
-impl RawVersion {
-    pub fn to_version(self) -> std::result::Result<Version, u8> {
-        Version::try_from(self.0)
-    }
+impl Version {
+    #![allow(non_upper_case_globals)]
+    const Legacy: Self = Self(1);
+    const Wal: Self = Self(2);
 }
 
-impl From<Version> for RawVersion {
-    fn from(v: Version) -> Self {
-        Self(v as u8)
-    }
-}
-
-impl std::fmt::Debug for RawVersion {
+impl std::fmt::Debug for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.to_version() {
-            Ok(v) => write!(f, "{v:?}"),
-            Err(v) => write!(f, "RawVersion::Invalid({v})"),
+        match *self {
+            Self::Legacy => f.write_str("Version::Legacy"),
+            Self::Wal => f.write_str("Version::Wal"),
+            Self(v) => write!(f, "Version::Invalid({v})"),
         }
     }
 }
@@ -265,16 +205,9 @@ pub struct TextEncoding(U32BE);
 
 impl TextEncoding {
     #![allow(non_upper_case_globals)]
-    // SQLite doesn't write the text encoding bytes until the first table is written, so when
-    // opening an empty SQLite file, the encoding bytes will be 0. SQLite considers this to mean UTF-8.
-    pub const Unset: Self = Self(U32BE::new(0));
     pub const Utf8: Self = Self(U32BE::new(1));
     pub const Utf16Le: Self = Self(U32BE::new(2));
     pub const Utf16Be: Self = Self(U32BE::new(3));
-
-    pub fn is_utf8(&self) -> bool {
-        self == &Self::Utf8 || self == &Self::Unset
-    }
 }
 
 impl std::fmt::Display for TextEncoding {
@@ -306,7 +239,6 @@ impl Default for TextEncoding {
 }
 
 #[derive(Pod, Zeroable, Clone, Copy, Debug)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
 #[repr(C, packed)]
 /// Database Header Format
 pub struct DatabaseHeader {
@@ -315,9 +247,9 @@ pub struct DatabaseHeader {
     /// Page size in bytes. Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
     pub page_size: PageSize,
     /// File format write version. 1 for legacy; 2 for WAL.
-    pub write_version: RawVersion,
+    pub write_version: Version,
     /// File format read version. 1 for legacy; 2 for WAL.
-    pub read_version: RawVersion,
+    pub read_version: Version,
     /// Bytes of unused "reserved" space at the end of each page. Usually 0.
     pub reserved_space: u8,
     /// Maximum embedded payload fraction. Must be 64.
@@ -376,8 +308,8 @@ impl Default for DatabaseHeader {
         Self {
             magic: *b"SQLite format 3\0",
             page_size: Default::default(),
-            write_version: RawVersion::from(Version::Wal),
-            read_version: RawVersion::from(Version::Wal),
+            write_version: Version::Wal,
+            read_version: Version::Wal,
             reserved_space: 0,
             max_embed_frac: 64,
             min_embed_frac: 32,
@@ -411,7 +343,7 @@ pub const WAL_MAGIC_BE: u32 = 0x377f0683;
 /// The Write-Ahead Log (WAL) header.
 /// The first 32 bytes of a WAL file comprise the WAL header.
 /// The WAL header is divided into the following fields stored in big-endian order.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 #[repr(C)] // This helps with encoding because rust does not respect the order in structs, so in
            // this case we want to keep the order
 pub struct WalHeader {
@@ -441,32 +373,6 @@ pub struct WalHeader {
 
     /// Second checksum value in the wal-header
     pub checksum_2: u32,
-}
-
-impl WalHeader {
-    pub const fn new() -> Self {
-        let magic = if cfg!(target_endian = "big") {
-            WAL_MAGIC_BE
-        } else {
-            WAL_MAGIC_LE
-        };
-        WalHeader {
-            magic,
-            file_format: 3007000,
-            page_size: 0, // Signifies WAL header that is not persistent on disk yet.
-            checkpoint_seq: 0, // TODO implement sequence number
-            salt_1: 0,
-            salt_2: 0,
-            checksum_1: 0,
-            checksum_2: 0,
-        }
-    }
-}
-
-impl Default for WalHeader {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Immediately following the wal-header are zero or more frames.
@@ -528,10 +434,7 @@ impl TryFrom<u8> for PageType {
             5 => Ok(Self::TableInterior),
             10 => Ok(Self::IndexLeaf),
             13 => Ok(Self::TableLeaf),
-            _ => {
-                mark_unlikely();
-                Err(LimboError::Corrupt(format!("Invalid page type: {value}")))
-            }
+            _ => Err(LimboError::Corrupt(format!("Invalid page type: {value}"))),
         }
     }
 }
@@ -542,11 +445,458 @@ pub struct OverflowCell {
     pub payload: Pin<Vec<u8>>,
 }
 
+#[derive(Debug)]
+pub struct PageContent {
+    /// the position where page content starts. it's 100 for page 1(database file header is 100 bytes),
+    /// 0 for all other pages.
+    pub offset: usize,
+    pub buffer: Arc<Buffer>,
+    pub overflow_cells: Vec<OverflowCell>,
+}
+
+impl PageContent {
+    pub fn new(offset: usize, buffer: Arc<Buffer>) -> Self {
+        Self {
+            offset,
+            buffer,
+            overflow_cells: Vec::new(),
+        }
+    }
+
+    pub fn page_type(&self) -> PageType {
+        self.read_u8(BTREE_PAGE_TYPE).try_into().unwrap()
+    }
+
+    pub fn maybe_page_type(&self) -> Option<PageType> {
+        self.read_u8(0).try_into().ok() // this could be an overflow page
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    pub fn as_ptr(&self) -> &mut [u8] {
+        self.buffer.as_mut_slice()
+    }
+
+    /// Read a u8 from the page content at the given offset, taking account the possible db header on page 1 (self.offset).
+    /// Do not make this method public.
+    fn read_u8(&self, pos: usize) -> u8 {
+        let buf = self.as_ptr();
+        buf[self.offset + pos]
+    }
+
+    /// Read a u16 from the page content at the given offset, taking account the possible db header on page 1 (self.offset).
+    /// Do not make this method public.
+    fn read_u16(&self, pos: usize) -> u16 {
+        let buf = self.as_ptr();
+        u16::from_be_bytes([buf[self.offset + pos], buf[self.offset + pos + 1]])
+    }
+
+    /// Read a u32 from the page content at the given offset, taking account the possible db header on page 1 (self.offset).
+    /// Do not make this method public.
+    fn read_u32(&self, pos: usize) -> u32 {
+        let buf = self.as_ptr();
+        read_u32(buf, self.offset + pos)
+    }
+
+    /// Write a u8 to the page content at the given offset, taking account the possible db header on page 1 (self.offset).
+    /// Do not make this method public.
+    fn write_u8(&self, pos: usize, value: u8) {
+        tracing::trace!("write_u8(pos={}, value={})", pos, value);
+        let buf = self.as_ptr();
+        buf[self.offset + pos] = value;
+    }
+
+    /// Write a u16 to the page content at the given offset, taking account the possible db header on page 1 (self.offset).
+    /// Do not make this method public.
+    fn write_u16(&self, pos: usize, value: u16) {
+        tracing::trace!("write_u16(pos={}, value={})", pos, value);
+        let buf = self.as_ptr();
+        buf[self.offset + pos..self.offset + pos + 2].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// Write a u32 to the page content at the given offset, taking account the possible db header on page 1 (self.offset).
+    /// Do not make this method public.
+    fn write_u32(&self, pos: usize, value: u32) {
+        tracing::trace!("write_u32(pos={}, value={})", pos, value);
+        let buf = self.as_ptr();
+        buf[self.offset + pos..self.offset + pos + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// Read a u16 from the page content at the given absolute offset, i.e. NOT taking account the possible db header on page 1 (self.offset).
+    /// This is useful when you want to read a location that you read from another location on the page, or when writing a field of an overflow
+    /// or freelist page, for example.
+    pub fn read_u16_no_offset(&self, pos: usize) -> u16 {
+        let buf = self.as_ptr();
+        u16::from_be_bytes([buf[pos], buf[pos + 1]])
+    }
+
+    /// Read a u32 from the page content at the given absolute offset, i.e. NOT taking account the possible db header on page 1 (self.offset).
+    /// This is useful when you want to read a location that you read from another location on the page, or when writing a field of an overflow
+    /// or freelist page, for example.
+    pub fn read_u32_no_offset(&self, pos: usize) -> u32 {
+        let buf = self.as_ptr();
+        u32::from_be_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]])
+    }
+
+    /// Write a u16 to the page content at the given absolute offset, i.e. NOT taking account the possible db header on page 1 (self.offset).
+    /// This is useful when you want to write a location that you read from another location on the page, or when writing a field of an overflow
+    /// or freelist page, for example.
+    pub fn write_u16_no_offset(&self, pos: usize, value: u16) {
+        tracing::trace!("write_u16(pos={}, value={})", pos, value);
+        let buf = self.as_ptr();
+        buf[pos..pos + 2].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// Write a u32 to the page content at the given absolute offset, i.e. NOT taking account the possible db header on page 1 (self.offset).
+    /// This is useful when you want to write a location that you read from another location on the page, or when writing a field of an overflow
+    /// or freelist page, for example.
+    pub fn write_u32_no_offset(&self, pos: usize, value: u32) {
+        tracing::trace!("write_u32(pos={}, value={})", pos, value);
+        let buf = self.as_ptr();
+        buf[pos..pos + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// Assign a new page type to this page.
+    pub fn write_page_type(&self, value: u8) {
+        self.write_u8(BTREE_PAGE_TYPE, value);
+    }
+
+    /// Assign a new rightmost pointer to this page.
+    pub fn write_rightmost_ptr(&self, value: u32) {
+        self.write_u32(BTREE_RIGHTMOST_PTR, value);
+    }
+
+    /// Write the location (byte offset) of the first freeblock on this page, or zero if there are no freeblocks on the page.
+    pub fn write_first_freeblock(&self, value: u16) {
+        self.write_u16(BTREE_FIRST_FREEBLOCK, value);
+    }
+
+    /// Write a freeblock to the page content at the given absolute offset.
+    /// Parameters:
+    /// - offset: the absolute offset of the freeblock
+    /// - size: the size of the freeblock
+    /// - next_block: the absolute offset of the next freeblock, or None if this is the last freeblock
+    pub fn write_freeblock(&self, offset: u16, size: u16, next_block: Option<u16>) {
+        self.write_freeblock_next_ptr(offset, next_block.unwrap_or(0));
+        self.write_freeblock_size(offset, size);
+    }
+
+    /// Write the new size of a freeblock.
+    /// Parameters:
+    /// - offset: the absolute offset of the freeblock
+    /// - size: the new size of the freeblock
+    pub fn write_freeblock_size(&self, offset: u16, size: u16) {
+        self.write_u16_no_offset(offset as usize + 2, size);
+    }
+
+    /// Write the absolute offset of the next freeblock.
+    /// Parameters:
+    /// - offset: the absolute offset of the current freeblock
+    /// - next_block: the absolute offset of the next freeblock
+    pub fn write_freeblock_next_ptr(&self, offset: u16, next_block: u16) {
+        self.write_u16_no_offset(offset as usize, next_block);
+    }
+
+    /// Read a freeblock from the page content at the given absolute offset.
+    /// Returns (absolute offset of next freeblock, size of the current freeblock)
+    pub fn read_freeblock(&self, offset: u16) -> (u16, u16) {
+        (
+            self.read_u16_no_offset(offset as usize),
+            self.read_u16_no_offset(offset as usize + 2),
+        )
+    }
+
+    /// Write the number of cells on this page.
+    pub fn write_cell_count(&self, value: u16) {
+        self.write_u16(BTREE_CELL_COUNT, value);
+    }
+
+    /// Write the beginning of the cell content area on this page.
+    pub fn write_cell_content_area(&self, value: usize) {
+        debug_assert!(value <= PageSize::MAX as usize);
+        let value = value as u16; // deliberate cast to u16 because 0 is interpreted as 65536
+        self.write_u16(BTREE_CELL_CONTENT_AREA, value);
+    }
+
+    /// Write the number of fragmented bytes on this page.
+    pub fn write_fragmented_bytes_count(&self, value: u8) {
+        self.write_u8(BTREE_FRAGMENTED_BYTES_COUNT, value);
+    }
+
+    /// The offset of the first freeblock, or zero if there are no freeblocks on the page.
+    pub fn first_freeblock(&self) -> u16 {
+        self.read_u16(BTREE_FIRST_FREEBLOCK)
+    }
+
+    /// The number of cells on the page.
+    pub fn cell_count(&self) -> usize {
+        self.read_u16(BTREE_CELL_COUNT) as usize
+    }
+
+    /// The size of the cell pointer array in bytes.
+    /// 2 bytes per cell pointer
+    pub fn cell_pointer_array_size(&self) -> usize {
+        self.cell_count() * CELL_PTR_SIZE_BYTES
+    }
+
+    /// The start of the unallocated region.
+    /// Effectively: the offset after the page header + the cell pointer array.
+    pub fn unallocated_region_start(&self) -> usize {
+        let (cell_ptr_array_start, cell_ptr_array_size) = self.cell_pointer_array_offset_and_size();
+        cell_ptr_array_start + cell_ptr_array_size
+    }
+
+    pub fn unallocated_region_size(&self) -> usize {
+        self.cell_content_area() as usize - self.unallocated_region_start()
+    }
+
+    /// The start of the cell content area.
+    pub fn cell_content_area(&self) -> u32 {
+        let offset = self.read_u16(BTREE_CELL_CONTENT_AREA);
+        if offset == 0 {
+            PageSize::MAX
+        } else {
+            offset as u32
+        }
+    }
+
+    /// The size of the page header in bytes.
+    /// 8 bytes for leaf pages, 12 bytes for interior pages (due to storing rightmost child pointer)
+    pub fn header_size(&self) -> usize {
+        let is_interior = self.read_u8(BTREE_PAGE_TYPE) <= PageType::TableInterior as u8;
+        (!is_interior as usize) * LEAF_PAGE_HEADER_SIZE_BYTES
+            + (is_interior as usize) * INTERIOR_PAGE_HEADER_SIZE_BYTES
+    }
+
+    /// The total number of bytes in all fragments
+    pub fn num_frag_free_bytes(&self) -> u8 {
+        self.read_u8(BTREE_FRAGMENTED_BYTES_COUNT)
+    }
+
+    pub fn rightmost_pointer(&self) -> Option<u32> {
+        match self.page_type() {
+            PageType::IndexInterior => Some(self.read_u32(BTREE_RIGHTMOST_PTR)),
+            PageType::TableInterior => Some(self.read_u32(BTREE_RIGHTMOST_PTR)),
+            PageType::IndexLeaf => None,
+            PageType::TableLeaf => None,
+        }
+    }
+
+    pub fn rightmost_pointer_raw(&self) -> Option<*mut u8> {
+        match self.page_type() {
+            PageType::IndexInterior | PageType::TableInterior => Some(unsafe {
+                self.as_ptr()
+                    .as_mut_ptr()
+                    .add(self.offset + BTREE_RIGHTMOST_PTR)
+            }),
+            PageType::IndexLeaf => None,
+            PageType::TableLeaf => None,
+        }
+    }
+
+    pub fn cell_get(&self, idx: usize, usable_size: usize) -> Result<BTreeCell> {
+        tracing::trace!("cell_get(idx={})", idx);
+        let buf = self.as_ptr();
+
+        let ncells = self.cell_count();
+        assert!(
+            idx < ncells,
+            "cell_get: idx out of bounds: idx={idx}, ncells={ncells}"
+        );
+        let cell_pointer_array_start = self.header_size();
+        let cell_pointer = cell_pointer_array_start + (idx * CELL_PTR_SIZE_BYTES);
+        let cell_pointer = self.read_u16(cell_pointer) as usize;
+
+        // SAFETY: this buffer is valid as long as the page is alive. We could store the page in the cell and do some lifetime magic
+        // but that is extra memory for no reason at all. Just be careful like in the old times :).
+        let static_buf: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(buf) };
+        read_btree_cell(static_buf, self, cell_pointer, usable_size)
+    }
+
+    /// Read the rowid of a table interior cell.
+    #[inline(always)]
+    pub fn cell_table_interior_read_rowid(&self, idx: usize) -> Result<i64> {
+        debug_assert!(self.page_type() == PageType::TableInterior);
+        let buf = self.as_ptr();
+        let cell_pointer_array_start = self.header_size();
+        let cell_pointer = cell_pointer_array_start + (idx * CELL_PTR_SIZE_BYTES);
+        let cell_pointer = self.read_u16(cell_pointer) as usize;
+        const LEFT_CHILD_PAGE_SIZE_BYTES: usize = 4;
+        let (rowid, _) = read_varint(&buf[cell_pointer + LEFT_CHILD_PAGE_SIZE_BYTES..])?;
+        Ok(rowid as i64)
+    }
+
+    /// Read the left child page of a table interior cell or an index interior cell.
+    #[inline(always)]
+    pub fn cell_interior_read_left_child_page(&self, idx: usize) -> u32 {
+        debug_assert!(
+            self.page_type() == PageType::TableInterior
+                || self.page_type() == PageType::IndexInterior
+        );
+        let buf = self.as_ptr();
+        let cell_pointer_array_start = self.header_size();
+        let cell_pointer = cell_pointer_array_start + (idx * CELL_PTR_SIZE_BYTES);
+        let cell_pointer = self.read_u16(cell_pointer) as usize;
+        u32::from_be_bytes([
+            buf[cell_pointer],
+            buf[cell_pointer + 1],
+            buf[cell_pointer + 2],
+            buf[cell_pointer + 3],
+        ])
+    }
+
+    /// Read the rowid of a table leaf cell.
+    #[inline(always)]
+    pub fn cell_table_leaf_read_rowid(&self, idx: usize) -> Result<i64> {
+        debug_assert!(self.page_type() == PageType::TableLeaf);
+        let buf = self.as_ptr();
+        let cell_pointer_array_start = self.header_size();
+        let cell_pointer = cell_pointer_array_start + (idx * CELL_PTR_SIZE_BYTES);
+        let cell_pointer = self.read_u16(cell_pointer) as usize;
+        let mut pos = cell_pointer;
+        let (_, nr) = read_varint(&buf[pos..])?;
+        pos += nr;
+        let (rowid, _) = read_varint(&buf[pos..])?;
+        Ok(rowid as i64)
+    }
+
+    /// The cell pointer array of a b-tree page immediately follows the b-tree page header.
+    /// Let K be the number of cells on the btree.
+    /// The cell pointer array consists of K 2-byte integer offsets to the cell contents.
+    /// The cell pointers are arranged in key order with:
+    /// - left-most cell (the cell with the smallest key) first and
+    /// - the right-most cell (the cell with the largest key) last.
+    pub fn cell_pointer_array_offset_and_size(&self) -> (usize, usize) {
+        (
+            self.cell_pointer_array_offset(),
+            self.cell_pointer_array_size(),
+        )
+    }
+
+    pub fn cell_pointer_array_offset(&self) -> usize {
+        self.offset + self.header_size()
+    }
+
+    /// Get the start offset of a cell's payload, not taking into account the 100-byte offset that is present on page 1.
+    pub fn cell_get_raw_start_offset(&self, idx: usize) -> usize {
+        let cell_pointer_array_start = self.cell_pointer_array_offset();
+        let cell_pointer = cell_pointer_array_start + (idx * CELL_PTR_SIZE_BYTES);
+        self.read_u16_no_offset(cell_pointer) as usize
+    }
+
+    /// Get region(start end length) of a cell's payload
+    /// FIXME: make all usages of [cell_get_raw_region] to use the _faster version in cases where the method is called
+    /// repeatedly, since page_type, max_local, min_local are the same for all cells on the page. Also consider whether
+    /// max_local and min_local should be static properties of the page.
+    pub fn cell_get_raw_region(&self, idx: usize, usable_size: usize) -> (usize, usize) {
+        let page_type = self.page_type();
+        let max_local = payload_overflow_threshold_max(page_type, usable_size);
+        let min_local = payload_overflow_threshold_min(page_type, usable_size);
+        let cell_count = self.cell_count();
+        self._cell_get_raw_region_faster(
+            idx,
+            usable_size,
+            cell_count,
+            max_local,
+            min_local,
+            page_type,
+        )
+    }
+
+    /// Get region(start end length) of a cell's payload
+    pub fn _cell_get_raw_region_faster(
+        &self,
+        idx: usize,
+        usable_size: usize,
+        cell_count: usize,
+        max_local: usize,
+        min_local: usize,
+        page_type: PageType,
+    ) -> (usize, usize) {
+        let buf = self.as_ptr();
+        assert!(idx < cell_count, "cell_get: idx out of bounds");
+        let start = self.cell_get_raw_start_offset(idx);
+        let len = match page_type {
+            PageType::IndexInterior => {
+                let (len_payload, n_payload) = read_varint(&buf[start + 4..]).unwrap();
+                let (overflows, to_read) =
+                    payload_overflows(len_payload as usize, max_local, min_local, usable_size);
+                if overflows {
+                    4 + to_read + n_payload
+                } else {
+                    4 + len_payload as usize + n_payload
+                }
+            }
+            PageType::TableInterior => {
+                let (_, n_rowid) = read_varint(&buf[start + 4..]).unwrap();
+                4 + n_rowid
+            }
+            PageType::IndexLeaf => {
+                let (len_payload, n_payload) = read_varint(&buf[start..]).unwrap();
+                let (overflows, to_read) =
+                    payload_overflows(len_payload as usize, max_local, min_local, usable_size);
+                if overflows {
+                    to_read + n_payload
+                } else {
+                    let mut size = len_payload as usize + n_payload;
+                    if size < MINIMUM_CELL_SIZE {
+                        size = MINIMUM_CELL_SIZE;
+                    }
+                    size
+                }
+            }
+            PageType::TableLeaf => {
+                let (len_payload, n_payload) = read_varint(&buf[start..]).unwrap();
+                let (_, n_rowid) = read_varint(&buf[start + n_payload..]).unwrap();
+                let (overflows, to_read) =
+                    payload_overflows(len_payload as usize, max_local, min_local, usable_size);
+                if overflows {
+                    to_read + n_payload + n_rowid
+                } else {
+                    let mut size = len_payload as usize + n_payload + n_rowid;
+                    if size < MINIMUM_CELL_SIZE {
+                        size = MINIMUM_CELL_SIZE;
+                    }
+                    size
+                }
+            }
+        };
+        (start, len)
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        self.read_u8(BTREE_PAGE_TYPE) > PageType::TableInterior as u8
+    }
+
+    pub fn write_database_header(&self, header: &DatabaseHeader) {
+        let buf = self.as_ptr();
+        buf[0..DatabaseHeader::SIZE].copy_from_slice(bytemuck::bytes_of(header));
+    }
+
+    pub fn debug_print_freelist(&self, usable_space: usize) {
+        let mut pc = self.first_freeblock() as usize;
+        let mut block_num = 0;
+        println!("---- Free List Blocks ----");
+        println!("first freeblock pointer: {pc}");
+        println!("cell content area: {}", self.cell_content_area());
+        println!("fragmented bytes: {}", self.num_frag_free_bytes());
+
+        while pc != 0 && pc <= usable_space {
+            let next = self.read_u16_no_offset(pc);
+            let size = self.read_u16_no_offset(pc + 2);
+
+            println!("block {block_num}: position={pc}, size={size}, next={next}");
+            pc = next as usize;
+            block_num += 1;
+        }
+        println!("--------------");
+    }
+}
+
 /// Send read request for DB page read to the IO
 /// if allow_empty_read is set, than empty read will be raise error for the page, but will not panic
 #[instrument(skip_all, level = Level::DEBUG)]
 pub fn begin_read_page(
-    db_file: &dyn DatabaseStorage,
+    db_file: Arc<dyn DatabaseStorage>,
     buffer_pool: Arc<BufferPool>,
     page: PageRef,
     page_idx: usize,
@@ -558,53 +908,36 @@ pub fn begin_read_page(
     #[allow(clippy::arc_with_non_send_sync)]
     let buf = Arc::new(buf);
     let complete = Box::new(move |res: Result<(Arc<Buffer>, i32), CompletionError>| {
-        let Ok((buf, bytes_read)) = res else {
+        let Ok((mut buf, bytes_read)) = res else {
             page.clear_locked();
-            return None; // IO error already captured in completion
+            return;
         };
         let buf_len = buf.len();
-        // Handle truncated database files: if we read fewer bytes than expected
-        // (and it's not an intentional empty read), return a ShortRead error.
-        if bytes_read == 0 {
-            if !allow_empty_read {
-                tracing::error!("short read on page {page_idx}: expected {buf_len} bytes, got 0");
-                page.clear_locked();
-                return Some(CompletionError::ShortRead {
-                    page_idx,
-                    expected: buf_len,
-                    actual: 0,
-                });
-            }
-        } else if bytes_read != buf_len as i32 {
-            tracing::error!(
-                "short read on page {page_idx}: expected {buf_len} bytes, got {bytes_read}"
-            );
-            page.clear_locked();
-            return Some(CompletionError::ShortRead {
-                page_idx,
-                expected: buf_len,
-                actual: bytes_read as usize,
-            });
-        }
+        turso_assert!(
+            (allow_empty_read && bytes_read == 0) || bytes_read == buf_len as i32,
+            "read({bytes_read}) != expected({buf_len})"
+        );
         let page = page.clone();
-        let buffer = if bytes_read == 0 {
-            Arc::new(Buffer::new_temporary(0))
-        } else {
-            buf
-        };
-        finish_read_page(page_idx, buffer, page);
-        None
+        if bytes_read == 0 {
+            buf = Arc::new(Buffer::new_temporary(0));
+        }
+        finish_read_page(page_idx, buf, page.clone());
     });
     let c = Completion::new_read(buf, complete);
     db_file.read_page(page_idx, io_ctx, c)
 }
 
-#[instrument(skip_all, level = Level::DEBUG)]
-pub fn finish_read_page(page_idx: usize, buffer: Arc<Buffer>, page: PageRef) {
+#[instrument(skip_all, level = Level::INFO)]
+pub fn finish_read_page(page_idx: usize, buffer_ref: Arc<Buffer>, page: PageRef) {
     tracing::trace!("finish_read_page(page_idx = {page_idx})");
+    let pos = if page_idx == DatabaseHeader::PAGE_ID {
+        DatabaseHeader::SIZE
+    } else {
+        0
+    };
+    let inner = PageContent::new(pos, buffer_ref.clone());
     {
-        let inner = page.get();
-        inner.buffer = Some(buffer);
+        page.get().contents.replace(inner);
         page.clear_locked();
         page.set_loaded();
         // we set the wal tag only when reading page from log, or in allocate_page,
@@ -621,16 +954,20 @@ pub fn begin_write_btree_page(pager: &Pager, page: &PageRef) -> Result<Completio
 
     let page_id = page.get().id;
     tracing::trace!("begin_write_btree_page(page_id={})", page_id);
-
-    let buffer = page.get().buffer.clone().expect("buffer not loaded");
-    let buf_len = buffer.len();
+    let buffer = {
+        let contents = page.get_contents();
+        contents.buffer.clone()
+    };
 
     let write_complete = {
+        let buf_copy = buffer.clone();
         Box::new(move |res: Result<i32, CompletionError>| {
             let Ok(bytes_written) = res else {
                 return;
             };
             tracing::trace!("finish_write_btree_page");
+            let buf_copy = buf_copy.clone();
+            let buf_len = buf_copy.len();
 
             page_finish.clear_dirty();
             turso_assert!(
@@ -640,8 +977,8 @@ pub fn begin_write_btree_page(pager: &Pager, page: &PageRef) -> Result<Completio
         })
     };
     let c = Completion::new_write(write_complete);
-    let io_ctx = pager.io_ctx.read();
-    page_source.write_page(page_id, buffer, &io_ctx, c)
+    let io_ctx = &pager.io_ctx.borrow();
+    page_source.write_page(page_id, buffer.clone(), io_ctx, c)
 }
 
 #[instrument(skip_all, level = Level::DEBUG)]
@@ -659,15 +996,15 @@ pub fn write_pages_vectored(
     pager: &Pager,
     batch: BTreeMap<usize, Arc<Buffer>>,
     done_flag: Arc<AtomicBool>,
-    err: Arc<crate::sync::OnceLock<CompletionError>>,
+    final_write: bool,
 ) -> Result<Vec<Completion>> {
     if batch.is_empty() {
-        done_flag.store(true, Ordering::Release);
+        done_flag.store(true, Ordering::Relaxed);
         return Ok(Vec::new());
     }
 
-    let page_sz = pager.get_page_size_unchecked().get() as usize;
-
+    let page_sz = pager.page_size.get().expect("page size is not set").get() as usize;
+    // Count expected number of runs to create the atomic counter we need to track each batch
     let mut run_count = 0;
     let mut prev_id = None;
     for &id in batch.keys() {
@@ -676,97 +1013,105 @@ pub fn write_pages_vectored(
                 run_count += 1;
             }
         } else {
-            run_count = 1;
+            run_count = 1; // First run
         }
         prev_id = Some(id);
     }
 
+    // Create the atomic counters
     let runs_left = Arc::new(AtomicUsize::new(run_count));
-
+    let done = done_flag.clone();
     const EST_BUFF_CAPACITY: usize = 32;
+
     let mut run_bufs = Vec::with_capacity(EST_BUFF_CAPACITY);
     let mut run_start_id: Option<usize> = None;
-    let mut completions = Vec::with_capacity(run_count);
 
+    // Track which run we're on to identify the last one
+    let mut current_run = 0;
     let mut iter = batch.iter().peekable();
-    while let Some((id, buffer)) = iter.next() {
+    let mut completions = Vec::new();
+
+    while let Some((id, item)) = iter.next() {
+        // Track the start of the run
         if run_start_id.is_none() {
             run_start_id = Some(*id);
         }
-        run_bufs.push(buffer.clone());
+        run_bufs.push(item.clone());
 
-        let is_end_of_run = iter.peek().is_none_or(|(next_id, _)| **next_id != id + 1);
-        if !is_end_of_run {
-            continue;
-        }
+        // Check if this is the end of a run
+        let is_end_of_run = match iter.peek() {
+            Some(&(next_id, _)) => *next_id != id + 1,
+            None => true,
+        };
 
-        let start_id = run_start_id.take().expect("start id");
-        let runs_left_cl = runs_left.clone();
-        let done_cl = done_flag.clone();
-        let err_cl = err.clone();
+        if is_end_of_run {
+            current_run += 1;
+            let start_id = run_start_id.expect("should have a start id");
+            let runs_left_cl = runs_left.clone();
+            let done_cl = done.clone();
 
-        let expected_bytes = (page_sz * run_bufs.len()) as i32;
+            // This is the last chunk if it's the last run AND final_write is true
+            let is_last_chunk = current_run == run_count && final_write;
 
-        let cmp = Completion::new_write(move |res| {
-            // Record error/mismatch, but always resolve the batch progress.
-            match res {
-                Ok(n) => {
-                    if n != expected_bytes {
-                        let _ = err_cl.set(CompletionError::ShortWrite);
-                        tracing::error!(
-                            "write_pages_vectored: short write: wrote({n}) != expected({expected_bytes})"
-                        );
-                    }
+            let total_sz = (page_sz * run_bufs.len()) as i32;
+            let cmp = move |res| {
+                let Ok(res) = res else {
+                    return;
+                };
+                turso_assert!(total_sz == res, "failed to write expected size");
+                if runs_left_cl.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    done_cl.store(true, Ordering::Release);
+                }
+            };
+
+            let c = if is_last_chunk {
+                Completion::new_write_linked(cmp)
+            } else {
+                Completion::new_write(cmp)
+            };
+
+            // Submit write operation for this run
+            let io_ctx = &pager.io_ctx.borrow();
+            match pager.db_file.write_pages(
+                start_id,
+                page_sz,
+                std::mem::replace(&mut run_bufs, Vec::with_capacity(EST_BUFF_CAPACITY)),
+                io_ctx,
+                c,
+            ) {
+                Ok(c) => {
+                    completions.push(c);
                 }
                 Err(e) => {
-                    tracing::error!("write_pages_vectored: write error: {:?}", e);
-                    let _ = err_cl.set(e);
+                    if runs_left.fetch_sub(1, Ordering::AcqRel) == 1 {
+                        done.store(true, Ordering::Release);
+                    }
+                    for c in completions {
+                        c.abort();
+                    }
+                    return Err(e);
                 }
             }
-            // we have to decrement runs_left on both paths
-            if runs_left_cl.fetch_sub(1, Ordering::AcqRel) == 1 {
-                tracing::debug!("write_pages_vectored: run complete");
-                done_cl.store(true, Ordering::Release);
-            }
-        });
-        let io_ctx = pager.io_ctx.read();
-        let bufs = std::mem::replace(&mut run_bufs, Vec::with_capacity(EST_BUFF_CAPACITY));
-        match pager
-            .db_file
-            .write_pages(start_id, page_sz, bufs, &io_ctx, cmp)
-        {
-            Ok(c) => completions.push(c),
-            Err(e) => {
-                // We failed to submit this run at all. Mark batch failed+done and cancel already-submitted.
-                let _ = err.set(CompletionError::Aborted);
-                done_flag.store(true, Ordering::Release);
-                pager.io.cancel(&completions)?;
-                pager.io.drain_completions(&completions)?;
-                return Err(e);
-            }
+            run_start_id = None;
         }
     }
+
+    tracing::debug!("write_pages_vectored: total runs={run_count}");
     Ok(completions)
 }
 
 #[instrument(skip_all, level = Level::DEBUG)]
 pub fn begin_sync(
-    db_file: &dyn DatabaseStorage,
-    syncing: Arc<AtomicBool>,
-    sync_type: FileSyncType,
+    db_file: Arc<dyn DatabaseStorage>,
+    syncing: Rc<Cell<bool>>,
 ) -> Result<Completion> {
-    turso_assert!(!syncing.load(Ordering::SeqCst));
-    syncing.store(true, Ordering::SeqCst);
-    let completion = Completion::new_sync({
-        let syncing = syncing.clone();
-        move |_| {
-            syncing.store(false, Ordering::SeqCst);
-        }
+    assert!(!syncing.get());
+    syncing.set(true);
+    let completion = Completion::new_sync(move |_| {
+        syncing.set(false);
     });
     #[allow(clippy::arc_with_non_send_sync)]
-    db_file.sync(completion, sync_type).inspect_err(|_| {
-        syncing.store(false, Ordering::SeqCst);
-    })
+    db_file.sync(completion)
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -819,37 +1164,24 @@ pub fn read_btree_cell(
     pos: usize,
     usable_size: usize,
 ) -> Result<BTreeCell> {
-    let page_type = page_content.page_type()?;
+    let page_type = page_content.page_type();
     let max_local = payload_overflow_threshold_max(page_type, usable_size);
     let min_local = payload_overflow_threshold_min(page_type, usable_size);
     match page_type {
         PageType::IndexInterior => {
             let mut pos = pos;
-            crate::assert_or_bail_corrupt!(
-                pos + 4 <= page.len(),
-                "cell offset {} out of bounds for page size {}",
-                pos,
-                page.len()
-            );
             let left_child_page =
                 u32::from_be_bytes([page[pos], page[pos + 1], page[pos + 2], page[pos + 3]]);
             pos += 4;
-            let (payload_size, nr) = read_varint(crate::slice_in_bounds_or_corrupt!(page, pos..))?;
+            let (payload_size, nr) = read_varint(&page[pos..])?;
             pos += nr;
 
             let (overflows, to_read) =
                 payload_overflows(payload_size as usize, max_local, min_local, usable_size);
             let to_read = if overflows { to_read } else { page.len() - pos };
 
-            crate::assert_or_bail_corrupt!(
-                pos + to_read <= page.len(),
-                "payload range {}..{} out of bounds for page size {}",
-                pos,
-                pos + to_read,
-                page.len()
-            );
             let (payload, first_overflow_page) =
-                read_payload(&page[pos..pos + to_read], payload_size as usize)?;
+                read_payload(&page[pos..pos + to_read], payload_size as usize);
             Ok(BTreeCell::IndexInteriorCell(IndexInteriorCell {
                 left_child_page,
                 payload,
@@ -859,16 +1191,10 @@ pub fn read_btree_cell(
         }
         PageType::TableInterior => {
             let mut pos = pos;
-            crate::assert_or_bail_corrupt!(
-                pos + 4 <= page.len(),
-                "cell offset {} out of bounds for page size {}",
-                pos,
-                page.len()
-            );
             let left_child_page =
                 u32::from_be_bytes([page[pos], page[pos + 1], page[pos + 2], page[pos + 3]]);
             pos += 4;
-            let (rowid, _) = read_varint(crate::slice_in_bounds_or_corrupt!(page, pos..))?;
+            let (rowid, _) = read_varint(&page[pos..])?;
             Ok(BTreeCell::TableInteriorCell(TableInteriorCell {
                 left_child_page,
                 rowid: rowid as i64,
@@ -876,22 +1202,15 @@ pub fn read_btree_cell(
         }
         PageType::IndexLeaf => {
             let mut pos = pos;
-            let (payload_size, nr) = read_varint(crate::slice_in_bounds_or_corrupt!(page, pos..))?;
+            let (payload_size, nr) = read_varint(&page[pos..])?;
             pos += nr;
 
             let (overflows, to_read) =
                 payload_overflows(payload_size as usize, max_local, min_local, usable_size);
             let to_read = if overflows { to_read } else { page.len() - pos };
 
-            crate::assert_or_bail_corrupt!(
-                pos + to_read <= page.len(),
-                "payload range {}..{} out of bounds for page size {}",
-                pos,
-                pos + to_read,
-                page.len()
-            );
             let (payload, first_overflow_page) =
-                read_payload(&page[pos..pos + to_read], payload_size as usize)?;
+                read_payload(&page[pos..pos + to_read], payload_size as usize);
             Ok(BTreeCell::IndexLeafCell(IndexLeafCell {
                 payload,
                 first_overflow_page,
@@ -900,24 +1219,17 @@ pub fn read_btree_cell(
         }
         PageType::TableLeaf => {
             let mut pos = pos;
-            let (payload_size, nr) = read_varint(crate::slice_in_bounds_or_corrupt!(page, pos..))?;
+            let (payload_size, nr) = read_varint(&page[pos..])?;
             pos += nr;
-            let (rowid, nr) = read_varint(crate::slice_in_bounds_or_corrupt!(page, pos..))?;
+            let (rowid, nr) = read_varint(&page[pos..])?;
             pos += nr;
 
             let (overflows, to_read) =
                 payload_overflows(payload_size as usize, max_local, min_local, usable_size);
             let to_read = if overflows { to_read } else { page.len() - pos };
 
-            crate::assert_or_bail_corrupt!(
-                pos + to_read <= page.len(),
-                "payload range {}..{} out of bounds for page size {}",
-                pos,
-                pos + to_read,
-                page.len()
-            );
             let (payload, first_overflow_page) =
-                read_payload(&page[pos..pos + to_read], payload_size as usize)?;
+                read_payload(&page[pos..pos + to_read], payload_size as usize);
             Ok(BTreeCell::TableLeafCell(TableLeafCell {
                 rowid: rowid as i64,
                 payload,
@@ -931,30 +1243,21 @@ pub fn read_btree_cell(
 /// read_payload takes in the unread bytearray with the payload size
 /// and returns the payload on the page, and optionally the first overflow page number.
 #[allow(clippy::readonly_write_lock)]
-fn read_payload(
-    unread: &'static [u8],
-    payload_size: usize,
-) -> Result<(&'static [u8], Option<u32>)> {
+fn read_payload(unread: &'static [u8], payload_size: usize) -> (&'static [u8], Option<u32>) {
     let cell_len = unread.len();
     // We will let overflow be constructed back if needed or requested.
     if payload_size <= cell_len {
         // fit within 1 page
-        Ok((&unread[..payload_size], None))
+        (&unread[..payload_size], None)
     } else {
         // overflow
-        if cell_len < 4 {
-            bail_corrupt_error!(
-                "overflow cell too small: {} bytes, need at least 4",
-                cell_len
-            );
-        }
         let first_overflow_page = u32::from_be_bytes([
             unread[cell_len - 4],
             unread[cell_len - 3],
             unread[cell_len - 2],
             unread[cell_len - 1],
         ]);
-        Ok((&unread[..cell_len - 4], Some(first_overflow_page)))
+        (&unread[..cell_len - 4], Some(first_overflow_page))
     }
 }
 
@@ -967,196 +1270,131 @@ pub fn validate_serial_type(value: u64) -> Result<()> {
     Ok(())
 }
 
-/// Reads a value that might reference the buffer it is reading from. Be sure to store RefValue with the buffer
-/// always.
-#[inline(always)]
-pub fn read_value<'a>(buf: &'a [u8], serial_type: SerialType) -> Result<(ValueRef<'a>, usize)> {
-    match serial_type.kind() {
-        SerialTypeKind::Null => Ok((ValueRef::Null, 0)),
-        SerialTypeKind::I8 => {
-            let val = *buf.first().ok_or_else(|| {
-                mark_unlikely();
-                LimboError::Corrupt("Invalid UInt8 value".into())
-            })?;
-            Ok((ValueRef::Numeric(Numeric::Integer(val as i8 as i64)), 1))
+pub struct SmallVec<T, const N: usize = 64> {
+    /// Stack allocated data
+    pub data: [std::mem::MaybeUninit<T>; N],
+    /// Length of the vector, accounting for both stack and heap allocated data
+    pub len: usize,
+    /// Extra data on heap
+    pub extra_data: Option<Vec<T>>,
+}
+
+impl<T: Default + Copy, const N: usize> SmallVec<T, N> {
+    pub fn new() -> Self {
+        Self {
+            data: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
+            len: 0,
+            extra_data: None,
         }
-        SerialTypeKind::I16 => {
-            let bytes: &[u8; 2] =
-                buf.get(..2)
-                    .and_then(|s| s.try_into().ok())
-                    .ok_or_else(|| {
-                        mark_unlikely();
-                        LimboError::Corrupt("Invalid BEInt16 value".into())
-                    })?;
-            Ok((
-                ValueRef::Numeric(Numeric::Integer(i16::from_be_bytes(*bytes) as i64)),
-                2,
-            ))
+    }
+
+    pub fn push(&mut self, value: T) {
+        if self.len < self.data.len() {
+            self.data[self.len] = MaybeUninit::new(value);
+            self.len += 1;
+        } else {
+            if self.extra_data.is_none() {
+                self.extra_data = Some(Vec::new());
+            }
+            self.extra_data.as_mut().unwrap().push(value);
+            self.len += 1;
         }
-        SerialTypeKind::I24 => {
-            let bytes: &[u8; 3] =
-                buf.get(..3)
-                    .and_then(|s| s.try_into().ok())
-                    .ok_or_else(|| {
-                        mark_unlikely();
-                        LimboError::Corrupt("Invalid BEInt24 value".into())
-                    })?;
-            let sign_extension = (bytes[0] as i8 >> 7) as u8;
-            Ok((
-                ValueRef::Numeric(Numeric::Integer(i32::from_be_bytes([
-                    sign_extension,
-                    bytes[0],
-                    bytes[1],
-                    bytes[2],
-                ]) as i64)),
-                3,
-            ))
+    }
+
+    fn get_from_heap(&self, index: usize) -> T {
+        assert!(self.extra_data.is_some());
+        assert!(index >= self.data.len());
+        let extra_data_index = index - self.data.len();
+        let extra_data = self.extra_data.as_ref().unwrap();
+        assert!(extra_data_index < extra_data.len());
+        extra_data[extra_data_index]
+    }
+
+    pub fn get(&self, index: usize) -> Option<T> {
+        if index >= self.len {
+            return None;
         }
-        SerialTypeKind::I32 => {
-            let bytes: &[u8; 4] =
-                buf.get(..4)
-                    .and_then(|s| s.try_into().ok())
-                    .ok_or_else(|| {
-                        mark_unlikely();
-                        LimboError::Corrupt("Invalid BEInt32 value".into())
-                    })?;
-            Ok((
-                ValueRef::Numeric(Numeric::Integer(i32::from_be_bytes(*bytes) as i64)),
-                4,
-            ))
-        }
-        SerialTypeKind::I48 => {
-            let bytes: &[u8; 6] =
-                buf.get(..6)
-                    .and_then(|s| s.try_into().ok())
-                    .ok_or_else(|| {
-                        mark_unlikely();
-                        LimboError::Corrupt("Invalid BEInt48 value".into())
-                    })?;
-            let sign_extension = (bytes[0] as i8 >> 7) as u8;
-            Ok((
-                ValueRef::Numeric(Numeric::Integer(i64::from_be_bytes([
-                    sign_extension,
-                    sign_extension,
-                    bytes[0],
-                    bytes[1],
-                    bytes[2],
-                    bytes[3],
-                    bytes[4],
-                    bytes[5],
-                ]))),
-                6,
-            ))
-        }
-        SerialTypeKind::I64 => {
-            let bytes: &[u8; 8] =
-                buf.get(..8)
-                    .and_then(|s| s.try_into().ok())
-                    .ok_or_else(|| {
-                        mark_unlikely();
-                        LimboError::Corrupt("Invalid BEInt64 value".into())
-                    })?;
-            Ok((
-                ValueRef::Numeric(Numeric::Integer(i64::from_be_bytes(*bytes))),
-                8,
-            ))
-        }
-        SerialTypeKind::F64 => {
-            let bytes: &[u8; 8] = buf
-                .get(..8)
-                .and_then(|s| s.try_into().ok())
-                .ok_or_else(|| LimboError::Corrupt("Invalid BEFloat64 value".into()))?;
-            Ok((ValueRef::from_f64(f64::from_be_bytes(*bytes)), 8))
-        }
-        SerialTypeKind::ConstInt0 => Ok((ValueRef::Numeric(Numeric::Integer(0)), 0)),
-        SerialTypeKind::ConstInt1 => Ok((ValueRef::Numeric(Numeric::Integer(1)), 0)),
-        SerialTypeKind::Blob => {
-            let content_size = serial_type.size();
-            let data = buf.get(..content_size).ok_or_else(|| {
-                mark_unlikely();
-                LimboError::Corrupt("Invalid Blob value".into())
-            })?;
-            Ok((ValueRef::Blob(data), content_size))
-        }
-        SerialTypeKind::Text => {
-            let content_size = serial_type.size();
-            let data = buf.get(..content_size).ok_or_else(|| {
-                mark_unlikely();
-                LimboError::Corrupt(format!(
-                    "Invalid String value, length {} < expected length {}",
-                    buf.len(),
-                    content_size
-                ))
-            })?;
-            // SAFETY: SerialTypeKind is Text so this buffer is a valid string
-            let val = unsafe { std::str::from_utf8_unchecked(data) };
-            Ok((
-                ValueRef::Text(TextRef::new(val, TextSubtype::Text)),
-                content_size,
-            ))
+        let data_is_on_stack = index < self.data.len();
+        if data_is_on_stack {
+            // SAFETY: We know this index is initialized we checked for index < self.len earlier above.
+            unsafe { Some(self.data[index].assume_init()) }
+        } else {
+            Some(self.get_from_heap(index))
         }
     }
 }
 
-pub fn read_value_serial_type<'a>(
-    buf: &'a [u8],
-    serial_type: u64,
-) -> Result<(ValueRef<'a>, usize)> {
-    match serial_type {
-        0 => Ok((ValueRef::Null, 0)),
-        1 => {
+impl<T: Default + Copy, const N: usize> SmallVec<T, N> {
+    pub fn iter(&self) -> SmallVecIter<'_, T, N> {
+        SmallVecIter { vec: self, pos: 0 }
+    }
+}
+
+pub struct SmallVecIter<'a, T, const N: usize> {
+    vec: &'a SmallVec<T, N>,
+    pos: usize,
+}
+
+impl<T: Default + Copy, const N: usize> Iterator for SmallVecIter<'_, T, N> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.vec.get(self.pos)?;
+        self.pos += 1;
+        Some(next)
+    }
+}
+
+/// Reads a value that might reference the buffer it is reading from. Be sure to store RefValue with the buffer
+/// always.
+#[inline(always)]
+pub fn read_value(buf: &[u8], serial_type: SerialType) -> Result<(RefValue, usize)> {
+    match serial_type.kind() {
+        SerialTypeKind::Null => Ok((RefValue::Null, 0)),
+        SerialTypeKind::I8 => {
             if buf.is_empty() {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 1-byte int");
+                crate::bail_corrupt_error!("Invalid UInt8 value");
             }
-            Ok((ValueRef::Numeric(Numeric::Integer(buf[0] as i8 as i64)), 1))
+            let val = buf[0] as i8;
+            Ok((RefValue::Integer(val as i64), 1))
         }
-        2 => {
+        SerialTypeKind::I16 => {
             if buf.len() < 2 {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 2-byte int");
+                crate::bail_corrupt_error!("Invalid BEInt16 value");
             }
             Ok((
-                ValueRef::Numeric(Numeric::Integer(i16::from_be_bytes([buf[0], buf[1]]) as i64)),
+                RefValue::Integer(i16::from_be_bytes([buf[0], buf[1]]) as i64),
                 2,
             ))
         }
-        3 => {
+        SerialTypeKind::I24 => {
             if buf.len() < 3 {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 3-byte int");
+                crate::bail_corrupt_error!("Invalid BEInt24 value");
             }
-            let sign_extension = if buf[0] <= 0x7F { 0 } else { 0xFF };
+            let sign_extension = if buf[0] <= 127 { 0 } else { 255 };
             Ok((
-                ValueRef::Numeric(Numeric::Integer(i32::from_be_bytes([
-                    sign_extension,
-                    buf[0],
-                    buf[1],
-                    buf[2],
-                ]) as i64)),
+                RefValue::Integer(
+                    i32::from_be_bytes([sign_extension, buf[0], buf[1], buf[2]]) as i64
+                ),
                 3,
             ))
         }
-        4 => {
+        SerialTypeKind::I32 => {
             if buf.len() < 4 {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 4-byte int");
+                crate::bail_corrupt_error!("Invalid BEInt32 value");
             }
             Ok((
-                ValueRef::Numeric(Numeric::Integer(i32::from_be_bytes([
-                    buf[0], buf[1], buf[2], buf[3],
-                ]) as i64)),
+                RefValue::Integer(i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as i64),
                 4,
             ))
         }
-        5 => {
+        SerialTypeKind::I48 => {
             if buf.len() < 6 {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 6-byte int");
+                crate::bail_corrupt_error!("Invalid BEInt48 value");
             }
-            let sign_extension = if buf[0] <= 0x7F { 0 } else { 0xFF };
+            let sign_extension = if buf[0] <= 127 { 0 } else { 255 };
             Ok((
-                ValueRef::Numeric(Numeric::Integer(i64::from_be_bytes([
+                RefValue::Integer(i64::from_be_bytes([
                     sign_extension,
                     sign_extension,
                     buf[0],
@@ -1165,69 +1403,64 @@ pub fn read_value_serial_type<'a>(
                     buf[3],
                     buf[4],
                     buf[5],
-                ]))),
+                ])),
                 6,
             ))
         }
-        6 => {
+        SerialTypeKind::I64 => {
             if buf.len() < 8 {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 8-byte int");
+                crate::bail_corrupt_error!("Invalid BEInt64 value");
             }
             Ok((
-                ValueRef::Numeric(Numeric::Integer(i64::from_be_bytes([
-                    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
-                ]))),
-                8,
-            ))
-        }
-        7 => {
-            if buf.len() < 8 {
-                mark_unlikely();
-                crate::bail_corrupt_error!("Invalid 8-byte float");
-            }
-            Ok((
-                ValueRef::from_f64(f64::from_be_bytes([
+                RefValue::Integer(i64::from_be_bytes([
                     buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
                 ])),
                 8,
             ))
         }
-        8 => Ok((ValueRef::Numeric(Numeric::Integer(0)), 0)),
-        9 => Ok((ValueRef::Numeric(Numeric::Integer(1)), 0)),
-        n if n >= 12 => match n % 2 {
-            0 => {
-                // Blob
-                let content_size = ((n - 12) / 2) as usize;
-                let data = buf.get(..content_size).ok_or_else(|| {
-                    mark_unlikely();
-                    LimboError::Corrupt("Invalid Blob value".into())
-                })?;
-                Ok((ValueRef::Blob(data), content_size))
+        SerialTypeKind::F64 => {
+            if buf.len() < 8 {
+                crate::bail_corrupt_error!("Invalid BEFloat64 value");
             }
-            1 => {
-                // Text
-                let content_size = ((n - 13) / 2) as usize;
-                let data = buf.get(..content_size).ok_or_else(|| {
-                    mark_unlikely();
-                    LimboError::Corrupt(format!(
-                        "Invalid String value, length {} < expected length {}",
-                        buf.len(),
-                        content_size
-                    ))
-                })?;
-                // SAFETY: SerialTypeKind is Text so this buffer is a valid string
-                let val = unsafe { std::str::from_utf8_unchecked(data) };
-                Ok((
-                    ValueRef::Text(TextRef::new(val, TextSubtype::Text)),
-                    content_size,
-                ))
+            Ok((
+                RefValue::Float(f64::from_be_bytes([
+                    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+                ])),
+                8,
+            ))
+        }
+        SerialTypeKind::ConstInt0 => Ok((RefValue::Integer(0), 0)),
+        SerialTypeKind::ConstInt1 => Ok((RefValue::Integer(1), 0)),
+        SerialTypeKind::Blob => {
+            let content_size = serial_type.size();
+            if buf.len() < content_size {
+                crate::bail_corrupt_error!("Invalid Blob value");
             }
-            _ => unreachable!(),
-        },
-        _ => {
-            mark_unlikely();
-            crate::bail_corrupt_error!("Invalid serial type for integer")
+            if content_size == 0 {
+                Ok((RefValue::Blob(RawSlice::new(std::ptr::null(), 0)), 0))
+            } else {
+                let ptr = &buf[0] as *const u8;
+                let slice = RawSlice::new(ptr, content_size);
+                Ok((RefValue::Blob(slice), content_size))
+            }
+        }
+        SerialTypeKind::Text => {
+            let content_size = serial_type.size();
+            if buf.len() < content_size {
+                crate::bail_corrupt_error!(
+                    "Invalid String value, length {} < expected length {}",
+                    buf.len(),
+                    content_size
+                );
+            }
+
+            Ok((
+                RefValue::Text(TextRef::create_from(
+                    &buf[..content_size],
+                    TextSubtype::Text,
+                )),
+                content_size,
+            ))
         }
     }
 }
@@ -1237,21 +1470,18 @@ pub fn read_integer(buf: &[u8], serial_type: u8) -> Result<i64> {
     match serial_type {
         1 => {
             if buf.is_empty() {
-                mark_unlikely();
                 crate::bail_corrupt_error!("Invalid 1-byte int");
             }
             Ok(buf[0] as i8 as i64)
         }
         2 => {
             if buf.len() < 2 {
-                mark_unlikely();
                 crate::bail_corrupt_error!("Invalid 2-byte int");
             }
             Ok(i16::from_be_bytes([buf[0], buf[1]]) as i64)
         }
         3 => {
             if buf.len() < 3 {
-                mark_unlikely();
                 crate::bail_corrupt_error!("Invalid 3-byte int");
             }
             let sign_extension = if buf[0] <= 0x7F { 0 } else { 0xFF };
@@ -1259,14 +1489,12 @@ pub fn read_integer(buf: &[u8], serial_type: u8) -> Result<i64> {
         }
         4 => {
             if buf.len() < 4 {
-                mark_unlikely();
                 crate::bail_corrupt_error!("Invalid 4-byte int");
             }
             Ok(i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as i64)
         }
         5 => {
             if buf.len() < 6 {
-                mark_unlikely();
                 crate::bail_corrupt_error!("Invalid 6-byte int");
             }
             let sign_extension = if buf[0] <= 0x7F { 0 } else { 0xFF };
@@ -1291,15 +1519,10 @@ pub fn read_integer(buf: &[u8], serial_type: u8) -> Result<i64> {
         }
         8 => Ok(0),
         9 => Ok(1),
-        _ => {
-            mark_unlikely();
-            crate::bail_corrupt_error!("Invalid serial type for integer")
-        }
+        _ => crate::bail_corrupt_error!("Invalid serial type for integer"),
     }
 }
 
-/// Reads varint integer from the buffer.
-/// This function is similar to `sqlite3GetVarint32`
 #[inline(always)]
 pub fn read_varint(buf: &[u8]) -> Result<(u64, usize)> {
     let mut v: u64 = 0;
@@ -1312,7 +1535,6 @@ pub fn read_varint(buf: &[u8]) -> Result<(u64, usize)> {
                 }
             }
             None => {
-                mark_unlikely();
                 crate::bail_corrupt_error!("Invalid varint");
             }
         }
@@ -1323,57 +1545,36 @@ pub fn read_varint(buf: &[u8]) -> Result<(u64, usize)> {
             // Since the final value is `(v<<8) + c`, the top 8 bits (v >> 48) must not be 0.
             // If those are zero, this should be treated as corrupt.
             // Perf? the comparison + branching happens only in parsing 9-byte varint which is rare.
-            if unlikely((v >> 48) == 0) {
+            if (v >> 48) == 0 {
                 bail_corrupt_error!("Invalid varint");
             }
             v = (v << 8) + c as u64;
             Ok((v, 9))
         }
         None => {
-            mark_unlikely();
             bail_corrupt_error!("Invalid varint");
         }
     }
 }
 
-#[inline(always)]
-/// Reads a varint from the buffer, returning None if more data is needed.
-pub fn read_varint_partial(buf: &[u8]) -> Result<Option<(u64, usize)>> {
-    let mut v: u64 = 0;
-    for i in 0..8 {
-        let Some(&c) = buf.get(i) else {
-            return Ok(None);
-        };
-        v = (v << 7) + (c & 0x7f) as u64;
-        if (c & 0x80) == 0 {
-            return Ok(Some((v, i + 1)));
-        }
-    }
-    let Some(&c) = buf.get(8) else {
-        return Ok(None);
-    };
-    if unlikely((v >> 48) == 0) {
-        bail_corrupt_error!("Invalid varint");
-    }
-    v = (v << 8) + c as u64;
-    Ok(Some((v, 9)))
-}
-
-/// Compute the length of a varint encoding for a given u64 value.
-///
-/// SQLite varint: bytes 1-8 each carry 7 payload bits (56 total).
-/// The optional 9th byte carries a full 8 bits (no continuation bit),
-/// giving 64 bits total.  So values needing >56 bits always take 9 bytes.
-#[inline(always)]
 pub fn varint_len(value: u64) -> usize {
     if value <= 0x7f {
-        1
-    } else if value > (1u64 << 56) - 1 {
-        9
-    } else {
-        let bits = 64 - value.leading_zeros() as usize;
-        bits.div_ceil(7)
+        return 1;
     }
+    if value <= 0x3fff {
+        return 2;
+    }
+    if (value & ((0xff000000_u64) << 32)) > 0 {
+        return 9;
+    }
+
+    let mut bytes = value;
+    let mut n = 0;
+    while bytes != 0 {
+        bytes >>= 7;
+        n += 1;
+    }
+    n
 }
 
 pub fn write_varint(buf: &mut [u8], value: u64) -> usize {
@@ -1399,7 +1600,7 @@ pub fn write_varint(buf: &mut [u8], value: u64) -> usize {
         return 9;
     }
 
-    let mut encoded: [u8; 9] = [0; 9];
+    let mut encoded: [u8; 10] = [0; 10];
     let mut bytes = value;
     let mut n = 0;
     while bytes != 0 {
@@ -1423,181 +1624,72 @@ pub fn write_varint_to_vec(value: u64, payload: &mut Vec<u8>) {
 
 /// Stream through frames in chunks, building frame_cache incrementally
 /// Track last valid commit frame for consistency
-/// Non-blocking driver for WAL recovery on open.
-///
-/// Created by [`BuildSharedWal::begin`] (which performs only synchronous
-/// setup and may complete immediately for an empty/headerless WAL), then
-/// driven via [`BuildSharedWal::poll`] until it returns `Done`. All recovery
-/// state lives in the [`StreamingWalReader`] (atomics + `RwLock<StreamingState>`)
-/// and is updated by the read completions' callbacks, so the only state this
-/// driver tracks is which phase/completion it's waiting on.
-pub struct BuildSharedWal {
-    reader: Option<Arc<StreamingWalReader>>,
-    wal_file_shared: Arc<RwLock<WalFileShared>>,
-    file_size: u64,
-    phase: BuildSharedWalPhase,
-}
-
-#[derive(Clone)]
-enum BuildSharedWalPhase {
-    /// Issue the WAL header read.
-    NeedHeaderRead,
-    /// Waiting on the header read completion.
-    AwaitHeader(Completion),
-    /// Decide whether to read the next chunk or finalize.
-    ChunkLoop,
-    /// Waiting on a chunk read that began at `offset`.
-    AwaitChunk { completion: Completion, offset: u64 },
-    /// Recovery complete.
-    Done,
-}
-
-impl BuildSharedWal {
-    /// Synchronous setup: read the file size, build the (initially unloaded)
-    /// `WalFileShared`, and decide the starting phase. For a WAL smaller than
-    /// the header it marks the shared state loaded and starts in `Done`.
-    pub fn begin(file: &Arc<dyn File>) -> Result<Self> {
-        let size = file.size()?;
-
-        let header = Arc::new(SpinLock::new(WalHeader::default()));
-        let read_locks = std::array::from_fn(|_| TursoRwLock::new());
-        for (i, l) in read_locks.iter().enumerate() {
-            l.write();
-            l.set_value_exclusive(if i < 2 { 0 } else { READMARK_NOT_USED });
-            l.unlock();
-        }
-
-        let wal_file_shared = Arc::new(RwLock::new(WalFileShared {
-            metadata: WalSharedMetadata {
-                enabled: AtomicBool::new(true),
-                wal_header: header.clone(),
-                min_frame: AtomicU64::new(0),
-                max_frame: AtomicU64::new(0),
-                nbackfills: AtomicU64::new(0),
-                transaction_count: AtomicU64::new(0),
-                last_checksum: (0, 0),
-                loaded: AtomicBool::new(false),
-                loaded_from_disk_scan: AtomicBool::new(true),
-                initialized: AtomicBool::new(false),
-            },
-            runtime: WalSharedRuntime {
-                frame_cache: Arc::new(SpinLock::new(FxHashMap::default())),
-                frame_cache_high_water: AtomicU64::new(0),
-                file: Some(file.clone()),
-                read_locks,
-                vacuum_lock: TursoRwLock::new(),
-                write_lock: TursoRwLock::new(),
-                checkpoint_lock: TursoRwLock::new(),
-                epoch: AtomicU32::new(0),
-                overflow_fallback_coverage: Arc::new(SpinLock::new(
-                    OverflowFallbackCoverage::default(),
-                )),
-            },
-        }));
-
-        if size < WAL_HEADER_SIZE as u64 {
-            wal_file_shared
-                .write()
-                .metadata
-                .loaded
-                .store(true, Ordering::SeqCst);
-            return Ok(Self {
-                reader: None,
-                wal_file_shared,
-                file_size: size,
-                phase: BuildSharedWalPhase::Done,
-            });
-        }
-
-        let reader = Arc::new(StreamingWalReader::new(
-            file.clone(),
-            wal_file_shared.clone(),
-            header,
-            size,
-        ));
-
-        Ok(Self {
-            reader: Some(reader),
-            wal_file_shared,
-            file_size: size,
-            phase: BuildSharedWalPhase::NeedHeaderRead,
-        })
-    }
-
-    /// Drive the recovery state machine. Yields the in-flight read completion
-    /// when it must wait; returns `Done(wal_file_shared)` once the full WAL
-    /// has been scanned (or recovery short-circuited).
-    pub fn poll(&mut self) -> Result<IOResult<Arc<RwLock<WalFileShared>>>> {
-        loop {
-            match self.phase.clone() {
-                BuildSharedWalPhase::NeedHeaderRead => {
-                    let reader = self
-                        .reader
-                        .clone()
-                        .expect("reader must exist outside the Done phase");
-                    let c = reader.read_header()?;
-                    self.phase = BuildSharedWalPhase::AwaitHeader(c);
-                }
-                BuildSharedWalPhase::AwaitHeader(c) => {
-                    if !c.succeeded() {
-                        io_yield_one!(c);
-                    }
-                    self.phase = BuildSharedWalPhase::ChunkLoop;
-                }
-                BuildSharedWalPhase::ChunkLoop => {
-                    let reader = self
-                        .reader
-                        .clone()
-                        .expect("reader must exist outside the Done phase");
-                    if reader.done.load(Ordering::Acquire) {
-                        self.phase = BuildSharedWalPhase::Done;
-                        continue;
-                    }
-                    let offset = reader.off_atomic.load(Ordering::Acquire);
-                    if offset >= self.file_size {
-                        reader.finalize_loading();
-                        self.phase = BuildSharedWalPhase::Done;
-                        continue;
-                    }
-                    let (_read_size, c) = reader.submit_one_chunk(offset)?;
-                    self.phase = BuildSharedWalPhase::AwaitChunk {
-                        completion: c,
-                        offset,
-                    };
-                }
-                BuildSharedWalPhase::AwaitChunk { completion, offset } => {
-                    if !completion.succeeded() {
-                        io_yield_one!(completion);
-                    }
-                    let reader = self
-                        .reader
-                        .clone()
-                        .expect("reader must exist outside the Done phase");
-                    let new_off = reader.off_atomic.load(Ordering::Acquire);
-                    if new_off <= offset {
-                        // No forward progress — treat as end of valid log.
-                        reader.finalize_loading();
-                        self.phase = BuildSharedWalPhase::Done;
-                    } else {
-                        self.phase = BuildSharedWalPhase::ChunkLoop;
-                    }
-                }
-                BuildSharedWalPhase::Done => {
-                    return Ok(IOResult::Done(self.wal_file_shared.clone()));
-                }
-            }
-        }
-    }
-}
-
-/// Blocking shim over [`BuildSharedWal`]. Retained for the unit test and any
-/// caller not yet lifted to drive the recovery state machine directly.
 pub fn build_shared_wal(
     file: &Arc<dyn File>,
     io: &Arc<dyn crate::IO>,
 ) -> Result<Arc<RwLock<WalFileShared>>> {
-    let mut driver = BuildSharedWal::begin(file)?;
-    io.block(|| driver.poll())
+    let size = file.size()?;
+
+    let header = Arc::new(SpinLock::new(WalHeader::default()));
+    let read_locks = std::array::from_fn(|_| TursoRwLock::new());
+    for (i, l) in read_locks.iter().enumerate() {
+        l.write();
+        l.set_value_exclusive(if i < 2 { 0 } else { READMARK_NOT_USED });
+        l.unlock();
+    }
+
+    let wal_file_shared = Arc::new(RwLock::new(WalFileShared {
+        enabled: AtomicBool::new(true),
+        wal_header: header.clone(),
+        min_frame: AtomicU64::new(0),
+        max_frame: AtomicU64::new(0),
+        nbackfills: AtomicU64::new(0),
+        frame_cache: Arc::new(SpinLock::new(HashMap::new())),
+        last_checksum: (0, 0),
+        file: Some(file.clone()),
+        read_locks,
+        write_lock: TursoRwLock::new(),
+        loaded: AtomicBool::new(false),
+        checkpoint_lock: TursoRwLock::new(),
+        initialized: AtomicBool::new(false),
+    }));
+
+    if size < WAL_HEADER_SIZE as u64 {
+        wal_file_shared.write().loaded.store(true, Ordering::SeqCst);
+        return Ok(wal_file_shared);
+    }
+
+    let reader = Arc::new(StreamingWalReader::new(
+        file.clone(),
+        wal_file_shared.clone(),
+        header.clone(),
+        size,
+    ));
+
+    let h = reader.clone().read_header()?;
+    io.wait_for_completion(h)?;
+
+    loop {
+        if reader.done.load(Ordering::Acquire) {
+            break;
+        }
+        let offset = reader.off_atomic.load(Ordering::Acquire);
+        if offset >= size {
+            reader.finalize_loading();
+            break;
+        }
+
+        let (_read_size, c) = reader.clone().submit_one_chunk(offset)?;
+        io.wait_for_completion(c)?;
+
+        let new_off = reader.off_atomic.load(Ordering::Acquire);
+        if new_off <= offset {
+            reader.finalize_loading();
+            break;
+        }
+    }
+
+    Ok(wal_file_shared)
 }
 
 pub(super) struct StreamingWalReader {
@@ -1615,10 +1707,8 @@ pub(super) struct StreamingWalReader {
 struct StreamingState {
     frame_idx: u64,
     cumulative_checksum: (u32, u32),
-    /// checksum of the last valid commit frame
-    last_valid_checksum: (u32, u32),
     last_valid_frame: u64,
-    pending_frames: FxHashMap<u64, Vec<u64>>,
+    pending_frames: HashMap<u64, Vec<u64>>,
     page_size: usize,
     use_native_endian: bool,
     header_valid: bool,
@@ -1642,9 +1732,8 @@ impl StreamingWalReader {
             state: RwLock::new(StreamingState {
                 frame_idx: 1,
                 cumulative_checksum: (0, 0),
-                last_valid_checksum: (0, 0),
                 last_valid_frame: 0,
-                pending_frames: FxHashMap::default(),
+                pending_frames: HashMap::new(),
                 page_size: 0,
                 use_native_endian: false,
                 header_valid: false,
@@ -1658,7 +1747,6 @@ impl StreamingWalReader {
         let completion: Box<ReadComplete> = Box::new(move |res| {
             let _reader = reader.clone();
             _reader.handle_header_read(res);
-            None
         });
         let c = Completion::new_read(header_buf, completion);
         self.file.pread(0, c)
@@ -1684,7 +1772,7 @@ impl StreamingWalReader {
             .min((self.file_size - offset) as usize);
         if read_size == 0 {
             // end-of-file; let caller finalize
-            return Ok((0, Completion::new_yield()));
+            return Ok((0, Completion::new_dummy()));
         }
 
         let buf = Arc::new(Buffer::new_temporary(read_size));
@@ -1693,7 +1781,6 @@ impl StreamingWalReader {
             tracing::debug!("WAL chunk read complete");
             let reader = me.clone();
             reader.handle_chunk_read(res);
-            None
         });
         let c = Completion::new_read(buf, completion);
         let guard = self.file.pread(offset, c)?;
@@ -1733,21 +1820,6 @@ impl StreamingWalReader {
                 calc == (h.checksum_1, h.checksum_2),
             )
         };
-        #[cfg(debug_assertions)]
-        {
-            let header = self.header.lock();
-            tracing::debug!(
-                "WAL_SCAN header page_size={} checkpoint_seq={} salts=({}, {}) checksum=({}, {}) use_native={} valid={}",
-                page_sz,
-                header.checkpoint_seq,
-                header.salt_1,
-                header.salt_2,
-                c1,
-                c2,
-                use_native,
-                ok
-            );
-        }
         if PageSize::new(page_sz).is_none() || !ok {
             self.finalize_loading();
             return;
@@ -1757,7 +1829,6 @@ impl StreamingWalReader {
             st.page_size = page_sz as usize;
             st.use_native_endian = use_native;
             st.cumulative_checksum = (c1, c2);
-            st.last_valid_checksum = (c1, c2);
             st.header_valid = true;
         }
         self.off_atomic
@@ -1797,66 +1868,35 @@ impl StreamingWalReader {
             let fh = &buf[pos..pos + WAL_FRAME_HEADER_SIZE];
             let page = &buf[pos + WAL_FRAME_HEADER_SIZE..pos + frame_size];
 
-            let page_no = u32::from_be_bytes(fh[0..4].try_into().unwrap());
+            let page_number = u32::from_be_bytes(fh[0..4].try_into().unwrap());
             let db_size = u32::from_be_bytes(fh[4..8].try_into().unwrap());
             let s1 = u32::from_be_bytes(fh[8..12].try_into().unwrap());
             let s2 = u32::from_be_bytes(fh[12..16].try_into().unwrap());
             let c1 = u32::from_be_bytes(fh[16..20].try_into().unwrap());
             let c2 = u32::from_be_bytes(fh[20..24].try_into().unwrap());
 
-            tracing::debug!("process_frames: page_no={page_no}, db_size={db_size}, s1={s1}, s2={s2}, c1={c1}, c2={c2}");
-
-            if page_no == 0 {
-                tracing::debug!(
-                    "process_frames: unexpected page_no, stop reading WAL at initialization phase"
-                );
+            if page_number == 0 {
                 break;
             }
             if s1 != header.salt_1 || s2 != header.salt_2 {
-                tracing::debug!(
-                    "WAL_SCAN stop: frame={} salt mismatch frame=({}, {}) header=({}, {})",
-                    st.frame_idx,
-                    s1,
-                    s2,
-                    header.salt_1,
-                    header.salt_2
-                );
-                tracing::debug!(
-                    "process_frames: salt mismatch, stop reading WAL at initialization phase"
-                );
                 break;
             }
 
             let seed = checksum_wal(&fh[0..8], header, st.cumulative_checksum, use_native);
             let calc = checksum_wal(page, header, seed, use_native);
             if calc != (c1, c2) {
-                tracing::debug!(
-                    " WAL_SCAN stop: process_frames, checksum mismatch, stop reading WAL at initialization phase: frame={} checksum mismatch calc=({},{}) file=({},{})",
-                    st.frame_idx,
-                    calc.0,
-                    calc.1,
-                    c1,
-                    c2
-                );
                 break;
             }
 
             st.cumulative_checksum = calc;
             let frame_idx = st.frame_idx;
             st.pending_frames
-                .entry(page_no as u64)
+                .entry(page_number as u64)
                 .or_default()
                 .push(frame_idx);
 
             if db_size > 0 {
                 st.last_valid_frame = st.frame_idx;
-                st.last_valid_checksum = calc;
-                tracing::debug!(
-                    "WAL_SCAN commit frame={} page_no={} db_size={}",
-                    st.frame_idx,
-                    page_no,
-                    db_size
-                );
                 self.flush_pending_frames(&mut st);
             }
             st.frame_idx += 1;
@@ -1870,65 +1910,44 @@ impl StreamingWalReader {
             return;
         }
         let wfs = self.wal_shared.read();
-        let mut frame_cache = wfs.runtime.frame_cache.lock();
-        for (page, mut frames) in state.pending_frames.drain() {
-            // Only include frames up to last valid commit
-            frames.retain(|&f| f <= state.last_valid_frame);
-            if !frames.is_empty() {
-                frame_cache.entry(page).or_default().extend(frames);
+        {
+            let mut frame_cache = wfs.frame_cache.lock();
+            for (page, mut frames) in state.pending_frames.drain() {
+                // Only include frames up to last valid commit
+                frames.retain(|&f| f <= state.last_valid_frame);
+                if !frames.is_empty() {
+                    frame_cache.entry(page).or_default().extend(frames);
+                }
             }
         }
-        wfs.metadata
-            .max_frame
+        wfs.max_frame
             .store(state.last_valid_frame, Ordering::Release);
-        // Recovery populates `frame_cache` directly (not via `cache_frame`), so
-        // seed the high-water with the recovered frames; otherwise the first
-        // post-recovery rewind/slot-reuse could go undetected.
-        wfs.runtime
-            .frame_cache_high_water
-            .fetch_max(state.last_valid_frame, Ordering::AcqRel);
     }
 
     /// Finalizes the loading process
     fn finalize_loading(&self) {
         let mut wfs = self.wal_shared.write();
         let st = self.state.read();
-        tracing::debug!(
-            "WAL_SCAN finalize last_valid_frame={} pending_pages={} header_valid={}",
-            st.last_valid_frame,
-            st.pending_frames.len(),
-            st.header_valid
-        );
 
         let max_frame = st.last_valid_frame;
         if max_frame > 0 {
-            let mut frame_cache = wfs.runtime.frame_cache.lock();
+            let mut frame_cache = wfs.frame_cache.lock();
             for frames in frame_cache.values_mut() {
                 frames.retain(|&f| f <= max_frame);
             }
             frame_cache.retain(|_, frames| !frames.is_empty());
-            let header = wfs.metadata.wal_header.lock();
-            wfs.runtime.overflow_fallback_coverage.lock().record(
-                header.checkpoint_seq,
-                header.salt_1,
-                header.salt_2,
-                max_frame,
-            );
-        } else {
-            wfs.runtime.overflow_fallback_coverage.lock().clear();
         }
 
-        wfs.metadata.max_frame.store(max_frame, Ordering::SeqCst);
-        // use checksum of last valid commit frame, not necessarily the last frame
-        wfs.metadata.last_checksum = st.last_valid_checksum;
+        wfs.max_frame.store(max_frame, Ordering::SeqCst);
+        wfs.last_checksum = st.cumulative_checksum;
         if st.header_valid {
-            wfs.metadata.initialized.store(true, Ordering::SeqCst);
+            wfs.initialized.store(true, Ordering::SeqCst);
         }
-        wfs.metadata.nbackfills.store(0, Ordering::SeqCst);
-        wfs.metadata.loaded.store(true, Ordering::SeqCst);
+        wfs.nbackfills.store(0, Ordering::SeqCst);
+        wfs.loaded.store(true, Ordering::SeqCst);
 
         self.done.store(true, Ordering::Release);
-        tracing::debug!(
+        tracing::info!(
             "WAL loading complete: {} frames processed, last commit at frame {}",
             st.frame_idx - 1,
             max_frame
@@ -1936,9 +1955,9 @@ impl StreamingWalReader {
     }
 }
 
-pub fn begin_read_wal_frame_raw<F: File + ?Sized>(
+pub fn begin_read_wal_frame_raw(
     buffer_pool: &Arc<BufferPool>,
-    io: &F,
+    io: &Arc<dyn File>,
     offset: u64,
     complete: Box<ReadComplete>,
 ) -> Result<Completion> {
@@ -1949,8 +1968,8 @@ pub fn begin_read_wal_frame_raw<F: File + ?Sized>(
     Ok(c)
 }
 
-pub fn begin_read_wal_frame<F: File + ?Sized>(
-    io: &F,
+pub fn begin_read_wal_frame(
+    io: &Arc<dyn File>,
     offset: u64,
     buffer_pool: Arc<BufferPool>,
     complete: Box<ReadComplete>,
@@ -1965,74 +1984,40 @@ pub fn begin_read_wal_frame<F: File + ?Sized>(
     let buf = buffer_pool.get_page();
     let buf = Arc::new(buf);
 
-    match io_ctx.encryption_or_checksum() {
-        EncryptionOrChecksum::Encryption(ctx) => {
-            let encryption_ctx = ctx.clone();
-            let original_complete = complete;
+    if let Some(ctx) = io_ctx.encryption_context() {
+        let encryption_ctx = ctx.clone();
+        let original_complete = complete;
 
-            let decrypt_complete =
-                Box::new(move |res: Result<(Arc<Buffer>, i32), CompletionError>| {
-                    let Ok((encrypted_buf, bytes_read)) = res else {
-                        return original_complete(res);
-                    };
-                    turso_assert_greater_than!(
-                        bytes_read, 0,
-                        "expected to read data for encrypted page",
-                        { "page_idx": page_idx }
+        let decrypt_complete = Box::new(move |res: Result<(Arc<Buffer>, i32), CompletionError>| {
+            let Ok((encrypted_buf, bytes_read)) = res else {
+                original_complete(res);
+                return;
+            };
+            assert!(
+                bytes_read > 0,
+                "Expected to read some data on success for page_idx={page_idx}"
+            );
+            match encryption_ctx.decrypt_page(encrypted_buf.as_slice(), page_idx) {
+                Ok(decrypted_data) => {
+                    encrypted_buf
+                        .as_mut_slice()
+                        .copy_from_slice(&decrypted_data);
+                    original_complete(Ok((encrypted_buf, bytes_read)));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to decrypt WAL frame data for page_idx={page_idx}: {e}"
                     );
-                    match encryption_ctx.decrypt_page(encrypted_buf.as_slice(), page_idx) {
-                        Ok(decrypted_data) => {
-                            encrypted_buf
-                                .as_mut_slice()
-                                .copy_from_slice(&decrypted_data);
-                            original_complete(Ok((encrypted_buf, bytes_read)))
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to decrypt WAL frame data for page_idx={page_idx}: {e}"
-                            );
-                            let err = CompletionError::DecryptionError { page_idx };
-                            original_complete(Err(err));
-                            Some(err)
-                        }
-                    }
-                });
+                    original_complete(Err(CompletionError::DecryptionError { page_idx }));
+                }
+            }
+        });
 
-            let new_completion = Completion::new_read(buf, decrypt_complete);
-            io.pread(offset, new_completion)
-        }
-        EncryptionOrChecksum::Checksum(ctx) => {
-            let checksum_ctx = ctx.clone();
-            let original_c = complete;
-            let verify_complete =
-                Box::new(move |res: Result<(Arc<Buffer>, i32), CompletionError>| {
-                    let Ok((buf, bytes_read)) = res else {
-                        return original_c(res);
-                    };
-                    if bytes_read <= 0 {
-                        tracing::trace!("Read page {page_idx} with {} bytes", bytes_read);
-                        return original_c(Ok((buf, bytes_read)));
-                    }
-
-                    match checksum_ctx.verify_checksum(buf.as_mut_slice(), page_idx) {
-                        Ok(_) => original_c(Ok((buf, bytes_read))),
-                        Err(e) => {
-                            mark_unlikely();
-                            tracing::error!(
-                                "Failed to verify checksum for page_id={page_idx}: {e}"
-                            );
-                            original_c(Err(e));
-                            Some(e)
-                        }
-                    }
-                });
-            let c = Completion::new_read(buf, verify_complete);
-            io.pread(offset, c)
-        }
-        EncryptionOrChecksum::None => {
-            let c = Completion::new_read(buf, complete);
-            io.pread(offset, c)
-        }
+        let new_completion = Completion::new_read(buf, decrypt_complete);
+        io.pread(offset, new_completion)
+    } else {
+        let c = Completion::new_read(buf, complete);
+        io.pread(offset, c)
     }
 }
 
@@ -2090,7 +2075,7 @@ pub fn prepare_wal_frame(
     (final_checksum, Arc::new(buffer))
 }
 
-pub fn begin_write_wal_header<F: File + ?Sized>(io: &F, header: &WalHeader) -> Result<Completion> {
+pub fn begin_write_wal_header(io: &Arc<dyn File>, header: &WalHeader) -> Result<Completion> {
     tracing::trace!("begin_write_wal_header");
     let buffer = {
         let buffer = Buffer::new_temporary(WAL_HEADER_SIZE);
@@ -2109,10 +2094,13 @@ pub fn begin_write_wal_header<F: File + ?Sized>(io: &F, header: &WalHeader) -> R
         Arc::new(buffer)
     };
 
+    let cloned = buffer.clone();
     let write_complete = move |res: Result<i32, CompletionError>| {
         let Ok(bytes_written) = res else {
             return;
         };
+        // make sure to reference buffer so it's alive for async IO
+        let _buf = cloned.clone();
         turso_assert!(
             bytes_written == WAL_HEADER_SIZE as i32,
             "wal header wrote({bytes_written}) != expected({WAL_HEADER_SIZE})"
@@ -2120,7 +2108,7 @@ pub fn begin_write_wal_header<F: File + ?Sized>(io: &F, header: &WalHeader) -> R
     };
     #[allow(clippy::arc_with_non_send_sync)]
     let c = Completion::new_write(write_complete);
-    let c = io.pwrite(0, buffer, c)?;
+    let c = io.pwrite(0, buffer.clone(), c.clone())?;
     Ok(c)
 }
 
@@ -2128,7 +2116,6 @@ pub fn begin_write_wal_header<F: File + ?Sized>(io: &F, header: &WalHeader) -> R
 /// It will return the min size that will be stored in that case,
 /// including overflow pointer
 /// see e.g. https://github.com/sqlite/sqlite/blob/9591d3fe93936533c8c3b0dc4d025ac999539e11/src/dbstat.c#L371
-#[inline]
 pub fn payload_overflows(
     payload_size: usize,
     payload_overflow_threshold_max: usize,
@@ -2165,14 +2152,13 @@ pub fn payload_overflows(
 /// The outputs s0 and s1 are both weighted checksums using Fibonacci weights in reverse order.
 /// (The largest Fibonacci weight occurs on the first element of the sequence being summed.)
 /// The s1 value spans all 32-bit integer terms of the sequence whereas s0 omits the final term.
-#[inline]
 pub fn checksum_wal(
     buf: &[u8],
     _wal_header: &WalHeader,
     input: (u32, u32),
     native_endian: bool, // Sqlite interprets big endian as "native"
 ) -> (u32, u32) {
-    turso_assert_eq!(buf.len() % 8, 0, "buffer must be a multiple of 8");
+    assert_eq!(buf.len() % 8, 0, "buffer must be a multiple of 8");
     let mut s0: u32 = input.0;
     let mut s1: u32 = input.1;
     let mut i = 0;
@@ -2202,7 +2188,6 @@ impl WalHeader {
     }
 }
 
-#[inline]
 pub fn read_u32(buf: &[u8], pos: usize) -> u32 {
     u32::from_be_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]])
 }
@@ -2216,31 +2201,31 @@ mod tests {
 
     #[rstest]
     #[case(&[], SerialType::null(), Value::Null)]
-    #[case(&[255], SerialType::i8(), Value::from_i64(-1))]
-    #[case(&[0x12, 0x34], SerialType::i16(), Value::from_i64(0x1234))]
-    #[case(&[0xFE], SerialType::i8(), Value::from_i64(-2))]
-    #[case(&[0x12, 0x34, 0x56], SerialType::i24(), Value::from_i64(0x123456))]
-    #[case(&[0x12, 0x34, 0x56, 0x78], SerialType::i32(), Value::from_i64(0x12345678))]
-    #[case(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC], SerialType::i48(), Value::from_i64(0x123456789ABC))]
-    #[case(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xFF], SerialType::i64(), Value::from_i64(0x123456789ABCDEFF))]
-    #[case(&[0x40, 0x09, 0x21, 0xFB, 0x54, 0x44, 0x2D, 0x18], SerialType::f64(), Value::from_f64(std::f64::consts::PI))]
-    #[case(&[1, 2], SerialType::const_int0(), Value::from_i64(0))]
-    #[case(&[65, 66], SerialType::const_int1(), Value::from_i64(1))]
+    #[case(&[255], SerialType::i8(), Value::Integer(-1))]
+    #[case(&[0x12, 0x34], SerialType::i16(), Value::Integer(0x1234))]
+    #[case(&[0xFE], SerialType::i8(), Value::Integer(-2))]
+    #[case(&[0x12, 0x34, 0x56], SerialType::i24(), Value::Integer(0x123456))]
+    #[case(&[0x12, 0x34, 0x56, 0x78], SerialType::i32(), Value::Integer(0x12345678))]
+    #[case(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC], SerialType::i48(), Value::Integer(0x123456789ABC))]
+    #[case(&[0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xFF], SerialType::i64(), Value::Integer(0x123456789ABCDEFF))]
+    #[case(&[0x40, 0x09, 0x21, 0xFB, 0x54, 0x44, 0x2D, 0x18], SerialType::f64(), Value::Float(std::f64::consts::PI))]
+    #[case(&[1, 2], SerialType::const_int0(), Value::Integer(0))]
+    #[case(&[65, 66], SerialType::const_int1(), Value::Integer(1))]
     #[case(&[1, 2, 3], SerialType::blob(3), Value::Blob(vec![1, 2, 3]))]
     #[case(&[], SerialType::blob(0), Value::Blob(vec![]))] // empty blob
     #[case(&[65, 66, 67], SerialType::text(3), Value::build_text("ABC"))]
-    #[case(&[0x80], SerialType::i8(), Value::from_i64(-128))]
-    #[case(&[0x80, 0], SerialType::i16(), Value::from_i64(-32768))]
-    #[case(&[0x80, 0, 0], SerialType::i24(), Value::from_i64(-8388608))]
-    #[case(&[0x80, 0, 0, 0], SerialType::i32(), Value::from_i64(-2147483648))]
-    #[case(&[0x80, 0, 0, 0, 0, 0], SerialType::i48(), Value::from_i64(-140737488355328))]
-    #[case(&[0x80, 0, 0, 0, 0, 0, 0, 0], SerialType::i64(), Value::from_i64(-9223372036854775808))]
-    #[case(&[0x7f], SerialType::i8(), Value::from_i64(127))]
-    #[case(&[0x7f, 0xff], SerialType::i16(), Value::from_i64(32767))]
-    #[case(&[0x7f, 0xff, 0xff], SerialType::i24(), Value::from_i64(8388607))]
-    #[case(&[0x7f, 0xff, 0xff, 0xff], SerialType::i32(), Value::from_i64(2147483647))]
-    #[case(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff], SerialType::i48(), Value::from_i64(140737488355327))]
-    #[case(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], SerialType::i64(), Value::from_i64(9223372036854775807))]
+    #[case(&[0x80], SerialType::i8(), Value::Integer(-128))]
+    #[case(&[0x80, 0], SerialType::i16(), Value::Integer(-32768))]
+    #[case(&[0x80, 0, 0], SerialType::i24(), Value::Integer(-8388608))]
+    #[case(&[0x80, 0, 0, 0], SerialType::i32(), Value::Integer(-2147483648))]
+    #[case(&[0x80, 0, 0, 0, 0, 0], SerialType::i48(), Value::Integer(-140737488355328))]
+    #[case(&[0x80, 0, 0, 0, 0, 0, 0, 0], SerialType::i64(), Value::Integer(-9223372036854775808))]
+    #[case(&[0x7f], SerialType::i8(), Value::Integer(127))]
+    #[case(&[0x7f, 0xff], SerialType::i16(), Value::Integer(32767))]
+    #[case(&[0x7f, 0xff, 0xff], SerialType::i24(), Value::Integer(8388607))]
+    #[case(&[0x7f, 0xff, 0xff, 0xff], SerialType::i32(), Value::Integer(2147483647))]
+    #[case(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff], SerialType::i48(), Value::Integer(140737488355327))]
+    #[case(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], SerialType::i64(), Value::Integer(9223372036854775807))]
     fn test_read_value(
         #[case] buf: &[u8],
         #[case] serial_type: SerialType,
@@ -2314,6 +2299,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_smallvec_iter() {
+        let mut small_vec = SmallVec::<i32, 4>::new();
+        (0..8).for_each(|i| small_vec.push(i));
+
+        let mut iter = small_vec.iter();
+        assert_eq!(iter.next(), Some(0));
+        assert_eq!(iter.next(), Some(1));
+        assert_eq!(iter.next(), Some(2));
+        assert_eq!(iter.next(), Some(3));
+        assert_eq!(iter.next(), Some(4));
+        assert_eq!(iter.next(), Some(5));
+        assert_eq!(iter.next(), Some(6));
+        assert_eq!(iter.next(), Some(7));
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_smallvec_get() {
+        let mut small_vec = SmallVec::<i32, 4>::new();
+        (0..8).for_each(|i| small_vec.push(i));
+
+        (0..8).for_each(|i| {
+            assert_eq!(small_vec.get(i), Some(i as i32));
+        });
+
+        assert_eq!(small_vec.get(8), None);
+    }
+
     #[rstest]
     #[case(&[])] // empty buffer
     #[case(&[0x80])] // truncated 1-byte with continuation
@@ -2322,128 +2336,5 @@ mod tests {
     #[case(&[0x80; 9])] // bits set without end
     fn test_read_varint_malformed_inputs(#[case] buf: &[u8]) {
         assert!(read_varint(buf).is_err());
-    }
-
-    #[test]
-    fn streaming_reader_ignores_uncommitted_checksums() {
-        let io: Arc<dyn crate::IO> = Arc::new(crate::MemoryIO::new());
-        let file = io
-            .open_file("streaming-reader-wal", crate::OpenFlags::Create, false)
-            .unwrap();
-
-        let page_size: usize = 1024;
-        let buffer_pool = BufferPool::begin_init(&io, BufferPool::TEST_ARENA_SIZE);
-        buffer_pool
-            .finalize_with_page_size(page_size)
-            .expect("initialize buffer pool");
-
-        let mut wal_header = WalHeader {
-            magic: WAL_MAGIC_LE,
-            file_format: 3007000,
-            page_size: page_size as u32,
-            checkpoint_seq: 0,
-            salt_1: 0x1234_5678,
-            salt_2: 0x9abc_def0,
-            checksum_1: 0,
-            checksum_2: 0,
-        };
-        let header_prefix = &wal_header.as_bytes()[..WAL_HEADER_SIZE - 8];
-        let use_native = (wal_header.magic & 1) != 0;
-        let (c1, c2) = checksum_wal(header_prefix, &wal_header, (0, 0), use_native);
-        wal_header.checksum_1 = c1;
-        wal_header.checksum_2 = c2;
-        io.wait_for_completion(begin_write_wal_header(file.as_ref(), &wal_header).unwrap())
-            .unwrap();
-
-        let page = vec![0xAB; page_size];
-        let frame_size = WAL_FRAME_HEADER_SIZE + page_size;
-        let mut offset = WAL_HEADER_SIZE as u64;
-
-        let (commit_checksum, commit_frame) = prepare_wal_frame(
-            &buffer_pool,
-            &wal_header,
-            (wal_header.checksum_1, wal_header.checksum_2),
-            wal_header.page_size,
-            1,
-            1,
-            &page,
-        );
-        let commit_frame_clone = commit_frame.clone();
-        let c = file
-            .pwrite(
-                offset,
-                commit_frame,
-                Completion::new_write(move |res| {
-                    assert_eq!(res.unwrap() as usize, frame_size);
-                    let _keep = commit_frame_clone.clone();
-                }),
-            )
-            .unwrap();
-        io.wait_for_completion(c).unwrap();
-        offset += frame_size as u64;
-
-        let (after_frame2_checksum, frame2) = prepare_wal_frame(
-            &buffer_pool,
-            &wal_header,
-            commit_checksum,
-            wal_header.page_size,
-            2,
-            0,
-            &page,
-        );
-        let frame2_clone = frame2.clone();
-        let c = file
-            .pwrite(
-                offset,
-                frame2,
-                Completion::new_write(move |res| {
-                    assert_eq!(res.unwrap() as usize, frame_size);
-                    let _keep = frame2_clone.clone();
-                }),
-            )
-            .unwrap();
-        io.wait_for_completion(c).unwrap();
-        offset += frame_size as u64;
-
-        let (after_frame3_checksum, frame3) = prepare_wal_frame(
-            &buffer_pool,
-            &wal_header,
-            after_frame2_checksum,
-            wal_header.page_size,
-            3,
-            0,
-            &page,
-        );
-        let frame3_clone = frame3.clone();
-        let c = file
-            .pwrite(
-                offset,
-                frame3,
-                Completion::new_write(move |res| {
-                    assert_eq!(res.unwrap() as usize, frame_size);
-                    let _keep = frame3_clone.clone();
-                }),
-            )
-            .unwrap();
-        io.wait_for_completion(c).unwrap();
-
-        let shared = build_shared_wal(&file, &io).unwrap();
-        let guard = shared.read();
-        assert_eq!(guard.metadata.max_frame.load(Ordering::Acquire), 1);
-        assert_eq!(guard.metadata.last_checksum, commit_checksum);
-
-        // checksum should only include committed frame.
-        assert_ne!(guard.metadata.last_checksum, after_frame3_checksum);
-
-        let frame_cache = guard.runtime.frame_cache.lock();
-        assert_eq!(frame_cache.get(&1), Some(&vec![1u64]));
-        assert!(frame_cache.get(&2).is_none());
-    }
-
-    #[quickcheck_macros::quickcheck]
-    fn varint_len_matches_write_varint(value: u64) -> bool {
-        let mut buf = [0u8; 9];
-        let written = write_varint(&mut buf, value);
-        varint_len(value) == written
     }
 }

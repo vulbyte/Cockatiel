@@ -87,18 +87,16 @@ fn uuid7(&self, args: &[Value]) -> Value {
 
 #[scalar(name = "uuid7_timestamp_ms")]
 fn uuid7_ts(args: &[Value]) -> Value {
-    match args.first().map(|a| a.value_type()) {
-        Some(ValueType::Blob) => {
+    match args[0].value_type() {
+        ValueType::Blob => {
             let Some(blob) = &args[0].to_blob() else {
                 return Value::null();
             };
-            let Ok(uuid) = uuid::Uuid::from_slice(blob.as_slice()) else {
-                return Value::null();
-            };
+            let uuid = uuid::Uuid::from_slice(blob.as_slice()).unwrap();
             let unix = uuid_to_unix(uuid.as_bytes());
             Value::from_integer(unix as i64)
         }
-        Some(ValueType::Text) => {
+        ValueType::Text => {
             let Some(text) = args[0].to_text() else {
                 return Value::null();
             };
@@ -108,55 +106,32 @@ fn uuid7_ts(args: &[Value]) -> Value {
             let unix = uuid_to_unix(uuid.as_bytes());
             Value::from_integer(unix as i64)
         }
-        None => Value::error_with_message(
-            "wrong number of arguments to function uuid7_timestamp_ms()".into(),
-        ),
         _ => Value::null(),
     }
 }
 
 #[scalar(name = "uuid_str")]
 fn uuid_str(args: &[Value]) -> Value {
-    match args.first() {
-        Some(arg) => match arg.to_blob() {
-            Some(blob) => {
-                let parsed = uuid::Uuid::from_slice(blob.as_slice())
-                    .ok()
-                    .map(|u| u.to_string());
-                match parsed {
-                    Some(s) => Value::from_text(s),
-                    None => Value::null(),
-                }
-            }
-            None => {
-                // just return Null here if there is an arg but it's not convertable to a blob,
-                // if 'select uuid_str(c) from t' is called on null `c` we don't want to throw err
-                return Value::null();
-            }
-        },
-        None => {
-            return Value::error_with_message(
-                "wrong number of arguments to function uuid_str()".into(),
-            );
-        }
+    let Some(blob) = args[0].to_blob() else {
+        return Value::null();
+    };
+    let parsed = uuid::Uuid::from_slice(blob.as_slice())
+        .ok()
+        .map(|u| u.to_string());
+    match parsed {
+        Some(s) => Value::from_text(s),
+        None => Value::null(),
     }
 }
 
 #[scalar(name = "uuid_blob")]
 fn uuid_blob(&self, args: &[Value]) -> Value {
-    match args.first() {
-        Some(arg) => match arg.to_text() {
-            Some(text) => match uuid::Uuid::parse_str(text) {
-                Ok(uuid) => Value::from_blob(uuid.as_bytes().to_vec()),
-                Err(_) => Value::null(),
-            },
-            None => return Value::null(),
-        },
-        None => {
-            return Value::error_with_message(
-                "wrong number of arguments to function uuid_blob()".into(),
-            );
-        }
+    let Some(text) = args[0].to_text() else {
+        return Value::null();
+    };
+    match uuid::Uuid::parse_str(text) {
+        Ok(uuid) => Value::from_blob(uuid.as_bytes().to_vec()),
+        Err(_) => Value::null(),
     }
 }
 

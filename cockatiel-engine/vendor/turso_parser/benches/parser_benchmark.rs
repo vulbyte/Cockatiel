@@ -1,16 +1,7 @@
-#[cfg(not(feature = "codspeed"))]
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-#[cfg(not(feature = "codspeed"))]
 use pprof::criterion::{Output, PProfProfiler};
-
-#[cfg(feature = "codspeed")]
-use codspeed_criterion_compat::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
-};
-
 use turso_parser::{lexer::Lexer, parser::Parser};
 
-#[turso_macros::codspeed_criterion_benchmark]
 fn bench_parser(criterion: &mut Criterion) {
     let queries = [
         "SELECT 1",
@@ -30,7 +21,6 @@ fn bench_parser(criterion: &mut Criterion) {
     }
 }
 
-#[turso_macros::codspeed_criterion_benchmark]
 fn bench_parser_insert_batch(criterion: &mut Criterion) {
     for batch_size in [1, 10, 100] {
         let mut values = String::from("INSERT INTO test VALUES ");
@@ -52,7 +42,6 @@ fn bench_parser_insert_batch(criterion: &mut Criterion) {
     }
 }
 
-#[turso_macros::codspeed_criterion_benchmark]
 fn bench_lexer(criterion: &mut Criterion) {
     let queries = [
         "SELECT 1",
@@ -76,18 +65,9 @@ fn bench_lexer(criterion: &mut Criterion) {
     }
 }
 
-#[cfg(not(feature = "codspeed"))]
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
     targets = bench_parser, bench_parser_insert_batch, bench_lexer
 }
-
-#[cfg(feature = "codspeed")]
-criterion_group! {
-    name = benches;
-    config = Criterion::default();
-    targets = bench_parser, bench_parser_insert_batch, bench_lexer
-}
-
 criterion_main!(benches);

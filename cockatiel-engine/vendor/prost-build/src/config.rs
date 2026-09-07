@@ -52,7 +52,6 @@ pub struct Config {
     pub(crate) skip_source_info: bool,
     pub(crate) include_file: Option<PathBuf>,
     pub(crate) prost_path: Option<String>,
-    pub(crate) prost_types_path: Option<String>,
     #[cfg(feature = "format")]
     pub(crate) fmt: bool,
 }
@@ -109,7 +108,7 @@ impl Config {
     /// ```
     ///
     /// [1]: https://doc.rust-lang.org/std/collections/struct.BTreeMap.html
-    /// [2]: https://protobuf.dev/programming-guides/proto3/#maps
+    /// [2]: https://developers.google.com/protocol-buffers/docs/proto3#maps
     /// [3]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
     pub fn btree_map<I, S>(&mut self, paths: I) -> &mut Self
     where
@@ -169,7 +168,7 @@ impl Config {
     /// config.bytes(&["my_bytes_field", ".foo.bar"]);
     /// ```
     ///
-    /// [2]: https://protobuf.dev/programming-guides/proto3/#scalar
+    /// [2]: https://developers.google.com/protocol-buffers/docs/proto3#scalar
     /// [3]: https://doc.rust-lang.org/std/vec/struct.Vec.html
     pub fn bytes<I, S>(&mut self, paths: I) -> &mut Self
     where
@@ -409,7 +408,7 @@ impl Config {
     /// As with other options which take a set of paths, comments can be disabled on a per-package
     /// or per-symbol basis.
     ///
-    /// [1]: https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html#attributes
+    /// [1]: https://doc.rust-lang.org/rustdoc/documentation-tests.html#attributes
     /// [2]: https://doc.rust-lang.org/cargo/reference/cargo-targets.html#configuring-a-target
     pub fn disable_comments<I, S>(&mut self, paths: I) -> &mut Self
     where
@@ -582,7 +581,7 @@ impl Config {
         self
     }
 
-    /// In combination with `file_descriptor_set_path`, this can be used to provide a file
+    /// In combination with with `file_descriptor_set_path`, this can be used to provide a file
     /// descriptor set as an input file, rather than having prost-build generate the file by calling
     /// protoc.
     ///
@@ -686,6 +685,7 @@ impl Config {
         S: AsRef<str>,
         D: AsRef<str>,
     {
+        self.type_name_domains.clear();
         for matcher in paths {
             self.type_name_domains
                 .insert(matcher.as_ref().to_string(), domain.as_ref().to_string());
@@ -695,23 +695,12 @@ impl Config {
 
     /// Configures the path that's used for deriving `Message` for generated messages.
     /// This is mainly useful for generating crates that wish to re-export prost.
-    /// Defaults to `::prost` if not specified.
+    /// Defaults to `::prost::Message` if not specified.
     pub fn prost_path<S>(&mut self, path: S) -> &mut Self
     where
         S: Into<String>,
     {
         self.prost_path = Some(path.into());
-        self
-    }
-
-    /// Configures the path that's used well known types.
-    /// This is mainly useful for generating crates that wish to re-export prost_types.
-    /// Defaults to `::prost_types` if not specified.`
-    pub fn prost_types_path<S>(&mut self, path: S) -> &mut Self
-    where
-        S: Into<String>,
-    {
-        self.prost_types_path = Some(path.into());
         self
     }
 
@@ -740,7 +729,7 @@ impl Config {
     /// Set the path to `protoc` executable to be used by `prost-build`
     ///
     /// Use the provided path to find `protoc`. This can either be a file name which is
-    /// searched for in the `PATH` or an absolute path to use a specific executable.
+    /// searched for in the `PATH` or an aboslute path to use a specific executable.
     ///
     /// # Example `build.rs`
     ///
@@ -967,7 +956,7 @@ impl Config {
                 cmd.arg(proto.as_ref());
             }
 
-            debug!("Running: {cmd:?}");
+            debug!("Running: {:?}", cmd);
 
             let output = match cmd.output() {
             Err(err) if ErrorKind::NotFound == err.kind() => return Err(Error::new(
@@ -1002,7 +991,7 @@ impl Config {
         let file_descriptor_set = FileDescriptorSet::decode(buf.as_slice()).map_err(|error| {
             Error::new(
                 ErrorKind::InvalidInput,
-                format!("invalid FileDescriptorSet: {error}"),
+                format!("invalid FileDescriptorSet: {}", error),
             )
         })?;
 
@@ -1038,19 +1027,11 @@ impl Config {
         // according to [1] if any are output then those paths replace the default crate root,
         // which is undesirable. Figure out how to do it in an additive way; perhaps gcc-rs has
         // this figured out.
-        // [1]: https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script
+        // [1]: http://doc.crates.io/build-script.html#outputs-of-the-build-script
 
         let file_descriptor_set = self.load_fds(protos, includes)?;
 
         self.compile_fds(file_descriptor_set)
-    }
-
-    pub(crate) fn prost_path_or_default(&self) -> &str {
-        self.prost_path.as_deref().unwrap_or("::prost")
-    }
-
-    pub(crate) fn prost_types_path_or_default(&self) -> &str {
-        self.prost_types_path.as_deref().unwrap_or("::prost_types")
     }
 
     pub(crate) fn write_includes(
@@ -1083,12 +1064,16 @@ impl Config {
                 .expect("every module should have a filename");
 
             if basepath.is_some() {
-                self.write_line(outfile, stack.len(), &format!("include!(\"{file_name}\");"))?;
+                self.write_line(
+                    outfile,
+                    stack.len(),
+                    &format!("include!(\"{}\");", file_name),
+                )?;
             } else {
                 self.write_line(
                     outfile,
                     stack.len(),
-                    &format!("include!(concat!(env!(\"OUT_DIR\"), \"/{file_name}\"));"),
+                    &format!("include!(concat!(env!(\"OUT_DIR\"), \"/{}\"));", file_name),
                 )?;
             }
         }
@@ -1118,13 +1103,8 @@ impl Config {
         let mut packages = HashMap::new();
 
         let message_graph = MessageGraph::new(requests.iter().map(|x| &x.1));
-        let extern_paths = ExternPaths::new(
-            &self.extern_paths,
-            self.prost_path_or_default(),
-            self.prost_types_path_or_default(),
-            self.prost_types,
-        )
-        .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+        let extern_paths = ExternPaths::new(&self.extern_paths, self.prost_types)
+            .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
         let mut context = Context::new(self, message_graph, extern_paths);
 
         for (request_module, request_fd) in requests {
@@ -1218,7 +1198,6 @@ impl default::Default for Config {
             skip_source_info: false,
             include_file: None,
             prost_path: None,
-            prost_types_path: None,
             #[cfg(feature = "format")]
             fmt: true,
         }
@@ -1263,7 +1242,8 @@ pub fn error_message_protoc_not_found() -> String {
         "It is also available at https://github.com/protocolbuffers/protobuf/releases";
 
     format!(
-        "{error_msg} {os_specific_hint} {download_msg}  For more information: https://docs.rs/prost-build/#sourcing-protoc"
+        "{} {} {}  For more information: https://docs.rs/prost-build/#sourcing-protoc",
+        error_msg, os_specific_hint, download_msg
     )
 }
 

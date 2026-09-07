@@ -1,6 +1,6 @@
-use crate::sync::Arc;
 use crate::{Connection, LimboError, Statement, StepResult, Value};
 use bitflags::bitflags;
+use std::sync::Arc;
 use strum::IntoEnumIterator;
 use turso_ext::{ConstraintInfo, ConstraintOp, ConstraintUsage, IndexInfo, ResultCode};
 use turso_parser::ast::PragmaName;
@@ -46,10 +46,6 @@ pub fn pragma_for(pragma: &PragmaName) -> Pragma {
                 | PragmaFlags::NoColumns1,
             &["cache_size"],
         ),
-        DataSyncRetry => Pragma::new(
-            PragmaFlags::Result0 | PragmaFlags::NoColumns1,
-            &["data_sync_retry"],
-        ),
         DatabaseList => Pragma::new(PragmaFlags::Result0, &["seq", "name", "file"]),
         Encoding => Pragma::new(
             PragmaFlags::Result0 | PragmaFlags::NoColumns1,
@@ -59,15 +55,8 @@ pub fn pragma_for(pragma: &PragmaName) -> Pragma {
             PragmaFlags::NeedSchema | PragmaFlags::Result0 | PragmaFlags::SchemaReq,
             &["journal_mode"],
         ),
-        LockingMode => Pragma::new(PragmaFlags::Result0, &["locking_mode"]),
-        FullColumnNames | ShortColumnNames => {
-            unreachable!("pragma_for() called with FullColumnNames/ShortColumnNames, which are deprecated no-ops")
-        }
         LegacyFileFormat => {
             unreachable!("pragma_for() called with LegacyFileFormat, which is unsupported")
-        }
-        EmptyResultCallbacks => {
-            unreachable!("pragma_for() called with EmptyResultCallbacks, which is a no-op")
         }
         ModuleList => Pragma::new(
             PragmaFlags::NeedSchema | PragmaFlags::Result0 | PragmaFlags::SchemaReq,
@@ -96,41 +85,9 @@ pub fn pragma_for(pragma: &PragmaName) -> Pragma {
             PragmaFlags::NoColumns1 | PragmaFlags::Result0,
             &["synchronous"],
         ),
-        TempStore => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["temp_store"],
-        ),
-        IndexInfo => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::Result1 | PragmaFlags::SchemaOpt,
-            &["seqno", "cid", "name"],
-        ),
-        IndexXinfo => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::Result1 | PragmaFlags::SchemaOpt,
-            &["seqno", "cid", "name", "desc", "coll", "key"],
-        ),
-        IndexList => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::Result1 | PragmaFlags::SchemaOpt,
-            &["seq", "name", "unique", "origin", "partial"],
-        ),
-        TableList => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::Result0 | PragmaFlags::Result1,
-            &["schema", "name", "type", "ncol", "wr", "strict"],
-        ),
         TableInfo => Pragma::new(
             PragmaFlags::NeedSchema | PragmaFlags::Result1 | PragmaFlags::SchemaOpt,
             &["cid", "name", "type", "notnull", "dflt_value", "pk"],
-        ),
-        TableXinfo => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::Result1 | PragmaFlags::SchemaOpt,
-            &[
-                "cid",
-                "name",
-                "type",
-                "notnull",
-                "dflt_value",
-                "pk",
-                "hidden",
-            ],
         ),
         UserVersion => Pragma::new(
             PragmaFlags::NoColumns1 | PragmaFlags::Result0,
@@ -141,29 +98,17 @@ pub fn pragma_for(pragma: &PragmaName) -> Pragma {
             PragmaFlags::NoColumns1 | PragmaFlags::Result0,
             &["auto_vacuum"],
         ),
-        BusyTimeout => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["busy_timeout"],
-        ),
         IntegrityCheck => Pragma::new(
             PragmaFlags::NeedSchema | PragmaFlags::ReadOnly | PragmaFlags::Result0,
             &["message"],
         ),
-        QuickCheck => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::ReadOnly | PragmaFlags::Result0,
-            &["message"],
-        ),
-        CaptureDataChangesConn | UnstableCaptureDataChangesConn => Pragma::new(
+        UnstableCaptureDataChangesConn => Pragma::new(
             PragmaFlags::NeedSchema | PragmaFlags::Result0 | PragmaFlags::SchemaReq,
-            &["mode", "table", "version"],
+            &["mode", "table"],
         ),
         QueryOnly => Pragma::new(
             PragmaFlags::Result0 | PragmaFlags::NoColumns1,
             &["query_only"],
-        ),
-        IAmADummy | RequireWhere => Pragma::new(
-            PragmaFlags::Result0 | PragmaFlags::NoColumns1,
-            &["require_where"],
         ),
         FreelistCount => Pragma::new(PragmaFlags::Result0, &["freelist_count"]),
         EncryptionKey => Pragma::new(
@@ -173,56 +118,6 @@ pub fn pragma_for(pragma: &PragmaName) -> Pragma {
         EncryptionCipher => Pragma::new(
             PragmaFlags::Result0 | PragmaFlags::SchemaReq | PragmaFlags::NoColumns1,
             &["cipher"],
-        ),
-        PragmaName::MvccCheckpointThreshold => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["mvcc_checkpoint_threshold"],
-        ),
-        PragmaName::MvccGcThreshold => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["mvcc_gc_threshold"],
-        ),
-        ForeignKeys => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["foreign_keys"],
-        ),
-        ForeignKeyList => Pragma::new(
-            PragmaFlags::NeedSchema | PragmaFlags::Result1 | PragmaFlags::SchemaOpt,
-            &[
-                "id",
-                "seq",
-                "table",
-                "from",
-                "to",
-                "on_update",
-                "on_delete",
-                "match",
-            ],
-        ),
-        FunctionList => Pragma::new(
-            PragmaFlags::Result0,
-            &["name", "builtin", "type", "enc", "narg", "flags"],
-        ),
-        PragmaName::CacheSpill => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["cache_spill"],
-        ),
-        #[cfg(target_vendor = "apple")]
-        PragmaName::Fullfsync => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["fullfsync"],
-        ),
-        IgnoreCheckConstraints => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["ignore_check_constraints"],
-        ),
-        ListTypes => Pragma::new(
-            PragmaFlags::Result0,
-            &["type", "parent", "encode", "decode", "default", "operators"],
-        ),
-        VdbeTrace => Pragma::new(
-            PragmaFlags::NoColumns1 | PragmaFlags::Result0,
-            &["vdbe_trace"],
         ),
     }
 }
@@ -238,12 +133,7 @@ pub(crate) struct PragmaVirtualTable {
 impl PragmaVirtualTable {
     pub(crate) fn functions() -> Vec<(PragmaVirtualTable, String)> {
         PragmaName::iter()
-            .filter(|name| {
-                *name != PragmaName::LegacyFileFormat
-                    && *name != PragmaName::FullColumnNames
-                    && *name != PragmaName::ShortColumnNames
-                    && *name != PragmaName::EmptyResultCallbacks
-            })
+            .filter(|name| *name != PragmaName::LegacyFileFormat)
             .filter_map(|name| {
                 let pragma = pragma_for(&name);
                 if pragma
@@ -410,7 +300,7 @@ impl PragmaVirtualTableCursor {
             0 => self
                 .arg
                 .as_ref()
-                .map_or(Value::Null, |arg| Value::from_text(arg.to_string())),
+                .map_or(Value::Null, |arg| Value::from_text(arg)),
             _ => Value::Null,
         };
         Ok(value)
@@ -448,11 +338,7 @@ impl PragmaVirtualTableCursor {
             sql.push_str(&format!("=\"{arg}\""));
         }
 
-        // Table-valued pragma helpers execute inside the parent statement's VM step.
-        // For example, UPDATE ... FROM pragma_table_info('dst') runs this helper while the
-        // outer UPDATE still has an active MVCC transaction and write cursor open on `dst`.
-        // The helper must stay nested so it does not disturb the parent's transaction state.
-        self.stmt = Some(self.conn.prepare_internal(sql)?);
+        self.stmt = Some(self.conn.prepare(sql)?);
 
         self.next()
     }

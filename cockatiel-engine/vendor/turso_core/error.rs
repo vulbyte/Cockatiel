@@ -45,46 +45,22 @@ pub enum LimboError {
     InvalidFormatter(String),
     #[error("Runtime error: {0}")]
     Constraint(String),
-    #[error("Runtime error: {0}")]
-    /// We need to specify for ROLLBACK|FAIL resolve types when to roll the tx back
-    /// so instead of matching on the string, we introduce a specific ForeignKeyConstraint error
-    ForeignKeyConstraint(String),
-    #[error("Runtime error: {1}")]
-    Raise(turso_parser::ast::ResolveType, String),
-    #[error("RaiseIgnore")]
-    RaiseIgnore,
     #[error("Extension error: {0}")]
     ExtensionError(String),
     #[error("Runtime error: integer overflow")]
     IntegerOverflow,
-    #[error("Runtime error: string or blob too big")]
-    TooBig,
+    #[error("Schema is locked for write")]
+    SchemaLocked,
     #[error("Runtime error: database table is locked")]
     TableLocked,
     #[error("Error: Resource is read-only")]
     ReadOnly,
     #[error("Database is busy")]
     Busy,
-    /// A transaction-control or savepoint operation, or a second concurrent
-    /// write statement, was rejected because another statement on the same
-    /// connection is still in progress. This carries SQLITE_BUSY semantics at
-    /// the API surface (SQLite reports these as SQLITE_BUSY, e.g. "cannot
-    /// commit transaction - SQL statements in progress"), but unlike `Busy`
-    /// it is not retryable in place and must never invoke the busy handler:
-    /// waiting cannot help, only the application finishing or resetting its
-    /// own statement can. The payload names the rejected operation.
-    #[error("{0} - SQL statements in progress")]
-    StatementsInProgress(&'static str),
-    #[error("interrupt")]
-    Interrupt,
-    #[error("Database snapshot is stale. You must rollback and retry the whole transaction.")]
-    BusySnapshot,
     #[error("Conflict: {0}")]
     Conflict(String),
     #[error("Database schema changed")]
     SchemaUpdated,
-    #[error("Database schema conflict")]
-    SchemaConflict,
     #[error(
         "Database is empty, header does not exist - page 1 should've been allocated before this"
     )]
@@ -93,8 +69,6 @@ pub enum LimboError {
     TxTerminated,
     #[error("Write-write conflict")]
     WriteWriteConflict,
-    #[error("Commit dependency aborted")]
-    CommitDependencyAborted,
     #[error("No such transaction ID: {0}")]
     NoSuchTransactionID(String),
     #[error("Null value")]
@@ -105,48 +79,12 @@ pub enum LimboError {
     InvalidBlobSize(usize),
     #[error("Planning error: {0}")]
     PlanningError(String),
-    #[error("Checkpoint failed: {0}")]
-    CheckpointFailed(String),
-    #[error("Unsupported text encoding: {0}. Only UTF-8 is supported.")]
-    UnsupportedEncoding(String),
-    #[error("Out of memory")]
-    OutOfMemory,
 }
 
-impl From<crate::alloc::AllocError> for LimboError {
-    fn from(_: crate::alloc::AllocError) -> Self {
-        Self::OutOfMemory
-    }
-}
-
-impl From<crate::alloc::TryReserveError> for LimboError {
-    fn from(_: crate::alloc::TryReserveError) -> Self {
-        Self::OutOfMemory
-    }
-}
-
-#[cfg(not(nightly))]
-impl From<allocator_api2::collections::TryReserveError> for LimboError {
-    fn from(_: allocator_api2::collections::TryReserveError) -> Self {
-        Self::OutOfMemory
-    }
-}
-
-impl From<std::collections::TryReserveError> for LimboError {
-    fn from(_: std::collections::TryReserveError) -> Self {
-        Self::OutOfMemory
-    }
-}
-
-impl From<bumpalo::AllocErr> for LimboError {
-    fn from(_: bumpalo::AllocErr) -> Self {
-        Self::OutOfMemory
-    }
-}
-
-impl From<bumpalo::collections::CollectionAllocErr> for LimboError {
-    fn from(_: bumpalo::collections::CollectionAllocErr) -> Self {
-        Self::OutOfMemory
+// We only propagate the error kind so we can avoid string allocation in hot path and copying/cloning enums is cheaper
+impl From<std::io::Error> for LimboError {
+    fn from(value: std::io::Error) -> Self {
+        Self::CompletionError(CompletionError::IOError(value.kind()))
     }
 }
 
@@ -164,10 +102,17 @@ impl From<&'static str> for LimboError {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Error)]
+// We only propagate the error kind
+impl From<std::io::Error> for CompletionError {
+    fn from(value: std::io::Error) -> Self {
+        CompletionError::IOError(value.kind())
+    }
+}
+
+#[derive(Debug, Copy, Clone, Error)]
 pub enum CompletionError {
-    #[error("I/O error ({1}): {0}")]
-    IOError(std::io::ErrorKind, &'static str),
+    #[error("I/O error: {0}")]
+    IOError(std::io::ErrorKind),
     #[cfg(target_family = "unix")]
     #[error("I/O error: {0}")]
     RustixIOError(#[from] rustix::io::Errno),
@@ -179,117 +124,35 @@ pub enum CompletionError {
     Aborted,
     #[error("Decryption failed for page={page_idx}")]
     DecryptionError { page_idx: usize },
-    #[error("I/O error: partial write")]
-    ShortWrite,
-    #[error("I/O error: short read on page {page_idx}: expected {expected} bytes, got {actual}")]
-    ShortRead {
-        page_idx: usize,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("I/O error: short read on WAL frame at offset {offset}: expected {expected} bytes, got {actual}")]
-    ShortReadWalFrame {
-        offset: u64,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("WAL frame page mismatch at frame {frame_id}: expected page {expected}, got {actual}")]
-    WalFramePageMismatch {
-        frame_id: u64,
-        expected: usize,
-        actual: u32,
-    },
-    #[error("Checksum mismatch on page {page_id}: expected {expected}, got {actual}")]
-    ChecksumMismatch {
-        page_id: usize,
-        expected: u64,
-        actual: u64,
-    },
-    #[error("tursodb not compiled with checksum feature")]
-    ChecksumNotEnabled,
-}
-
-/// Convert a `std::io::Error` into a `LimboError` with an operation label.
-pub fn io_error(e: std::io::Error, op: &'static str) -> LimboError {
-    LimboError::CompletionError(CompletionError::IOError(e.kind(), op))
-}
-
-#[cold]
-// makes all branches that return errors marked as unlikely
-pub(crate) const fn cold_return<T>(v: T) -> T {
-    v
 }
 
 #[macro_export]
 macro_rules! bail_parse_error {
     ($($arg:tt)*) => {
-        return $crate::error::cold_return(Err($crate::error::LimboError::ParseError(format!($($arg)*))))
+        return Err($crate::error::LimboError::ParseError(format!($($arg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! bail_corrupt_error {
     ($($arg:tt)*) => {
-        return $crate::error::cold_return(Err($crate::error::LimboError::Corrupt(format!($($arg)*))))
-    };
-}
-
-/// Bounds-checked buffer slicing that returns `LimboError::Corrupt` on out-of-bounds.
-///
-/// Accepts any range expression: `buf, pos..`, `buf, start..end`, etc.
-#[macro_export]
-macro_rules! slice_in_bounds_or_corrupt {
-    ($buf:expr, $range:expr) => {
-        $buf.get($range).ok_or_else(|| {
-            $crate::error::cold_return($crate::error::LimboError::Corrupt(format!(
-                "range {:?} out of bounds for buffer size {}",
-                $range,
-                $buf.len()
-            )))
-        })?
-    };
-}
-
-/// Asserts a condition or bails with `LimboError::Corrupt`.
-///
-/// Usage:
-///   `assert_or_bail_corrupt!(condition, "message {}", arg)`
-#[macro_export]
-macro_rules! assert_or_bail_corrupt {
-    ($cond:expr, $($arg:tt)*) => {
-        if !($cond) {
-            $crate::bail_corrupt_error!($($arg)*);
-        }
+        return Err($crate::error::LimboError::Corrupt(format!($($arg)*)))
     };
 }
 
 #[macro_export]
 macro_rules! bail_constraint_error {
     ($($arg:tt)*) => {
-        return $crate::error::cold_return(Err($crate::error::LimboError::Constraint(format!($($arg)*))))
+        return Err($crate::error::LimboError::Constraint(format!($($arg)*)))
     };
 }
 
 impl From<turso_ext::ResultCode> for LimboError {
     fn from(err: turso_ext::ResultCode) -> Self {
-        cold_return(LimboError::ExtensionError(err.to_string()))
+        LimboError::ExtensionError(err.to_string())
     }
 }
 
-pub const SQLITE_ERROR: usize = 1;
 pub const SQLITE_CONSTRAINT: usize = 19;
-pub const SQLITE_CONSTRAINT_CHECK: usize = SQLITE_CONSTRAINT | (1 << 8);
 pub const SQLITE_CONSTRAINT_PRIMARYKEY: usize = SQLITE_CONSTRAINT | (6 << 8);
-#[allow(dead_code)]
-pub const SQLITE_CONSTRAINT_FOREIGNKEY: usize = SQLITE_CONSTRAINT | (3 << 8);
 pub const SQLITE_CONSTRAINT_NOTNULL: usize = SQLITE_CONSTRAINT | (5 << 8);
-pub const SQLITE_CONSTRAINT_TRIGGER: usize = SQLITE_CONSTRAINT | (7 << 8);
-pub const SQLITE_FULL: usize = 13; // we want this in autoincrement - incase if user inserts max allowed int
-pub const SQLITE_CONSTRAINT_UNIQUE: usize = 2067;
-// Standard SQLite error code; kept for documentation and potential
-// reuse. The sequence inner-tx wrap used to emit Insn::Halt with this
-// code, but halt()'s constraint catch-all mis-wrapped it; Busy is now
-// returned directly via Err(LimboError::Busy) from
-// op_sequence_commit_inner_tx.
-#[allow(dead_code)]
-pub const SQLITE_BUSY: usize = 5;

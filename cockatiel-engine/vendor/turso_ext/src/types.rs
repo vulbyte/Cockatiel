@@ -206,8 +206,7 @@ impl TextValue {
     #[cfg(feature = "core_only")]
     fn free(self) {
         if !self.text.is_null() {
-            let ptr = std::ptr::slice_from_raw_parts_mut(self.text as *mut u8, self.len as usize);
-            let _ = unsafe { Box::from_raw(ptr) };
+            let _ = unsafe { Box::from_raw(self.text as *mut u8) };
         }
     }
 
@@ -274,15 +273,14 @@ impl Blob {
     #[cfg(feature = "core_only")]
     fn free(self) {
         if !self.data.is_null() {
-            let ptr = std::ptr::slice_from_raw_parts_mut(self.data as *mut u8, self.size as usize);
-            let _ = unsafe { Box::from_raw(ptr) };
+            let _ = unsafe { Box::from_raw(self.data as *mut u8) };
         }
     }
 }
 
 impl Value {
     /// Creates a new Value with type Null
-    pub const fn null() -> Self {
+    pub fn null() -> Self {
         Self {
             value_type: ValueType::Null,
             value: ValueData { int: 0 },
@@ -290,7 +288,7 @@ impl Value {
     }
 
     /// Returns the value type of the Value
-    pub const fn value_type(&self) -> ValueType {
+    pub fn value_type(&self) -> ValueType {
         self.value_type
     }
 
@@ -319,18 +317,6 @@ impl Value {
         }
     }
 
-    /// Returns the text value for any ValueType
-    pub fn to_text_coerced(&self) -> Option<String> {
-        match self.value_type {
-            ValueType::Text => self.to_text().map(|s| s.to_string()),
-            ValueType::Integer => self.to_integer().map(|i| i.to_string()),
-            ValueType::Float => self.to_float().map(|f| f.to_string()),
-            ValueType::Blob => self.to_blob().and_then(|b| String::from_utf8(b).ok()),
-            ValueType::Null => None,
-            ValueType::Error => None,
-        }
-    }
-
     pub fn is_json(&self) -> bool {
         unsafe {
             if self.value_type == ValueType::Text && !self.value.text.is_null() {
@@ -341,27 +327,20 @@ impl Value {
         false
     }
 
-    /// Returns the blob value if the ValueType is Blob (copies the data)
+    /// Returns the blob value if the ValueType is Blob
     pub fn to_blob(&self) -> Option<Vec<u8>> {
-        self.blob_ref().map(|s| s.to_vec())
-    }
-
-    /// Returns a reference to the blob data without copying.
-    ///
-    /// Unlike `to_blob()` which returns an owned `Vec<u8>`, this method
-    /// returns a slice reference that borrows from the underlying storage.
-    pub fn blob_ref(&self) -> Option<&[u8]> {
         match self.value_type {
             ValueType::Blob => {
                 if unsafe { self.value.blob.is_null() } {
                     return None;
                 }
                 let blob = unsafe { &*(self.value.blob) };
-                if blob.data.is_null() {
-                    Some(&[])
-                } else {
-                    Some(unsafe { std::slice::from_raw_parts(blob.data, blob.size as usize) })
-                }
+                let slice = unsafe { std::slice::from_raw_parts(blob.data, blob.size as usize) };
+                Some(slice.to_vec())
+            }
+            ValueType::Text => {
+                let txt = self.to_text().unwrap_or_default();
+                Some(txt.as_bytes().to_vec())
             }
             _ => None,
         }
@@ -522,8 +501,7 @@ impl Value {
             ValueType::Error => {
                 let err_val = Box::from_raw(self.value.error as *mut ErrValue);
                 if !err_val.message.is_null() {
-                    let message = Box::from_raw(err_val.message);
-                    message.free();
+                    let _ = Box::from_raw(err_val.message);
                 }
             }
             _ => {}

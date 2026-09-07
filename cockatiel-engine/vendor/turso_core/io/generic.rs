@@ -1,9 +1,7 @@
-use crate::error::io_error;
-use crate::io::clock::{DefaultClock, MonotonicInstant, WallClockInstant};
-use crate::{Clock, Completion, File, OpenFlags, Result, IO};
-use crate::sync::RwLock;
+use crate::{Clock, Completion, File, Instant, LimboError, OpenFlags, Result, IO};
+use parking_lot::RwLock;
 use std::io::{Read, Seek, Write};
-use crate::sync::Arc;
+use std::sync::Arc;
 use tracing::{debug, instrument, trace, Level};
 pub struct GenericIO {}
 
@@ -15,7 +13,7 @@ impl GenericIO {
 }
 
 impl IO for GenericIO {
-    #[instrument(skip_all, level = Level::TRACE)]
+    #[instrument(err, skip_all, level = Level::TRACE)]
     fn open_file(&self, path: &str, flags: OpenFlags, direct: bool) -> Result<Arc<dyn File>> {
         trace!("open_file(path = {})", path);
         let mut file = std::fs::File::options();
@@ -26,7 +24,7 @@ impl IO for GenericIO {
             file.create(flags.contains(OpenFlags::Create));
         }
 
-        let file = file.open(path).map_err(|e| io_error(e, "open"))?;
+        let file = file.open(path)?;
         Ok(Arc::new(GenericFile {
             file: RwLock::new(file),
         }))
@@ -35,23 +33,22 @@ impl IO for GenericIO {
     #[instrument(err, skip_all, level = Level::TRACE)]
     fn remove_file(&self, path: &str) -> Result<()> {
         trace!("remove_file(path = {})", path);
-        std::fs::remove_file(path).map_err(|e| io_error(e, "remove_file"))?;
-        Ok(())
+        Ok(std::fs::remove_file(path)?)
     }
 
     #[instrument(err, skip_all, level = Level::TRACE)]
-    fn step(&self) -> Result<()> {
+    fn run_once(&self) -> Result<()> {
         Ok(())
     }
 }
 
 impl Clock for GenericIO {
-    fn current_time_monotonic(&self) -> MonotonicInstant {
-        DefaultClock.current_time_monotonic()
-    }
-
-    fn current_time_wall_clock(&self) -> WallClockInstant {
-        DefaultClock.current_time_wall_clock()
+    fn now(&self) -> Instant {
+        let now = chrono::Local::now();
+        Instant {
+            secs: now.timestamp(),
+            micros: now.timestamp_subsec_micros(),
+        }
     }
 }
 
@@ -62,23 +59,24 @@ pub struct GenericFile {
 impl File for GenericFile {
     #[instrument(err, skip_all, level = Level::TRACE)]
     fn lock_file(&self, exclusive: bool) -> Result<()> {
-        Ok(())
+        unimplemented!()
     }
 
     #[instrument(err, skip_all, level = Level::TRACE)]
     fn unlock_file(&self) -> Result<()> {
-        Ok(())
+        unimplemented!()
     }
 
     #[instrument(skip(self, c), level = Level::TRACE)]
     fn pread(&self, pos: u64, c: Completion) -> Result<Completion> {
         let mut file = self.file.write();
-        file.seek(std::io::SeekFrom::Start(pos)).map_err(|e| io_error(e, "pread"))?;
+        file.seek(std::io::SeekFrom::Start(pos))?;
         let nr = {
             let r = c.as_read();
             let buf = r.buf();
             let buf = buf.as_mut_slice();
-            file.read(buf).map_err(|e| io_error(e, "pread"))? as i32
+            file.read_exact(buf)?;
+            buf.len() as i32
         };
         c.complete(nr);
         Ok(c)
@@ -87,17 +85,17 @@ impl File for GenericFile {
     #[instrument(skip(self, c, buffer), level = Level::TRACE)]
     fn pwrite(&self, pos: u64, buffer: Arc<crate::Buffer>, c: Completion) -> Result<Completion> {
         let mut file = self.file.write();
-        file.seek(std::io::SeekFrom::Start(pos)).map_err(|e| io_error(e, "pwrite"))?;
+        file.seek(std::io::SeekFrom::Start(pos))?;
         let buf = buffer.as_slice();
-        file.write_all(buf).map_err(|e| io_error(e, "pwrite"))?;
+        file.write_all(buf)?;
         c.complete(buffer.len() as i32);
         Ok(c)
     }
 
     #[instrument(err, skip_all, level = Level::TRACE)]
-    fn sync(&self, c: Completion, _sync_type: crate::io::FileSyncType) -> Result<Completion> {
+    fn sync(&self, c: Completion) -> Result<Completion> {
         let file = self.file.write();
-        file.sync_all().map_err(|e| io_error(e, "sync"))?;
+        file.sync_all()?;
         c.complete(0);
         Ok(c)
     }
@@ -105,13 +103,13 @@ impl File for GenericFile {
     #[instrument(err, skip_all, level = Level::TRACE)]
     fn truncate(&self, len: u64, c: Completion) -> Result<Completion> {
         let file = self.file.write();
-        file.set_len(len).map_err(|e| io_error(e, "truncate"))?;
+        file.set_len(len)?;
         c.complete(0);
         Ok(c)
     }
 
     fn size(&self) -> Result<u64> {
         let file = self.file.read();
-        Ok(file.metadata().map_err(|e| io_error(e, "metadata"))?.len())
+        Ok(file.metadata().unwrap().len())
     }
 }

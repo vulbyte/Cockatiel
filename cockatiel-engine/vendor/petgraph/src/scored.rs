@@ -1,4 +1,4 @@
-use core::cmp::Ordering;
+use std::cmp::Ordering;
 
 /// `MinScored<K, T>` holds a score `K` and a scored object `T` in
 /// a pair for use with a `BinaryHeap`.

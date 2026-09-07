@@ -12,8 +12,8 @@
 [package]
 edition = "2021"
 name = "turso_ext"
-version = "0.7.2"
-authors = ["the Turso authors"]
+version = "0.1.5"
+authors = ["the Limbo authors"]
 build = "build.rs"
 autolib = false
 autobins = false
@@ -35,11 +35,10 @@ name = "turso_ext"
 path = "src/lib.rs"
 
 [dependencies.chrono]
-version = "0.4.42"
-default-features = true
+version = "0.4.40"
 
 [dependencies.getrandom]
-version = "0.4.2"
+version = "0.3.1"
 
 [dependencies.turso_macros]
-version = "0.7.2"
+version = "0.1.5"

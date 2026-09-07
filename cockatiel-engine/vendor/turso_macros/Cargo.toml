@@ -12,8 +12,8 @@
 [package]
 edition = "2021"
 name = "turso_macros"
-version = "0.7.2"
-authors = ["the Turso authors"]
+version = "0.1.5"
+authors = ["the Limbo authors"]
 build = false
 autolib = false
 autobins = false
@@ -43,5 +43,4 @@ version = "2.0.96"
 features = [
     "full",
     "clone-impls",
-    "visit-mut",
 ]

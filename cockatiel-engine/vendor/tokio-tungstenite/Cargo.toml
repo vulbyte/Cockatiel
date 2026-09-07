@@ -13,11 +13,12 @@
 edition = "2018"
 rust-version = "1.63"
 name = "tokio-tungstenite"
-version = "0.21.0"
+version = "0.24.0"
 authors = [
     "Daniel Abramov <dabramov@snapview.de>",
     "Alexey Galakhov <agalakhov@snapview.de>",
 ]
+build = false
 include = [
     "examples/**/*",
     "src/**/*",
@@ -25,9 +26,13 @@ include = [
     "README.md",
     "CHANGELOG.md",
 ]
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Tokio binding for Tungstenite, the Lightweight stream-based WebSocket implementation"
 homepage = "https://github.com/snapview/tokio-tungstenite"
-documentation = "https://docs.rs/tokio-tungstenite/0.21.0"
+documentation = "https://docs.rs/tokio-tungstenite/0.24.0"
 readme = "README.md"
 keywords = [
     "websocket",
@@ -44,41 +49,50 @@ license = "MIT"
 repository = "https://github.com/snapview/tokio-tungstenite"
 
 [package.metadata.docs.rs]
-features = [
-    "native-tls",
-    "__rustls-tls",
-]
+all-features = true
+
+[lib]
+name = "tokio_tungstenite"
+path = "src/lib.rs"
 
 [[example]]
 name = "autobahn-client"
+path = "examples/autobahn-client.rs"
 required-features = ["connect"]
 
 [[example]]
 name = "autobahn-server"
+path = "examples/autobahn-server.rs"
 required-features = ["handshake"]
 
 [[example]]
 name = "client"
+path = "examples/client.rs"
 required-features = ["connect"]
 
 [[example]]
 name = "echo-server"
-required-features = ["handshake"]
-
-[[example]]
-name = "server-custom-accept"
-required-features = ["handshake"]
-
-[[example]]
-name = "server"
-required-features = ["handshake"]
-
-[[example]]
-name = "server-headers"
+path = "examples/echo-server.rs"
 required-features = ["handshake"]
 
 [[example]]
 name = "interval-server"
+path = "examples/interval-server.rs"
+required-features = ["handshake"]
+
+[[example]]
+name = "server"
+path = "examples/server.rs"
+required-features = ["handshake"]
+
+[[example]]
+name = "server-custom-accept"
+path = "examples/server-custom-accept.rs"
+required-features = ["handshake"]
+
+[[example]]
+name = "server-headers"
+path = "examples/server-headers.rs"
 required-features = ["handshake"]
 
 [dependencies.futures-util]
@@ -98,11 +112,12 @@ optional = true
 package = "native-tls"
 
 [dependencies.rustls]
-version = "0.22.0"
+version = "0.23.0"
 optional = true
+default-features = false
 
 [dependencies.rustls-native-certs]
-version = "0.7.0"
+version = "0.8.0"
 optional = true
 
 [dependencies.rustls-pki-types]
@@ -119,11 +134,12 @@ version = "0.3.1"
 optional = true
 
 [dependencies.tokio-rustls]
-version = "0.25.0"
+version = "0.26.0"
 optional = true
+default-features = false
 
 [dependencies.tungstenite]
-version = "0.21.0"
+version = "0.24.0"
 default-features = false
 
 [dependencies.webpki-roots]
@@ -136,14 +152,20 @@ version = "0.10.0"
 [dev-dependencies.futures-channel]
 version = "0.3.28"
 
+[dev-dependencies.http-body-util]
+version = "0.1"
+
 [dev-dependencies.hyper]
-version = "0.14.25"
+version = "1.0"
 features = [
     "http1",
     "server",
-    "tcp",
 ]
 default-features = false
+
+[dev-dependencies.hyper-util]
+version = "0.1"
+features = ["tokio"]
 
 [dev-dependencies.tokio]
 version = "1.27.0"
@@ -155,9 +177,6 @@ features = [
     "time",
 ]
 default-features = false
-
-[dev-dependencies.url]
-version = "2.3.1"
 
 [features]
 __rustls-tls = [
@@ -199,3 +218,4 @@ rustls-tls-webpki-roots = [
     "webpki-roots",
 ]
 stream = []
+url = ["tungstenite/url"]

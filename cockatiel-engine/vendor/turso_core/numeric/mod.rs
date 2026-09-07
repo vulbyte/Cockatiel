@@ -1,6 +1,5 @@
-use crate::{types::AsValueRef, Value, ValueRef};
+use crate::Value;
 
-pub mod decimal;
 pub mod nonnan;
 
 use nonnan::NonNan;
@@ -40,130 +39,27 @@ impl SaturatingShr for i64 {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Numeric {
+    Null,
     Integer(i64),
     Float(NonNan),
 }
 
 impl Numeric {
-    pub fn from_value<T: AsValueRef>(value: T) -> Option<Self> {
-        let value = value.as_value_ref();
-
-        match value {
-            ValueRef::Null => None,
-            ValueRef::Numeric(v) => Some(v),
-            ValueRef::Text(text) => Some(Numeric::from(text.as_str())),
-            ValueRef::Blob(blob) => {
-                let text = String::from_utf8_lossy(blob);
-                Some(Numeric::from(&text))
-            }
-        }
-    }
-
-    #[inline]
-    pub fn from_value_strict(value: &Value) -> Option<Self> {
-        match value {
-            Value::Null | Value::Blob(_) => None,
-            Value::Numeric(n) => Some(*n),
-            Value::Text(text) => {
-                let s = text.as_str();
-
-                match str_to_f64(s) {
-                    None
-                    | Some(StrToF64::FractionalPrefix(_))
-                    | Some(StrToF64::DecimalPrefix(_)) => None,
-                    Some(StrToF64::Fractional(value)) => Some(Self::Float(value)),
-                    Some(StrToF64::Decimal(real)) => Some(match str_to_i64_checked(s) {
-                        Ok(integer) => Self::Integer(integer),
-                        Err(_) => Self::Float(real),
-                    }),
-                }
-            }
-        }
-    }
-
-    #[inline]
-    pub fn to_f64(&self) -> f64 {
+    pub fn try_into_bool(&self) -> Option<bool> {
         match self {
-            Numeric::Integer(v) => *v as _,
-            Numeric::Float(v) => (*v).into(),
-        }
-    }
-
-    #[inline]
-    pub fn to_bool(&self) -> bool {
-        match self {
-            Numeric::Integer(0) => false,
-            Numeric::Float(non_nan) if *non_nan == 0.0 => false,
-            _ => true,
-        }
-    }
-
-    #[inline]
-    pub fn checked_add(self, rhs: Self) -> Option<Self> {
-        match (self, rhs) {
-            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_add(rhs) {
-                None => Numeric::Float(lhs.into()).checked_add(Numeric::Float(rhs.into())),
-                Some(i) => Some(Numeric::Integer(i)),
-            },
-            (Numeric::Float(lhs), Numeric::Float(rhs)) => (lhs + rhs).map(Numeric::Float),
-            (f @ Numeric::Float(_), Numeric::Integer(i))
-            | (Numeric::Integer(i), f @ Numeric::Float(_)) => {
-                f.checked_add(Numeric::Float(i.into()))
-            }
-        }
-    }
-
-    #[inline]
-    pub fn checked_sub(self, rhs: Self) -> Option<Self> {
-        match (self, rhs) {
-            (Numeric::Float(lhs), Numeric::Float(rhs)) => (lhs - rhs).map(Numeric::Float),
-            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_sub(rhs) {
-                None => Numeric::Float(lhs.into()).checked_sub(Numeric::Float(rhs.into())),
-                Some(i) => Some(Numeric::Integer(i)),
-            },
-            (f @ Numeric::Float(_), Numeric::Integer(i)) => f.checked_sub(Numeric::Float(i.into())),
-            (Numeric::Integer(i), f @ Numeric::Float(_)) => Numeric::Float(i.into()).checked_sub(f),
-        }
-    }
-
-    #[inline]
-    pub fn checked_mul(self, rhs: Self) -> Option<Self> {
-        match (self, rhs) {
-            (Numeric::Float(lhs), Numeric::Float(rhs)) => (lhs * rhs).map(Numeric::Float),
-            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_mul(rhs) {
-                None => Numeric::Float(lhs.into()).checked_mul(Numeric::Float(rhs.into())),
-                Some(i) => Some(Numeric::Integer(i)),
-            },
-            (f @ Numeric::Float(_), Numeric::Integer(i))
-            | (Numeric::Integer(i), f @ Numeric::Float(_)) => {
-                f.checked_mul(Numeric::Float(i.into()))
-            }
-        }
-    }
-
-    #[inline]
-    pub fn checked_div(self, rhs: Self) -> Option<Self> {
-        match (self, rhs) {
-            (Numeric::Float(lhs), Numeric::Float(rhs)) => match lhs / rhs {
-                Some(v) if rhs != 0.0 => Some(Numeric::Float(v)),
-                _ => None,
-            },
-            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_div(rhs) {
-                None => Numeric::Float(lhs.into()).checked_div(Numeric::Float(rhs.into())),
-                Some(v) => Some(Numeric::Integer(v)),
-            },
-            (f @ Numeric::Float(_), Numeric::Integer(i)) => f.checked_div(Numeric::Float(i.into())),
-            (Numeric::Integer(i), f @ Numeric::Float(_)) => Numeric::Float(i.into()).checked_div(f),
+            Numeric::Null => None,
+            Numeric::Integer(0) => Some(false),
+            Numeric::Float(non_nan) if *non_nan == 0.0 => Some(false),
+            _ => Some(true),
         }
     }
 }
 
 impl From<Numeric> for NullableInteger {
-    #[inline]
     fn from(value: Numeric) -> Self {
         match value {
+            Numeric::Null => NullableInteger::Null,
             Numeric::Integer(v) => NullableInteger::Integer(v),
             Numeric::Float(v) => NullableInteger::Integer(f64::from(v) as i64),
         }
@@ -171,15 +67,12 @@ impl From<Numeric> for NullableInteger {
 }
 
 impl From<Numeric> for Value {
-    #[inline]
     fn from(value: Numeric) -> Self {
-        Value::Numeric(value)
-    }
-}
-
-impl From<Option<Numeric>> for Value {
-    fn from(value: Option<Numeric>) -> Self {
-        value.map_or_else(|| Value::Null, Value::from)
+        match value {
+            Numeric::Null => Value::Null,
+            Numeric::Integer(v) => Value::Integer(v),
+            Numeric::Float(v) => Value::Float(v.into()),
+        }
     }
 }
 
@@ -189,34 +82,119 @@ impl<T: AsRef<str>> From<T> for Numeric {
 
         match str_to_f64(text) {
             None => Self::Integer(0),
-            Some(StrToF64::Fractional(value) | StrToF64::FractionalPrefix(value)) => {
-                Self::Float(value)
-            }
-            Some(StrToF64::Decimal(real) | StrToF64::DecimalPrefix(real)) => {
-                match str_to_i64_checked(text) {
-                    Ok(integer) => Self::Integer(integer),
-                    Err(_) => Self::Float(real),
+            Some(StrToF64::Fractional(value)) => Self::Float(value),
+            Some(StrToF64::Decimal(real)) => {
+                let integer = str_to_i64(text).unwrap_or(0);
+
+                if real == integer as f64 {
+                    Self::Integer(integer)
+                } else {
+                    Self::Float(real)
                 }
             }
         }
     }
 }
 
-impl From<Value> for Option<Numeric> {
+impl From<Value> for Numeric {
     fn from(value: Value) -> Self {
         Self::from(&value)
     }
 }
-impl From<&Value> for Option<Numeric> {
+impl From<&Value> for Numeric {
     fn from(value: &Value) -> Self {
         match value {
-            Value::Null => None,
-            Value::Numeric(n) => Some(*n),
-            Value::Text(text) => Some(Numeric::from(text.as_str())),
+            Value::Null => Self::Null,
+            Value::Integer(v) => Self::Integer(*v),
+            Value::Float(v) => match NonNan::new(*v) {
+                Some(v) => Self::Float(v),
+                None => Self::Null,
+            },
+            Value::Text(text) => Numeric::from(text.as_str()),
             Value::Blob(blob) => {
                 let text = String::from_utf8_lossy(blob.as_slice());
-                Some(Numeric::from(&text))
+                Numeric::from(&text)
             }
+        }
+    }
+}
+
+impl std::ops::Add for Numeric {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Numeric::Null, _) | (_, Numeric::Null) => Numeric::Null,
+            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_add(rhs) {
+                None => Numeric::Float(lhs.into()) + Numeric::Float(rhs.into()),
+                Some(i) => Numeric::Integer(i),
+            },
+            (Numeric::Float(lhs), Numeric::Float(rhs)) => match lhs + rhs {
+                Some(v) => Numeric::Float(v),
+                None => Numeric::Null,
+            },
+            (f @ Numeric::Float(_), Numeric::Integer(i))
+            | (Numeric::Integer(i), f @ Numeric::Float(_)) => f + Numeric::Float(i.into()),
+        }
+    }
+}
+
+impl std::ops::Sub for Numeric {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Numeric::Null, _) | (_, Numeric::Null) => Numeric::Null,
+            (Numeric::Float(lhs), Numeric::Float(rhs)) => match lhs - rhs {
+                Some(v) => Numeric::Float(v),
+                None => Numeric::Null,
+            },
+            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_sub(rhs) {
+                None => Numeric::Float(lhs.into()) - Numeric::Float(rhs.into()),
+                Some(i) => Numeric::Integer(i),
+            },
+            (f @ Numeric::Float(_), Numeric::Integer(i)) => f - Numeric::Float(i.into()),
+            (Numeric::Integer(i), f @ Numeric::Float(_)) => Numeric::Float(i.into()) - f,
+        }
+    }
+}
+
+impl std::ops::Mul for Numeric {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Numeric::Null, _) | (_, Numeric::Null) => Numeric::Null,
+            (Numeric::Float(lhs), Numeric::Float(rhs)) => match lhs * rhs {
+                Some(v) => Numeric::Float(v),
+                None => Numeric::Null,
+            },
+            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_mul(rhs) {
+                None => Numeric::Float(lhs.into()) * Numeric::Float(rhs.into()),
+                Some(i) => Numeric::Integer(i),
+            },
+            (f @ Numeric::Float(_), Numeric::Integer(i))
+            | (Numeric::Integer(i), f @ Numeric::Float(_)) => f * Numeric::Float(i.into()),
+        }
+    }
+}
+
+impl std::ops::Div for Numeric {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Numeric::Null, _) | (_, Numeric::Null) => Numeric::Null,
+            (Numeric::Float(lhs), Numeric::Float(rhs)) => match lhs / rhs {
+                Some(v) if rhs != 0.0 => Numeric::Float(v),
+                _ => Numeric::Null,
+            },
+            (Numeric::Integer(lhs), Numeric::Integer(rhs)) => match lhs.checked_div(rhs) {
+                None => Numeric::Float(lhs.into()) / Numeric::Float(rhs.into()),
+                Some(v) => Numeric::Integer(v),
+            },
+            (f @ Numeric::Float(_), Numeric::Integer(i)) => f / Numeric::Float(i.into()),
+            (Numeric::Integer(i), f @ Numeric::Float(_)) => Numeric::Float(i.into()) / f,
         }
     }
 }
@@ -226,79 +204,13 @@ impl std::ops::Neg for Numeric {
 
     fn neg(self) -> Self::Output {
         match self {
+            Numeric::Null => Numeric::Null,
             Numeric::Integer(v) => match v.checked_neg() {
                 None => -Numeric::Float(v.into()),
                 Some(i) => Numeric::Integer(i),
             },
             Numeric::Float(v) => Numeric::Float(-v),
         }
-    }
-}
-
-impl PartialEq for Numeric {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other).is_eq()
-    }
-}
-
-impl Eq for Numeric {}
-
-impl PartialOrd for Numeric {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Numeric {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            (Numeric::Integer(a), Numeric::Integer(b)) => a.cmp(b),
-            (Numeric::Float(a), Numeric::Float(b)) => {
-                let fa: f64 = (*a).into();
-                let fb: f64 = (*b).into();
-                // NonNan guarantees no NaN, so partial_cmp always returns Some.
-                // SQLite's float-vs-float uses raw IEEE 754 < and > operators,
-                // which both return false for NaN, resulting in "equal".
-                fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
-            }
-            (Numeric::Integer(int), Numeric::Float(float)) => {
-                sqlite_int_float_cmp(*int, f64::from(*float))
-            }
-            (Numeric::Float(float), Numeric::Integer(int)) => {
-                sqlite_int_float_cmp(*int, f64::from(*float)).reverse()
-            }
-        }
-    }
-}
-
-/// Compare an integer and a float following SQLite semantics.
-///
-/// SQLite treats NaN as NULL, so int > NaN. In practice, NonNan prevents NaN
-/// from appearing in Numeric::Float, but we check defensively.
-///
-/// See sqlite3IntFloatCompare in src/vdbeaux.c.
-fn sqlite_int_float_cmp(int_val: i64, float_val: f64) -> std::cmp::Ordering {
-    if float_val.is_nan() {
-        // NaN is treated as NULL; all integers are greater than NULL
-        return std::cmp::Ordering::Greater;
-    }
-
-    if float_val < -9_223_372_036_854_775_808.0 {
-        return std::cmp::Ordering::Greater;
-    }
-    if float_val >= 9_223_372_036_854_775_808.0 {
-        return std::cmp::Ordering::Less;
-    }
-
-    let float_as_int = float_val as i64;
-    match int_val.cmp(&float_as_int) {
-        std::cmp::Ordering::Equal => {
-            let int_as_float = int_val as f64;
-            int_as_float
-                .partial_cmp(&float_val)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
-        other => other,
     }
 }
 
@@ -312,7 +224,7 @@ impl From<NullableInteger> for Value {
     fn from(value: NullableInteger) -> Self {
         match value {
             NullableInteger::Null => Value::Null,
-            NullableInteger::Integer(v) => Value::from_i64(v),
+            NullableInteger::Integer(v) => Value::Integer(v),
         }
     }
 }
@@ -333,8 +245,8 @@ impl From<&Value> for NullableInteger {
     fn from(value: &Value) -> Self {
         match value {
             Value::Null => Self::Null,
-            Value::Numeric(Numeric::Integer(v)) => Self::Integer(*v),
-            Value::Numeric(Numeric::Float(v)) => Self::Integer(f64::from(*v) as i64),
+            Value::Integer(v) => Self::Integer(*v),
+            Value::Float(v) => Self::Integer(*v as i64),
             Value::Text(text) => Self::from(text.as_str()),
             Value::Blob(blob) => {
                 let text = String::from_utf8_lossy(blob.as_slice());
@@ -438,7 +350,7 @@ const VERTICAL_TAB: char = '\u{b}';
 /// Encapsulates Dekker's arithmetic for higher precision. This is spiritually the same as using a
 /// f128 for arithmetic, but cross platform and compatible with sqlite.
 #[derive(Debug, Clone, Copy)]
-pub struct DoubleDouble(pub f64, pub f64);
+struct DoubleDouble(f64, f64);
 
 impl DoubleDouble {
     pub const E100: Self = DoubleDouble(1.0e+100, -1.590_289_110_975_991_8e83);
@@ -526,22 +438,6 @@ impl std::ops::MulAssign for DoubleDouble {
 }
 
 pub fn str_to_i64(input: impl AsRef<str>) -> Option<i64> {
-    Some(match str_to_i64_checked(input) {
-        Ok(v) => v,
-        Err(IntOverflow::Positive) => i64::MAX,
-        Err(IntOverflow::Negative) => i64::MIN,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum IntOverflow {
-    Positive,
-    Negative,
-}
-
-/// Like [`str_to_i64`] but distinguishes overflow from a successful parse.
-/// Returns `Err(_)` when the leading numeric prefix does not fit in i64.
-pub fn str_to_i64_checked(input: impl AsRef<str>) -> Result<i64, IntOverflow> {
     let input = input
         .as_ref()
         .trim_matches(|ch: char| ch.is_ascii_whitespace() || ch == VERTICAL_TAB);
@@ -550,40 +446,23 @@ pub fn str_to_i64_checked(input: impl AsRef<str>) -> Result<i64, IntOverflow> {
 
     iter.next_if(|(_, ch)| matches!(ch, '+' | '-'));
     let Some((end, _)) = iter.take_while(|(_, ch)| ch.is_ascii_digit()).last() else {
-        return Ok(0);
+        return Some(0);
     };
 
-    input[0..=end]
-        .parse::<i64>()
-        .map_err(|err| match err.kind() {
-            std::num::IntErrorKind::PosOverflow => IntOverflow::Positive,
-            std::num::IntErrorKind::NegOverflow => IntOverflow::Negative,
-            // Empty/InvalidDigit are ruled out: the early `return Ok(0)` above
-            // fires when there are no digits, and the slice spans only an
-            // optional sign followed by ASCII digits. Zero is produced only by
-            // `NonZeroI*::from_str`, not by `i64::from_str`. `IntErrorKind` is
-            // `#[non_exhaustive]`, hence the catch-all.
-            _ => unreachable!("unexpected IntErrorKind from i64::from_str: {err:?}"),
-        })
+    input[0..=end].parse::<i64>().map_or_else(
+        |err| match err.kind() {
+            std::num::IntErrorKind::PosOverflow => Some(i64::MAX),
+            std::num::IntErrorKind::NegOverflow => Some(i64::MIN),
+            std::num::IntErrorKind::Empty => unreachable!(),
+            _ => Some(0),
+        },
+        Some,
+    )
 }
 
-#[derive(Debug, Clone, Copy)]
 pub enum StrToF64 {
     Fractional(NonNan),
     Decimal(NonNan),
-    FractionalPrefix(NonNan),
-    DecimalPrefix(NonNan),
-}
-
-impl From<StrToF64> for f64 {
-    fn from(value: StrToF64) -> Self {
-        match value {
-            StrToF64::Fractional(non_nan) => non_nan.into(),
-            StrToF64::Decimal(non_nan) => non_nan.into(),
-            StrToF64::FractionalPrefix(non_nan) => non_nan.into(),
-            StrToF64::DecimalPrefix(non_nan) => non_nan.into(),
-        }
-    }
 }
 
 pub fn str_to_f64(input: impl AsRef<str>) -> Option<StrToF64> {
@@ -600,6 +479,10 @@ pub fn str_to_f64(input: impl AsRef<str>) -> Option<StrToF64> {
 
     let mut had_digits = false;
     let mut is_fractional = false;
+
+    if matches!(input.peek(), Some('e' | 'E')) {
+        return None;
+    }
 
     let mut significant: u64 = 0;
 
@@ -626,12 +509,12 @@ pub fn str_to_f64(input: impl AsRef<str>) -> Option<StrToF64> {
     }
 
     if input.next_if(|ch| matches!(ch, '.')).is_some() {
-        if had_digits {
-            is_fractional = true;
+        if matches!(input.peek(), Some('e' | 'E')) {
+            return None;
         }
 
-        if input.peek().is_some_and(char::is_ascii_digit) {
-            is_fractional = true;
+        if had_digits || input.peek().is_some_and(char::is_ascii_digit) {
+            is_fractional = true
         }
 
         while let Some(digit) = input.peek().and_then(|ch| ch.to_digit(10)) {
@@ -644,31 +527,26 @@ pub fn str_to_f64(input: impl AsRef<str>) -> Option<StrToF64> {
         }
     };
 
-    let mut valid_exponent = true;
-
-    if (had_digits || is_fractional) && input.next_if(|ch| matches!(ch, 'e' | 'E')).is_some() {
+    if input.next_if(|ch| matches!(ch, 'e' | 'E')).is_some() {
         let sign = match input.next_if(|ch| matches!(ch, '-' | '+')) {
             Some('-') => -1,
             _ => 1,
         };
 
         if input.peek().is_some_and(char::is_ascii_digit) {
-            is_fractional = true;
-            let mut e = 0;
-
-            while let Some(ch) = input.next_if(char::is_ascii_digit) {
-                e = (e * 10 + ch.to_digit(10).unwrap() as i32).min(1000);
-            }
-
-            exponent += sign * e;
-        } else {
-            valid_exponent = false;
+            is_fractional = true
         }
-    };
 
-    if !(had_digits || is_fractional) {
-        return None;
-    }
+        let e = input.map_while(|ch| ch.to_digit(10)).fold(0, |acc, digit| {
+            if acc < 1000 {
+                acc * 10 + digit as i32
+            } else {
+                1000
+            }
+        });
+
+        exponent += sign * e;
+    };
 
     while exponent.is_positive() && significant < MAX_EXACT / 10 {
         significant *= 10;
@@ -713,14 +591,6 @@ pub fn str_to_f64(input: impl AsRef<str>) -> Option<StrToF64> {
     let result = NonNan::new(f64::from(result) * sign)
         .unwrap_or_else(|| NonNan::new(sign * f64::INFINITY).unwrap());
 
-    if !valid_exponent || input.count() > 0 {
-        if is_fractional {
-            return Some(StrToF64::FractionalPrefix(result));
-        } else {
-            return Some(StrToF64::DecimalPrefix(result));
-        }
-    }
-
     Some(if is_fractional {
         StrToF64::Fractional(result)
     } else {
@@ -728,26 +598,17 @@ pub fn str_to_f64(input: impl AsRef<str>) -> Option<StrToF64> {
     })
 }
 
-enum FloatParts {
-    Special(String),
-    Normal {
-        negative: bool,
-        digits: Vec<u8>,
-        exp: i32,
-    },
-}
-
-fn decompose_float(v: f64, precision: usize) -> FloatParts {
+pub fn format_float(v: f64) -> String {
     if v.is_nan() {
-        return FloatParts::Special("".to_string());
+        return "".to_string();
     }
 
     if v.is_infinite() {
-        return FloatParts::Special(if v.is_sign_negative() { "-Inf" } else { "Inf" }.to_string());
+        return if v.is_sign_negative() { "-Inf" } else { "Inf" }.to_string();
     }
 
     if v == 0.0 {
-        return FloatParts::Special("0.0".to_string());
+        return "0.0".to_string();
     }
 
     let negative = v < 0.0;
@@ -782,7 +643,12 @@ fn decompose_float(v: f64, precision: usize) -> FloatParts {
         }
     }
 
-    let mut digits = u64::from(d).to_string().into_bytes();
+    let v = u64::from(d);
+
+    let mut digits = v.to_string().into_bytes();
+
+    let precision = 15;
+
     let mut decimal_pos = digits.len() as i32 + exp;
 
     'out: {
@@ -809,83 +675,43 @@ fn decompose_float(v: f64, precision: usize) -> FloatParts {
         digits.pop();
     }
 
-    FloatParts::Normal {
-        negative,
-        digits,
-        exp: decimal_pos - 1,
-    }
-}
+    let exp = decimal_pos - 1;
 
-fn format_float_scientific(v: f64, precision: usize) -> String {
-    match decompose_float(v, precision) {
-        FloatParts::Special(s) => s,
-        FloatParts::Normal {
-            negative,
-            digits,
-            exp,
-        } => {
-            let first = digits.first().cloned().unwrap_or(b'0') as char;
-            let rest = digits
+    if (-4..=14).contains(&exp) {
+        format!(
+            "{}{}.{}{}",
+            if negative { "-" } else { Default::default() },
+            if decimal_pos > 0 {
+                let zeroes = (decimal_pos - digits.len() as i32).max(0) as usize;
+                let digits = digits
+                    .get(0..(decimal_pos.min(digits.len() as i32) as usize))
+                    .unwrap();
+                (unsafe { str::from_utf8_unchecked(digits) }).to_owned() + &"0".repeat(zeroes)
+            } else {
+                "0".to_string()
+            },
+            "0".repeat(decimal_pos.min(0).unsigned_abs() as usize),
+            digits
+                .get((decimal_pos.max(0) as usize)..)
+                .filter(|v| !v.is_empty())
+                .map(|v| unsafe { str::from_utf8_unchecked(v) })
+                .unwrap_or("0")
+        )
+    } else {
+        format!(
+            "{}{}.{}e{}{:0width$}",
+            if negative { "-" } else { "" },
+            digits.first().cloned().unwrap_or(b'0') as char,
+            digits
                 .get(1..)
                 .filter(|v| !v.is_empty())
                 .map(|v| unsafe { str::from_utf8_unchecked(v) })
-                .unwrap_or("0");
-            format!(
-                "{}{}.{}e{}{:0width$}",
-                if negative { "-" } else { "" },
-                first,
-                rest,
-                if exp.is_positive() { "+" } else { "-" },
-                exp.abs(),
-                width = if exp.abs() > 99 { 3 } else { 2 }
-            )
-        }
+                .unwrap_or("0"),
+            if exp.is_positive() { "+" } else { "-" },
+            exp.abs(),
+            width = if exp > 100 { 3 } else { 2 }
+        )
     }
-}
-
-pub fn format_float(v: f64) -> String {
-    match decompose_float(v, 15) {
-        FloatParts::Special(s) => s,
-        FloatParts::Normal {
-            negative,
-            digits,
-            exp,
-        } => {
-            let decimal_pos = exp + 1;
-            if (-4..=14).contains(&exp) {
-                format!(
-                    "{}{}.{}{}",
-                    if negative { "-" } else { Default::default() },
-                    if decimal_pos > 0 {
-                        let zeroes = (decimal_pos - digits.len() as i32).max(0) as usize;
-                        let digits = digits
-                            .get(0..(decimal_pos.min(digits.len() as i32) as usize))
-                            .unwrap();
-                        (unsafe { str::from_utf8_unchecked(digits) }).to_owned()
-                            + &"0".repeat(zeroes)
-                    } else {
-                        "0".to_string()
-                    },
-                    "0".repeat(decimal_pos.min(0).unsigned_abs() as usize),
-                    digits
-                        .get((decimal_pos.max(0) as usize)..)
-                        .filter(|v| !v.is_empty())
-                        .map(|v| unsafe { str::from_utf8_unchecked(v) })
-                        .unwrap_or("0")
-                )
-            } else {
-                format_float_scientific(v, 15)
-            }
-        }
-    }
-}
-
-pub fn format_float_for_quote(v: f64) -> String {
-    let default = format_float(v);
-    if str_to_f64(&default).map(f64::from) == Some(v) {
-        return default;
-    }
-    format_float_scientific(v, 19)
 }
 
 #[test]

@@ -1,18 +1,12 @@
 //! [graph6 format](https://users.cecs.anu.edu.au/~bdm/data/formats.txt) decoder for undirected graphs.
 
-use alloc::{
-    string::{String, ToString},
-    vec,
-    vec::Vec,
-};
-
 use crate::{csr::Csr, graph::IndexType, Graph, Undirected};
 
 #[cfg(feature = "graphmap")]
 use crate::graphmap::GraphMap;
 
 #[cfg(feature = "graphmap")]
-use core::hash::BuildHasher;
+use std::hash::BuildHasher;
 
 #[cfg(feature = "matrix_graph")]
 use crate::matrix_graph::{MatrixGraph, Nullable};
@@ -168,16 +162,15 @@ impl<Ix: IndexType, S: BuildHasher + Default> FromGraph6 for GraphMap<Ix, (), Un
 }
 
 #[cfg(feature = "matrix_graph")]
-impl<Null, Ix, S> FromGraph6 for MatrixGraph<(), (), S, Undirected, Null, Ix>
+impl<Null, Ix> FromGraph6 for MatrixGraph<(), (), Undirected, Null, Ix>
 where
     Null: Nullable<Wrapped = ()>,
     Ix: IndexType,
-    S: BuildHasher + Default,
 {
     fn from_graph6_string(graph6_string: String) -> Self {
         let (order, edges): (usize, Vec<(Ix, Ix)>) = from_graph6_representation(graph6_string);
 
-        let mut graph: MatrixGraph<(), (), S, Undirected, Null, Ix> =
+        let mut graph: MatrixGraph<(), (), Undirected, Null, Ix> =
             MatrixGraph::with_capacity(order);
         for _ in 0..order {
             graph.add_node(());

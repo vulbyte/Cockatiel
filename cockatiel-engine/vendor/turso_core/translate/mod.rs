@@ -17,8 +17,6 @@ pub(crate) mod delete;
 pub(crate) mod display;
 pub(crate) mod emitter;
 pub(crate) mod expr;
-pub(crate) mod expression_index;
-pub(crate) mod fkeys;
 pub(crate) mod group_by;
 pub(crate) mod index;
 pub(crate) mod insert;
@@ -34,46 +32,39 @@ pub(crate) mod result_row;
 pub(crate) mod rollback;
 pub(crate) mod schema;
 pub(crate) mod select;
-pub(crate) mod sequence;
-pub(crate) mod stmt_journal;
 pub(crate) mod subquery;
 pub(crate) mod transaction;
-pub(crate) mod trigger;
-pub(crate) mod trigger_exec;
 pub(crate) mod update;
 pub(crate) mod upsert;
-pub(crate) mod vacuum;
 mod values;
 pub(crate) mod view;
-mod window;
 
 use crate::schema::Schema;
 use crate::storage::pager::Pager;
-use crate::sync::Arc;
 use crate::translate::delete::translate_delete;
-use crate::translate::emitter::Resolver;
 use crate::vdbe::builder::{ProgramBuilder, ProgramBuilderOpts, QueryMode};
 use crate::vdbe::Program;
 use crate::{bail_parse_error, Connection, Result, SymbolTable};
 use alter::translate_alter_table;
 use analyze::translate_analyze;
-use index::{translate_create_index, translate_drop_index, translate_optimize, translate_reindex};
+use index::{translate_create_index, translate_drop_index};
 use insert::translate_insert;
-use rollback::{translate_release, translate_rollback, translate_savepoint};
+use rollback::translate_rollback;
 use schema::{translate_create_table, translate_create_virtual_table, translate_drop_table};
 use select::translate_select;
+use std::rc::Rc;
+use std::sync::Arc;
 use tracing::{instrument, Level};
 use transaction::{translate_tx_begin, translate_tx_commit};
-use turso_parser::ast;
+use turso_parser::ast::{self, Indexed};
 use update::translate_update;
 
 #[instrument(skip_all, level = Level::DEBUG)]
 #[allow(clippy::too_many_arguments)]
-#[turso_macros::trace_stack]
 pub fn translate(
     schema: &Schema,
     stmt: ast::Stmt,
-    pager: Arc<Pager>,
+    pager: Rc<Pager>,
     connection: Arc<Connection>,
     syms: &SymbolTable,
     query_mode: QueryMode,
@@ -88,91 +79,66 @@ pub fn translate(
             | ast::Stmt::Update { .. }
     );
 
-    let capture_data_changes_info = if connection.is_mvcc_bootstrap_connection() {
-        None
-    } else {
-        connection.get_capture_data_changes_info().clone()
-    };
-    // Boxed so the ~800 B builder sits on the heap instead of the prepare frame.
-    let mut program = Box::new(ProgramBuilder::new(
+    let mut program = ProgramBuilder::new(
         query_mode,
-        capture_data_changes_info,
+        connection.get_capture_data_changes().clone(),
         // These options will be extended whithin each translate program
-        ProgramBuilderOpts::new(1, 32, 2),
-    ));
-    program.set_mvcc_enabled(connection.mvcc_enabled());
-
-    program.prologue();
-    let mut resolver = Resolver::new(
-        schema,
-        connection.database_schemas(),
-        &connection.temp.database,
-        connection.attached_databases(),
-        syms,
-        connection.experimental_custom_types_enabled(),
-        connection.get_dqs_dml().into(),
+        ProgramBuilderOpts {
+            num_cursors: 1,
+            approx_num_insns: 32,
+            approx_num_labels: 2,
+        },
     );
 
-    match stmt {
+    program.prologue();
+
+    program = match stmt {
         // There can be no nesting with pragma, so lift it up here
-        ast::Stmt::Pragma { name, body } => {
-            pragma::translate_pragma(
-                &resolver,
-                &name,
-                body,
-                pager,
-                connection.clone(),
-                &mut program,
-            )?;
-        }
-        stmt => translate_inner(stmt, &mut resolver, &mut program, &connection, input)?,
+        ast::Stmt::Pragma { name, body } => pragma::translate_pragma(
+            schema,
+            syms,
+            &name,
+            body,
+            pager,
+            connection.clone(),
+            program,
+        )?,
+        stmt => translate_inner(schema, stmt, syms, program, &connection, input)?,
     };
 
     program.epilogue(schema);
 
-    program.build(connection, change_cnt_on, input)
+    Ok(program.build(connection, change_cnt_on, input))
 }
 
 // TODO: for now leaving the return value as a Program. But ideally to support nested parsing of arbitraty
 // statements, we would have to return a program builder instead
 /// Translate SQL statement into bytecode program.
-#[turso_macros::trace_stack(detail = stmt_kind(&stmt))]
 pub fn translate_inner(
+    schema: &Schema,
     stmt: ast::Stmt,
-    resolver: &mut Resolver,
-    program: &mut ProgramBuilder,
+    syms: &SymbolTable,
+    program: ProgramBuilder,
     connection: &Arc<Connection>,
     input: &str,
-) -> Result<()> {
+) -> Result<ProgramBuilder> {
     let is_write = matches!(
         stmt,
         ast::Stmt::AlterTable { .. }
-            | ast::Stmt::Analyze { .. }
             | ast::Stmt::CreateIndex { .. }
             | ast::Stmt::CreateTable { .. }
             | ast::Stmt::CreateTrigger { .. }
             | ast::Stmt::CreateView { .. }
             | ast::Stmt::CreateMaterializedView { .. }
             | ast::Stmt::CreateVirtualTable(..)
-            | ast::Stmt::CreateType { .. }
-            | ast::Stmt::CreateDomain { .. }
             | ast::Stmt::Delete { .. }
             | ast::Stmt::DropIndex { .. }
             | ast::Stmt::DropTable { .. }
-            | ast::Stmt::DropType { .. }
-            | ast::Stmt::DropDomain { .. }
             | ast::Stmt::DropView { .. }
-            | ast::Stmt::Optimize { .. }
+            | ast::Stmt::Reindex { .. }
             | ast::Stmt::Update { .. }
             | ast::Stmt::Insert { .. }
-            | ast::Stmt::CreateSequence { .. }
-            | ast::Stmt::DropSequence { .. }
     );
-    let is_vacuum = matches!(stmt, ast::Stmt::Vacuum { .. });
-
-    if is_vacuum && connection.get_query_only() {
-        bail_parse_error!("Cannot execute VACUUM in query_only mode")
-    }
 
     if is_write && connection.get_query_only() {
         bail_parse_error!("Cannot execute write statement in query_only mode")
@@ -180,20 +146,36 @@ pub fn translate_inner(
 
     let is_select = matches!(stmt, ast::Stmt::Select { .. });
 
-    match stmt {
+    let mut program = match stmt {
         ast::Stmt::AlterTable(alter) => {
-            translate_alter_table(alter, resolver, program, connection, input)?;
+            translate_alter_table(alter, syms, schema, program, connection, input)?
         }
-        ast::Stmt::Analyze { name } => translate_analyze(name, resolver, program)?,
+        ast::Stmt::Analyze { name } => translate_analyze(name, schema, syms, program)?,
         ast::Stmt::Attach { expr, db_name, key } => {
-            attach::translate_attach(&expr, resolver, &db_name, &key, program, connection.clone())?;
+            attach::translate_attach(&expr, &db_name, &key, schema, syms, program)?
         }
-        ast::Stmt::Begin { typ, name } => translate_tx_begin(typ, name, resolver, program)?,
-        ast::Stmt::Commit { name } => {
-            translate_tx_commit(name, resolver.schema(), resolver, program)?
-        }
-        ast::Stmt::CreateIndex { .. } => {
-            translate_create_index(program, connection, resolver, stmt)?;
+        ast::Stmt::Begin { typ, name } => translate_tx_begin(typ, name, schema, program)?,
+        ast::Stmt::Commit { name } => translate_tx_commit(name, program)?,
+        ast::Stmt::CreateIndex {
+            unique,
+            if_not_exists,
+            idx_name,
+            tbl_name,
+            columns,
+            where_clause,
+        } => {
+            if where_clause.is_some() {
+                bail_parse_error!("Partial indexes are not supported");
+            }
+            translate_create_index(
+                (unique, if_not_exists),
+                idx_name.name.as_str(),
+                tbl_name.as_str(),
+                &columns,
+                schema,
+                syms,
+                program,
+            )?
         }
         ast::Stmt::CreateTable {
             temporary,
@@ -202,78 +184,41 @@ pub fn translate_inner(
             body,
         } => translate_create_table(
             tbl_name,
-            resolver,
             temporary,
-            if_not_exists,
             body,
-            program,
-            connection,
-        )?,
-        ast::Stmt::CreateTrigger {
-            temporary,
             if_not_exists,
-            trigger_name,
-            time,
-            event,
-            tbl_name,
-            for_each_row,
-            when_clause,
-            commands,
-        } => {
-            // Reconstruct SQL for storage
-            let sql = trigger::create_trigger_to_sql(
-                temporary,
-                if_not_exists,
-                &trigger_name,
-                time,
-                &event,
-                &tbl_name,
-                for_each_row,
-                when_clause.as_deref(),
-                &commands,
-            );
-            trigger::translate_create_trigger(
-                trigger_name,
-                resolver,
-                temporary,
-                if_not_exists,
-                time,
-                tbl_name,
-                program,
-                sql,
-                &commands,
-                when_clause.as_deref(),
-            )?
-        }
+            schema,
+            syms,
+            connection,
+            program,
+        )?,
+        ast::Stmt::CreateTrigger { .. } => bail_parse_error!("CREATE TRIGGER not supported yet"),
         ast::Stmt::CreateView {
             view_name,
             select,
             columns,
-            if_not_exists,
             ..
         } => view::translate_create_view(
-            &view_name,
-            resolver,
+            schema,
+            view_name.name.as_str(),
             &select,
             &columns,
-            if_not_exists,
+            connection.clone(),
+            syms,
             program,
         )?,
         ast::Stmt::CreateMaterializedView {
-            view_name,
-            select,
-            if_not_exists,
-            ..
+            view_name, select, ..
         } => view::translate_create_materialized_view(
-            &view_name,
-            resolver,
+            schema,
+            view_name.name.as_str(),
             &select,
-            if_not_exists,
             connection.clone(),
+            syms,
             program,
         )?,
         ast::Stmt::CreateVirtualTable(vtab) => {
-            translate_create_virtual_table(vtab, resolver, program, connection)?
+            translate_create_virtual_table(vtab, schema, syms, program)?
         }
         ast::Stmt::Delete {
             tbl_name,
@@ -284,128 +229,65 @@ pub fn translate_inner(
             order_by,
             with,
         } => {
+            if with.is_some() {
+                bail_parse_error!("WITH clause is not supported in DELETE");
+            }
+            if indexed.is_some_and(|i| matches!(i, Indexed::IndexedBy(_))) {
+                bail_parse_error!("INDEXED BY clause is not supported in DELETE");
+            }
             if !order_by.is_empty() {
                 bail_parse_error!("ORDER BY clause is not supported in DELETE");
             }
-            if where_clause.is_none() && connection.get_dml_require_where() {
-                bail_parse_error!(
-                    "DELETE without a WHERE clause is not allowed when require_where (or i_am_a_dummy) is enabled"
-                );
-            }
             translate_delete(
+                schema,
                 &tbl_name,
-                resolver,
                 where_clause,
                 limit,
                 returning,
-                indexed,
-                with,
+                syms,
                 program,
                 connection,
             )?
         }
-        ast::Stmt::Detach { name } => {
-            attach::translate_detach(&name, resolver, program, connection.clone())?
-        }
+        ast::Stmt::Detach { name } => attach::translate_detach(&name, schema, syms, program)?,
         ast::Stmt::DropIndex {
             if_exists,
             idx_name,
-        } => translate_drop_index(&idx_name, resolver, if_exists, program)?,
+        } => translate_drop_index(idx_name.name.as_str(), if_exists, schema, syms, program)?,
         ast::Stmt::DropTable {
             if_exists,
             tbl_name,
-        } => translate_drop_table(tbl_name, resolver, if_exists, program, connection)?,
-        ast::Stmt::DropTrigger {
-            if_exists,
-            trigger_name,
-        } => trigger::translate_drop_trigger(resolver, &trigger_name, if_exists, program)?,
+        } => translate_drop_table(tbl_name, if_exists, schema, syms, program)?,
+        ast::Stmt::DropTrigger { .. } => bail_parse_error!("DROP TRIGGER not supported yet"),
         ast::Stmt::DropView {
             if_exists,
             view_name,
-        } => view::translate_drop_view(resolver, &view_name, if_exists, program)?,
-        ast::Stmt::CreateType {
-            if_not_exists,
-            type_name,
-            body,
-        } => {
-            if !connection.experimental_custom_types_enabled() {
-                bail_parse_error!("Custom types require --experimental-custom-types flag");
-            }
-            schema::translate_create_type(&type_name, &body, if_not_exists, resolver, program)?
-        }
-        ast::Stmt::CreateDomain {
-            if_not_exists,
-            domain_name,
-            base_type,
-            default,
-            not_null,
-            constraints,
-        } => {
-            if !connection.experimental_custom_types_enabled() {
-                bail_parse_error!("Custom types require --experimental-custom-types flag");
-            }
-            schema::translate_create_domain(
-                &domain_name,
-                &base_type,
-                not_null,
-                &constraints,
-                default,
-                if_not_exists,
-                resolver,
-                program,
-            )?
-        }
-        ast::Stmt::DropType {
-            if_exists,
-            type_name,
-        } => {
-            if !connection.experimental_custom_types_enabled() {
-                bail_parse_error!("Custom types require --experimental-custom-types flag");
-            }
-            schema::translate_drop_type(&type_name, if_exists, false, resolver, program)?
-        }
-        ast::Stmt::DropDomain {
-            if_exists,
-            domain_name,
-        } => {
-            if !connection.experimental_custom_types_enabled() {
-                bail_parse_error!("Custom types require --experimental-custom-types flag");
-            }
-            schema::translate_drop_type(&domain_name, if_exists, true, resolver, program)?
-        }
+        } => view::translate_drop_view(schema, view_name.name.as_str(), if_exists, program)?,
         ast::Stmt::Pragma { .. } => {
             bail_parse_error!("PRAGMA statement cannot be evaluated in a nested context")
         }
-        ast::Stmt::Reindex { name } => translate_reindex(name, resolver, program, connection)?,
-        ast::Stmt::Optimize { idx_name } => {
-            translate_optimize(idx_name, resolver, program, connection)?
-        }
-        ast::Stmt::Release { name } => translate_release(program, name)?,
+        ast::Stmt::Reindex { .. } => bail_parse_error!("REINDEX not supported yet"),
+        ast::Stmt::Release { .. } => bail_parse_error!("RELEASE not supported yet"),
         ast::Stmt::Rollback {
             tx_name,
             savepoint_name,
-        } => translate_rollback(program, tx_name, savepoint_name)?,
-        ast::Stmt::Savepoint { name } => translate_savepoint(program, name)?,
+        } => translate_rollback(schema, syms, program, tx_name, savepoint_name)?,
+        ast::Stmt::Savepoint { .. } => bail_parse_error!("SAVEPOINT not supported yet"),
         ast::Stmt::Select(select) => {
             translate_select(
+                schema,
                 select,
-                resolver,
+                syms,
                 program,
                 plan::QueryDestination::ResultRows,
                 connection,
-            )?;
+            )?
+            .program
         }
-        ast::Stmt::Update(update) => {
-            if update.where_clause.is_none() && connection.get_dml_require_where() {
-                bail_parse_error!(
-                    "UPDATE without a WHERE clause is not allowed when require_where (or i_am_a_dummy) is enabled"
-                );
-            }
-            translate_update(update, resolver, program, connection)?
+        ast::Stmt::Update(mut update) => {
+            translate_update(schema, &mut update, syms, program, connection)?
         }
-        ast::Stmt::Vacuum { name, into } => {
-            vacuum::translate_vacuum(program, name.as_ref(), into.as_deref(), connection.clone())?
-        }
+        ast::Stmt::Vacuum { .. } => bail_parse_error!("VACUUM not supported yet"),
         ast::Stmt::Insert {
             with,
             or_conflict,
@@ -414,242 +296,28 @@ pub fn translate_inner(
             body,
             returning,
         } => translate_insert(
-            resolver,
+            schema,
+            with,
             or_conflict,
             tbl_name,
             columns,
             body,
             returning,
-            with,
+            syms,
             program,
             connection,
         )?,
-        ast::Stmt::CreateSequence {
-            if_not_exists,
-            seq_name,
-            start,
-            increment,
-            min_value,
-            max_value,
-            cycle,
-        } => {
-            sequence::translate_create_sequence(
-                &seq_name,
-                if_not_exists,
-                &start,
-                &increment,
-                &min_value,
-                &max_value,
-                cycle,
-                resolver,
-                program,
-            )?;
-        }
-        ast::Stmt::DropSequence {
-            if_exists,
-            seq_name,
-        } => {
-            sequence::translate_drop_sequence(&seq_name, if_exists, resolver, program)?;
-        }
     };
 
     // Indicate write operations so that in the epilogue we can emit the correct type of transaction
     if is_write {
-        program.begin_write_operation()?;
+        program.begin_write_operation();
     }
 
     // Indicate read operations so that in the epilogue we can emit the correct type of transaction
     if is_select && !program.table_references.is_empty() {
-        program.begin_read_operation()?;
+        program.begin_read_operation();
     }
 
-    Ok(())
-}
-
-fn stmt_kind(stmt: &ast::Stmt) -> &'static str {
-    match stmt {
-        ast::Stmt::AlterTable(_) => "alter_table",
-        ast::Stmt::Analyze { .. } => "analyze",
-        ast::Stmt::Attach { .. } => "attach",
-        ast::Stmt::Begin { .. } => "begin",
-        ast::Stmt::Commit { .. } => "commit",
-        ast::Stmt::CreateIndex { .. } => "create_index",
-        ast::Stmt::CreateTable { .. } => "create_table",
-        ast::Stmt::CreateTrigger { .. } => "create_trigger",
-        ast::Stmt::CreateView { .. } => "create_view",
-        ast::Stmt::CreateMaterializedView { .. } => "create_materialized_view",
-        ast::Stmt::CreateVirtualTable(_) => "create_virtual_table",
-        ast::Stmt::CreateType { .. } => "create_type",
-        ast::Stmt::CreateDomain { .. } => "create_domain",
-        ast::Stmt::Delete { .. } => "delete",
-        ast::Stmt::Detach { .. } => "detach",
-        ast::Stmt::DropIndex { .. } => "drop_index",
-        ast::Stmt::DropTable { .. } => "drop_table",
-        ast::Stmt::DropType { .. } => "drop_type",
-        ast::Stmt::DropDomain { .. } => "drop_domain",
-        ast::Stmt::DropTrigger { .. } => "drop_trigger",
-        ast::Stmt::DropView { .. } => "drop_view",
-        ast::Stmt::Insert { .. } => "insert",
-        ast::Stmt::Pragma { .. } => "pragma",
-        ast::Stmt::Reindex { .. } => "reindex",
-        ast::Stmt::Release { .. } => "release",
-        ast::Stmt::Rollback { .. } => "rollback",
-        ast::Stmt::Savepoint { .. } => "savepoint",
-        ast::Stmt::Select { .. } => "select",
-        ast::Stmt::Update { .. } => "update",
-        ast::Stmt::Vacuum { .. } => "vacuum",
-        ast::Stmt::Optimize { .. } => "optimize",
-        ast::Stmt::CreateSequence { .. } => "create_sequence",
-        ast::Stmt::DropSequence { .. } => "drop_sequence",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::alloc::TryClone;
-    use crate::io::MemoryIO;
-    use crate::schema::{BTreeTable, Table, SQLITE_SEQUENCE_TABLE_NAME};
-    use crate::Database;
-
-    /// Verify that REGEXP produces the correct error when no regexp function is registered.
-    #[test]
-    fn test_regexp_no_function_registered() {
-        let io = Arc::new(MemoryIO::new());
-        let db = Database::open_file(io, ":memory:").unwrap();
-        let conn = db.connect().unwrap();
-        let schema = db.schema.lock().clone();
-        let pager = conn.pager.load().clone();
-
-        // Use an empty SymbolTable so regexp() is not available.
-        let empty_syms = SymbolTable::new();
-        let mut parser = turso_parser::parser::Parser::new(b"SELECT 'x' REGEXP 'y'");
-        let cmd = parser.next().unwrap().unwrap();
-        let stmt = match cmd {
-            ast::Cmd::Stmt(s) => s,
-            _ => panic!("expected statement"),
-        };
-
-        let result = translate(
-            &schema,
-            stmt,
-            pager,
-            conn,
-            &empty_syms,
-            QueryMode::Normal,
-            "",
-        );
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("no such function: regexp"),
-            "expected 'no such function: regexp', got: {err}"
-        );
-    }
-
-    #[test]
-    fn test_insert_autoincrement_with_malformed_sqlite_sequence_is_corrupt() {
-        let io = Arc::new(MemoryIO::new());
-        let db = Database::open_file(io, ":memory:").unwrap();
-        let conn = db.connect().unwrap();
-        conn.execute("CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)")
-            .unwrap();
-
-        let mut schema = db.schema.lock().as_ref().try_clone().unwrap();
-        let seq_root_page = schema
-            .get_btree_table(SQLITE_SEQUENCE_TABLE_NAME)
-            .expect("sqlite_sequence should exist after creating AUTOINCREMENT table")
-            .root_page;
-        let malformed_seq =
-            BTreeTable::from_sql("CREATE TABLE sqlite_sequence(name)", seq_root_page)
-                .expect("malformed sqlite_sequence SQL should parse");
-        schema.tables.insert(
-            SQLITE_SEQUENCE_TABLE_NAME.to_string(),
-            Arc::new(Table::BTree(Arc::new(malformed_seq))),
-        );
-
-        let pager = conn.pager.load().clone();
-        let syms = SymbolTable::new();
-
-        let mut parser = turso_parser::parser::Parser::new(b"INSERT INTO t(v) VALUES('x')");
-        let cmd = parser.next().unwrap().unwrap();
-        let stmt = match cmd {
-            ast::Cmd::Stmt(s) => s,
-            _ => panic!("expected statement"),
-        };
-
-        let err = translate(&schema, stmt, pager, conn, &syms, QueryMode::Normal, "")
-            .expect_err("translation should fail with malformed sqlite_sequence");
-        match err {
-            crate::LimboError::Corrupt(msg) => {
-                assert!(
-                    msg.contains("sqlite_sequence"),
-                    "expected sqlite_sequence corruption error, got: {msg}"
-                );
-            }
-            other => panic!("expected LimboError::Corrupt, got: {other}"),
-        }
-    }
-
-    #[test]
-    fn test_insert_autoincrement_with_missing_sqlite_sequence_is_corrupt() {
-        let io = Arc::new(MemoryIO::new());
-        let db = Database::open_file(io, ":memory:").unwrap();
-        let conn = db.connect().unwrap();
-        conn.execute("CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)")
-            .unwrap();
-
-        let mut schema = db.schema.lock().as_ref().try_clone().unwrap();
-        schema.tables.remove(SQLITE_SEQUENCE_TABLE_NAME);
-
-        let pager = conn.pager.load().clone();
-        let syms = SymbolTable::new();
-
-        let mut parser = turso_parser::parser::Parser::new(b"INSERT INTO t(v) VALUES('x')");
-        let cmd = parser.next().unwrap().unwrap();
-        let stmt = match cmd {
-            ast::Cmd::Stmt(s) => s,
-            _ => panic!("expected statement"),
-        };
-
-        let err = translate(&schema, stmt, pager, conn, &syms, QueryMode::Normal, "")
-            .expect_err("translation should fail with missing sqlite_sequence");
-        match err {
-            crate::LimboError::Corrupt(msg) => {
-                assert!(
-                    msg.contains("missing sqlite_sequence"),
-                    "expected missing sqlite_sequence error, got: {msg}"
-                );
-            }
-            other => panic!("expected LimboError::Corrupt, got: {other}"),
-        }
-    }
-
-    #[test]
-    fn test_trigger_compile_error_does_not_poison_future_insert_compilation() {
-        let io = Arc::new(MemoryIO::new());
-        let db = Database::open_file(io, ":memory:").unwrap();
-        let conn = db.connect().unwrap();
-
-        conn.execute("CREATE TABLE ref(x);").unwrap();
-        conn.execute("CREATE TABLE t(a INTEGER);").unwrap();
-        conn.execute("CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT * FROM ref; END;")
-            .unwrap();
-        conn.execute("DROP TABLE ref;").unwrap();
-
-        let err = conn
-            .execute("INSERT INTO t VALUES (1);")
-            .expect_err("single-row insert should fail while trigger references dropped table");
-        assert!(
-            err.to_string().contains("no such table: ref"),
-            "expected missing-table error, got: {err}"
-        );
-
-        let err = conn.execute("INSERT INTO t VALUES (2), (3);").expect_err(
-            "multi-row insert should still fail instead of skipping the poisoned trigger",
-        );
-        assert!(
-            err.to_string().contains("no such table: ref"),
-            "expected missing-table error, got: {err}"
-        );
-    }
+    Ok(program)
 }

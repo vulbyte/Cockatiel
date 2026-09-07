@@ -12,8 +12,8 @@
 [package]
 edition = "2021"
 name = "turso_parser"
-version = "0.7.2"
-authors = ["the Turso authors"]
+version = "0.1.5"
+authors = ["the Limbo authors"]
 build = false
 autolib = false
 autobins = false
@@ -26,13 +26,11 @@ license = "MIT"
 repository = "https://github.com/tursodatabase/turso"
 
 [features]
-codspeed = []
 default = []
 serde = [
     "dep:serde",
     "bitflags/serde",
 ]
-simulator = []
 
 [lib]
 name = "turso_parser"
@@ -44,20 +42,14 @@ path = "benches/parser_benchmark.rs"
 harness = false
 
 [dependencies.bitflags]
-version = "2.9.4"
-
-[dependencies.memchr]
-version = "2.7.6"
+version = "2.0"
 
 [dependencies.miette]
-version = "7.6.0"
+version = "7.4.0"
 
 [dependencies.serde]
 version = "1.0"
-features = [
-    "derive",
-    "rc",
-]
+features = ["derive"]
 optional = true
 
 [dependencies.strum]
@@ -68,49 +60,21 @@ features = ["derive"]
 version = "0.26"
 
 [dependencies.thiserror]
-version = "2.0.16"
+version = "1.0.61"
 
 [dependencies.turso_macros]
-version = "0.7.2"
-
-[dev-dependencies.codspeed-criterion-compat]
-version = "4.2.1"
+version = "0.1.5"
 
 [dev-dependencies.criterion]
-version = "0.5.0"
+version = "0.5"
 features = ["html_reports"]
 
 [dev-dependencies.fallible-iterator]
-version = "0.3.0"
+version = "0.3"
 
 [target.'cfg(not(target_family = "windows"))'.dev-dependencies.pprof]
 version = "0.14.0"
 features = [
     "criterion",
     "flamegraph",
-]
-
-[lints.clippy]
-assigning_clones = "deny"
-await_holding_lock = "deny"
-clear_with_drain = "deny"
-collection_is_never_read = "deny"
-large_stack_frames = "deny"
-large_types_passed_by_value = "deny"
-naive_bytecount = "deny"
-or_fun_call = "deny"
-redundant_clone = "deny"
-stable_sort_primitive = "deny"
-
-[lints.rust]
-unstable_name_collisions = "allow"
-
-[lints.rust.unexpected_cfgs]
-level = "warn"
-priority = 0
-check-cfg = [
-    "cfg(loom)",
-    "cfg(shuttle)",
-    "cfg(antithesis)",
-    "cfg(nightly)",
 ]

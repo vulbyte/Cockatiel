@@ -1,17 +1,16 @@
-use crate::translate::emitter::TranslateCtx;
+use crate::translate::emitter::{Resolver, TranslateCtx};
 use crate::translate::expr::{translate_expr_no_constant_opt, NoConstantOptReason};
 use crate::translate::plan::{QueryDestination, SelectPlan};
 use crate::translate::result_row::emit_offset;
-use crate::turso_assert_eq;
 use crate::vdbe::builder::ProgramBuilder;
-use crate::vdbe::insn::{to_u16, IdxInsertFlags, InsertFlags, Insn};
+use crate::vdbe::insn::{IdxInsertFlags, Insn};
 use crate::vdbe::BranchOffset;
 use crate::Result;
 
 pub fn emit_values(
     program: &mut ProgramBuilder,
     plan: &SelectPlan,
-    t_ctx: &mut TranslateCtx,
+    t_ctx: &TranslateCtx,
 ) -> Result<usize> {
     if plan.values.len() == 1 {
         let start_reg = emit_values_when_single_row(program, plan, t_ctx)?;
@@ -21,24 +20,10 @@ pub fn emit_values(
     let reg_result_cols_start = match plan.query_destination {
         QueryDestination::ResultRows => emit_toplevel_values(program, plan, t_ctx)?,
         QueryDestination::CoroutineYield { yield_reg, .. } => {
-            emit_values_in_subquery(program, plan, t_ctx, yield_reg)?
+            emit_values_in_subquery(program, plan, &t_ctx.resolver, yield_reg)?
         }
         QueryDestination::EphemeralIndex { .. } => emit_toplevel_values(program, plan, t_ctx)?,
-        QueryDestination::EphemeralTable { .. } => emit_toplevel_values(program, plan, t_ctx)?,
-        QueryDestination::ExistsSubqueryResult { result_reg } => {
-            program.emit_insn(Insn::Integer {
-                value: 1,
-                dest: result_reg,
-            });
-            result_reg
-        }
-        QueryDestination::RowValueSubqueryResult { .. } => {
-            emit_toplevel_values(program, plan, t_ctx)?
-        }
-        QueryDestination::RowSet { .. } => {
-            unreachable!("RowSet query destination should not be used in values emission")
-        }
-        QueryDestination::Unset => unreachable!("Unset query destination should not be reached"),
+        QueryDestination::EphemeralTable { .. } => unreachable!(),
     };
     Ok(reg_result_cols_start)
 }
@@ -46,32 +31,24 @@ pub fn emit_values(
 fn emit_values_when_single_row(
     program: &mut ProgramBuilder,
     plan: &SelectPlan,
-    t_ctx: &mut TranslateCtx,
+    t_ctx: &TranslateCtx,
 ) -> Result<usize> {
     let end_label = program.allocate_label();
-    emit_offset(program, end_label, t_ctx.reg_offset);
+    emit_offset(program, plan, end_label, t_ctx.reg_offset, &t_ctx.resolver);
     let first_row = &plan.values[0];
     let row_len = first_row.len();
-    let start_reg = if let Some(reg) = t_ctx.reg_result_cols_start {
-        program.reg_result_cols_start = Some(reg);
-        reg
-    } else {
-        let reg = program.alloc_registers(row_len);
-        t_ctx.reg_result_cols_start = Some(reg);
-        program.reg_result_cols_start = Some(reg);
-        reg
-    };
+    let start_reg = program.alloc_registers(row_len);
     for (i, v) in first_row.iter().enumerate() {
         translate_expr_no_constant_opt(
             program,
-            Some(&plan.table_references),
+            None,
             v,
             start_reg + i,
             &t_ctx.resolver,
             NoConstantOptReason::RegisterReuse,
         )?;
     }
-    emit_values_to_destination(program, plan, t_ctx, start_reg, row_len, end_label)?;
+    emit_values_to_destination(program, plan, t_ctx, start_reg, row_len, end_label);
     program.preassign_label_to_next_insn(end_label);
     Ok(start_reg)
 }
@@ -79,7 +56,7 @@ fn emit_values_when_single_row(
 fn emit_toplevel_values(
     program: &mut ProgramBuilder,
     plan: &SelectPlan,
-    t_ctx: &mut TranslateCtx,
+    t_ctx: &TranslateCtx,
 ) -> Result<usize> {
     let yield_reg = program.alloc_register();
     let definition_label = program.allocate_label();
@@ -91,7 +68,7 @@ fn emit_toplevel_values(
     });
     program.preassign_label_to_next_insn(start_offset_label);
 
-    let start_reg = emit_values_in_subquery(program, plan, t_ctx, yield_reg)?;
+    let start_reg = emit_values_in_subquery(program, plan, &t_ctx.resolver, yield_reg)?;
 
     program.emit_insn(Insn::EndCoroutine { yield_reg });
     program.preassign_label_to_next_insn(definition_label);
@@ -107,12 +84,10 @@ fn emit_toplevel_values(
     program.emit_insn(Insn::Yield {
         yield_reg,
         end_offset: end_label,
-        subtype_clear_start_reg: 0,
-        subtype_clear_count: 0,
     });
 
     let goto_label = program.allocate_label();
-    emit_offset(program, goto_label, t_ctx.reg_offset);
+    emit_offset(program, plan, goto_label, t_ctx.reg_offset, &t_ctx.resolver);
     let row_len = plan.values[0].len();
     let copy_start_reg = program.alloc_registers(row_len);
     for i in 0..row_len {
@@ -123,7 +98,7 @@ fn emit_toplevel_values(
         });
     }
 
-    emit_values_to_destination(program, plan, t_ctx, copy_start_reg, row_len, end_label)?;
+    emit_values_to_destination(program, plan, t_ctx, copy_start_reg, row_len, end_label);
 
     program.preassign_label_to_next_insn(goto_label);
     program.emit_insn(Insn::Goto {
@@ -137,19 +112,11 @@ fn emit_toplevel_values(
 fn emit_values_in_subquery(
     program: &mut ProgramBuilder,
     plan: &SelectPlan,
-    t_ctx: &mut TranslateCtx,
+    resolver: &Resolver,
     yield_reg: usize,
 ) -> Result<usize> {
     let row_len = plan.values[0].len();
-    let start_reg = if let Some(reg) = t_ctx.reg_result_cols_start {
-        program.reg_result_cols_start = Some(reg);
-        reg
-    } else {
-        let reg = program.alloc_registers(row_len);
-        t_ctx.reg_result_cols_start = Some(reg);
-        program.reg_result_cols_start = Some(reg);
-        reg
-    };
+    let start_reg = program.alloc_registers(row_len);
     for value in &plan.values {
         for (i, v) in value.iter().enumerate() {
             translate_expr_no_constant_opt(
@@ -157,15 +124,13 @@ fn emit_values_in_subquery(
                 None,
                 v,
                 start_reg + i,
-                &t_ctx.resolver,
+                resolver,
                 NoConstantOptReason::RegisterReuse,
             )?;
         }
         program.emit_insn(Insn::Yield {
             yield_reg,
             end_offset: BranchOffset::Offset(0),
-            subtype_clear_start_reg: start_reg,
-            subtype_clear_count: row_len,
         });
     }
 
@@ -179,7 +144,7 @@ fn emit_values_to_destination(
     start_reg: usize,
     row_len: usize,
     end_label: BranchOffset,
-) -> Result<()> {
+) {
     match &plan.query_destination {
         QueryDestination::ResultRows => {
             program.emit_insn(Insn::ResultRow {
@@ -197,43 +162,13 @@ fn emit_values_to_destination(
             program.emit_insn(Insn::Yield {
                 yield_reg: *yield_reg,
                 end_offset: BranchOffset::Offset(0),
-                subtype_clear_start_reg: start_reg,
-                subtype_clear_count: row_len,
             });
         }
         QueryDestination::EphemeralIndex { .. } => {
-            emit_values_to_index(program, plan, start_reg, row_len)?;
+            emit_values_to_index(program, plan, start_reg, row_len);
         }
-        QueryDestination::EphemeralTable { .. } => {
-            emit_values_to_table(program, plan, start_reg, row_len);
-        }
-        QueryDestination::ExistsSubqueryResult { result_reg } => {
-            program.emit_insn(Insn::Integer {
-                value: 1,
-                dest: *result_reg,
-            });
-        }
-        QueryDestination::RowValueSubqueryResult {
-            result_reg_start,
-            num_regs,
-        } => {
-            turso_assert_eq!(
-                row_len,
-                *num_regs,
-                "row value subqueries must have matching result columns and registers"
-            );
-            program.emit_insn(Insn::Copy {
-                src_reg: start_reg,
-                dst_reg: *result_reg_start,
-                extra_amount: num_regs - 1,
-            });
-        }
-        QueryDestination::RowSet { .. } => {
-            unreachable!("RowSet query destination should not be used in values emission")
-        }
-        QueryDestination::Unset => unreachable!("Unset query destination should not be reached"),
+        QueryDestination::EphemeralTable { .. } => unreachable!(),
     }
-    Ok(())
 }
 
 fn emit_values_to_index(
@@ -241,25 +176,15 @@ fn emit_values_to_index(
     plan: &SelectPlan,
     start_reg: usize,
     row_len: usize,
-) -> Result<()> {
-    let (cursor_id, index, affinity_str, is_delete) = match &plan.query_destination {
+) {
+    let (cursor_id, index, is_delete) = match &plan.query_destination {
         QueryDestination::EphemeralIndex {
             cursor_id,
             index,
-            affinity_str,
             is_delete,
-        } => (cursor_id, index, affinity_str, is_delete),
+        } => (cursor_id, index, is_delete),
         _ => unreachable!(),
     };
-
-    if row_len != index.columns.len() {
-        crate::bail_corrupt_error!(
-            "VALUES column count {} does not match index column count {}",
-            row_len,
-            index.columns.len()
-        );
-    }
-
     if *is_delete {
         program.emit_insn(Insn::IdxDelete {
             start_reg,
@@ -269,57 +194,12 @@ fn emit_values_to_index(
         });
     } else {
         let record_reg = program.alloc_register();
-
-        // Seek indexes may reorder key columns relative to the subquery result
-        // column layout, so materialized VALUES rows must be reordered to match
-        // the index key definition before insertion.
-        let needs_reorder = index
-            .columns
-            .iter()
-            .enumerate()
-            .any(|(idx_pos, col)| col.pos_in_table != idx_pos);
-        let extra_for_rowid = usize::from(index.ephemeral && index.has_rowid);
-
-        let (record_start, record_count) = if needs_reorder || extra_for_rowid != 0 {
-            let record_count = row_len + extra_for_rowid;
-            let record_start = program.alloc_registers(record_count);
-
-            if needs_reorder {
-                for (idx_pos, idx_col) in index.columns.iter().enumerate() {
-                    program.emit_insn(Insn::Copy {
-                        src_reg: start_reg + idx_col.pos_in_table,
-                        dst_reg: record_start + idx_pos,
-                        extra_amount: 0,
-                    });
-                }
-            } else {
-                for i in 0..row_len {
-                    program.emit_insn(Insn::Copy {
-                        src_reg: start_reg + i,
-                        dst_reg: record_start + i,
-                        extra_amount: 0,
-                    });
-                }
-            }
-
-            if extra_for_rowid != 0 {
-                program.emit_insn(Insn::Sequence {
-                    cursor_id: *cursor_id,
-                    target_reg: record_start + row_len,
-                });
-            }
-
-            (record_start, record_count)
-        } else {
-            (start_reg, row_len)
-        };
-
         program.emit_insn(Insn::MakeRecord {
-            start_reg: to_u16(record_start),
-            count: to_u16(record_count),
-            dest_reg: to_u16(record_reg),
+            start_reg,
+            count: row_len,
+            dest_reg: record_reg,
             index_name: Some(index.name.clone()),
-            affinity_str: affinity_str.as_ref().map(|s| (**s).clone()),
+            affinity_str: None,
         });
         program.emit_insn(Insn::IdxInsert {
             cursor_id: *cursor_id,
@@ -329,40 +209,4 @@ fn emit_values_to_index(
             flags: IdxInsertFlags::new().no_op_duplicate(),
         });
     }
-    Ok(())
-}
-
-fn emit_values_to_table(
-    program: &mut ProgramBuilder,
-    plan: &SelectPlan,
-    start_reg: usize,
-    row_len: usize,
-) {
-    let (cursor_id, table) = match &plan.query_destination {
-        QueryDestination::EphemeralTable {
-            cursor_id, table, ..
-        } => (cursor_id, table),
-        _ => unreachable!(),
-    };
-    let record_reg = program.alloc_register();
-    let rowid_reg = program.alloc_register();
-    program.emit_insn(Insn::MakeRecord {
-        start_reg: to_u16(start_reg),
-        count: to_u16(row_len),
-        dest_reg: to_u16(record_reg),
-        index_name: Some(table.name.clone()),
-        affinity_str: None,
-    });
-    program.emit_insn(Insn::NewRowid {
-        cursor: *cursor_id,
-        rowid_reg,
-        prev_largest_reg: 0,
-    });
-    program.emit_insn(Insn::Insert {
-        cursor: *cursor_id,
-        key_reg: rowid_reg,
-        record_reg,
-        flag: InsertFlags::new().is_ephemeral_table_insert(),
-        table_name: table.name.clone(),
-    });
 }

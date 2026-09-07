@@ -3,8 +3,7 @@
 //!
 //! This data structure is an implementation detail and is not exposed in the
 //! public API.
-use alloc::{collections::BTreeMap, vec, vec::Vec};
-use core::{fmt, ops::RangeBounds};
+use std::{collections::BTreeMap, fmt, ops::RangeBounds};
 
 use crate::{
     algo::{toposort, Cycle},
@@ -89,7 +88,6 @@ impl<N: Copy> OrderMap<N> {
     /// Map a node to its position in the topological order.
     ///
     /// Panics if the node index is out of bounds.
-    #[track_caller]
     pub(super) fn get_position(
         &self,
         id: N,
@@ -151,7 +149,6 @@ impl<N: Copy> OrderMap<N> {
     /// Remove a node from the order map.
     ///
     /// Panics if the node index is out of bounds.
-    #[track_caller]
     pub(super) fn remove_node(&mut self, id: N, graph: impl NodeIndexable<NodeId = N>) {
         let idx = graph.to_index(id);
         assert!(idx < self.node_to_pos.len());
@@ -164,7 +161,6 @@ impl<N: Copy> OrderMap<N> {
     /// Set the position of a node.
     ///
     /// Panics if the node index is out of bounds.
-    #[track_caller]
     pub(super) fn set_position(
         &mut self,
         id: N,
@@ -183,7 +179,6 @@ impl<G: Visitable> super::Acyclic<G> {
     /// Get the position of a node in the topological sort.
     ///
     /// Panics if the node index is out of bounds.
-    #[track_caller]
     pub fn get_position<'a>(&'a self, id: G::NodeId) -> TopologicalPosition
     where
         &'a G: NodeIndexable + GraphBase<NodeId = G::NodeId>,

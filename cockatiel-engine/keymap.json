@@ -1,0 +1,24 @@
+{
+    "quit": ["q", "esc"],
+    "force_quit": ["ctrl+c"],
+
+    "up": ["up", "k"],
+    "down": ["down", "j"],
+    "left": ["left", "h"],
+    "right": ["right", "l"],
+
+    "select": ["enter"],
+    "back": ["esc"],
+
+    "pause": ["p"],
+    "restart": ["r"],
+    "shutdown": ["s"],
+
+    "inspect": ["i"],
+
+    "start_all": ["a"],
+    "stop_all": ["shift+a"],
+
+    "module_next": ["tab"],
+    "module_previous": ["backtab"]
+}

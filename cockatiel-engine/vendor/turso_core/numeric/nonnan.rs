@@ -1,10 +1,9 @@
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NonNan(f64);
 
 impl NonNan {
-    pub const fn new(value: f64) -> Option<Self> {
+    pub fn new(value: f64) -> Option<Self> {
         if value.is_nan() {
             return None;
         }
@@ -94,12 +93,6 @@ impl std::ops::Rem for NonNan {
 
     fn rem(self, rhs: Self) -> Self::Output {
         Self::new(self.0 % rhs.0)
-    }
-}
-
-impl std::fmt::Display for NonNan {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 

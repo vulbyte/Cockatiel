@@ -1,34 +1,34 @@
 use crate::function::{Func, ScalarFunc};
-use crate::translate::{
-    emitter::Resolver,
-    expr::{sanitize_string, translate_expr},
-    ProgramBuilder, ProgramBuilderOpts,
-};
+use crate::schema::Schema;
+use crate::translate::emitter::Resolver;
+use crate::translate::expr::{sanitize_string, translate_expr};
+use crate::translate::{ProgramBuilder, ProgramBuilderOpts};
 use crate::util::normalize_ident;
 use crate::vdbe::insn::Insn;
-use crate::{sync::Arc, Connection, Result};
+use crate::{Result, SymbolTable};
 use turso_parser::ast::{Expr, Literal};
 
 /// Translate ATTACH statement
+/// SQLite implements ATTACH as a function call to sqlite_attach()
 pub fn translate_attach(
     expr: &Expr,
-    resolver: &Resolver,
     db_name: &Expr,
     key: &Option<Box<Expr>>,
-    program: &mut ProgramBuilder,
-    connection: Arc<Connection>,
-) -> Result<()> {
-    if !connection.experimental_attach_enabled() {
-        return Err(crate::LimboError::ParseError(
-            "ATTACH is an experimental feature. Enable with --experimental-attach flag".to_string(),
-        ));
-    }
-
+    schema: &Schema,
+    syms: &SymbolTable,
+    mut program: ProgramBuilder,
+) -> Result<ProgramBuilder> {
     // SQLite treats ATTACH as a function call to sqlite_attach(filename, dbname, key)
     // We'll allocate registers for the arguments and call the function
-    program.extend(&ProgramBuilderOpts::new(0, 10, 0));
+
+    program.extend(&ProgramBuilderOpts {
+        num_cursors: 0,
+        approx_num_insns: 10,
+        approx_num_labels: 0,
+    });
 
     let arg_reg = program.alloc_registers(4); // 3 for args + 1 for result
+    let resolver = Resolver::new(schema, syms);
 
     // Load filename argument
     // Handle different expression types as string literals for filenames
@@ -42,7 +42,7 @@ pub fn translate_attach(
         }
         Expr::Qualified(_, _) => {
             // For ATTACH, qualified expressions like "foo.db" should be treated as filename strings
-            let filename = expr.to_string();
+            let filename = format!("{expr}");
             program.emit_insn(Insn::String8 {
                 value: filename,
                 dest: arg_reg,
@@ -50,13 +50,14 @@ pub fn translate_attach(
         }
         Expr::Id(id) => {
             // For ATTACH, identifiers should be treated as filename strings
+            // Use normalize_ident to strip quotes from double-quoted identifiers
             program.emit_insn(Insn::String8 {
                 value: normalize_ident(id.as_str()),
                 dest: arg_reg,
             });
         }
         _ => {
-            translate_expr(program, None, expr, arg_reg, resolver)?;
+            translate_expr(&mut program, None, expr, arg_reg, &resolver)?;
         }
     }
 
@@ -87,13 +88,13 @@ pub fn translate_attach(
             });
         }
         _ => {
-            translate_expr(program, None, db_name, arg_reg + 1, resolver)?;
+            translate_expr(&mut program, None, db_name, arg_reg + 1, &resolver)?;
         }
     }
 
     // Load key argument (NULL if not provided)
     if let Some(key_expr) = key {
-        translate_expr(program, None, key_expr, arg_reg + 2, resolver)?;
+        translate_expr(&mut program, None, key_expr, arg_reg + 2, &resolver)?;
     } else {
         program.emit_insn(Insn::Null {
             dest: arg_reg + 2,
@@ -112,25 +113,27 @@ pub fn translate_attach(
         },
     });
 
-    Ok(())
+    Ok(program)
 }
 
 /// Translate DETACH statement
+/// SQLite implements DETACH as a function call to sqlite_detach()
 pub fn translate_detach(
     expr: &Expr,
-    resolver: &Resolver,
-    program: &mut ProgramBuilder,
-    connection: Arc<Connection>,
-) -> Result<()> {
-    if !connection.experimental_attach_enabled() {
-        return Err(crate::LimboError::ParseError(
-            "DETACH is an experimental feature. Enable with --experimental-attach flag".to_string(),
-        ));
-    }
+    schema: &Schema,
+    syms: &SymbolTable,
+    mut program: ProgramBuilder,
+) -> Result<ProgramBuilder> {
     // SQLite treats DETACH as a function call to sqlite_detach(dbname)
-    program.extend(&ProgramBuilderOpts::new(0, 5, 0));
+
+    program.extend(&ProgramBuilderOpts {
+        num_cursors: 0,
+        approx_num_insns: 5,
+        approx_num_labels: 0,
+    });
 
     let arg_reg = program.alloc_registers(2); // 1 for arg + 1 for result
+    let resolver = Resolver::new(schema, syms);
 
     // Load database name argument
     // Handle different expression types as string literals for database names
@@ -159,7 +162,7 @@ pub fn translate_detach(
             });
         }
         _ => {
-            translate_expr(program, None, expr, arg_reg, resolver)?;
+            translate_expr(&mut program, None, expr, arg_reg, &resolver)?;
         }
     }
 
@@ -174,5 +177,5 @@ pub fn translate_detach(
         },
     });
 
-    Ok(())
+    Ok(program)
 }

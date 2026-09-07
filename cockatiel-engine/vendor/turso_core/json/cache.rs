@@ -1,7 +1,6 @@
 use std::cell::{Cell, UnsafeCell};
 
-use crate::types::AsValueRef;
-use crate::{Value, ValueRef};
+use crate::Value;
 
 use super::jsonb::Jsonb;
 
@@ -39,27 +38,25 @@ impl JsonCache {
         oldest_idx
     }
 
-    pub fn insert(&mut self, key: impl AsValueRef, value: &Jsonb) {
-        let key = key.as_value_ref();
+    pub fn insert(&mut self, key: &Value, value: &Jsonb) {
         if self.used < JSON_CACHE_SIZE {
-            self.entries[self.used] = Some((key.to_owned(), value.clone()));
+            self.entries[self.used] = Some((key.clone(), value.clone()));
             self.age[self.used] = self.counter;
             self.counter += 1;
             self.used += 1
         } else {
             let id = self.find_oldest_entry();
 
-            self.entries[id] = Some((key.to_owned(), value.clone()));
+            self.entries[id] = Some((key.clone(), value.clone()));
             self.age[id] = self.counter;
             self.counter += 1;
         }
     }
 
-    pub fn lookup(&mut self, key: impl AsValueRef) -> Option<Jsonb> {
-        let key = key.as_value_ref();
+    pub fn lookup(&mut self, key: &Value) -> Option<Jsonb> {
         for i in (0..self.used).rev() {
             if let Some((stored_key, value)) = &self.entries[i] {
-                if key == *stored_key {
+                if key == stored_key {
                     self.age[i] = self.counter;
                     self.counter += 1;
                     let json = value.clone();
@@ -83,12 +80,6 @@ pub struct JsonCacheCell {
     accessed: Cell<bool>,
 }
 
-impl Default for JsonCacheCell {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl JsonCacheCell {
     pub fn new() -> Self {
         Self {
@@ -98,7 +89,7 @@ impl JsonCacheCell {
     }
 
     #[cfg(test)]
-    pub fn lookup(&self, key: impl AsValueRef) -> Option<Jsonb> {
+    pub fn lookup(&self, key: &Value) -> Option<Jsonb> {
         assert!(!self.accessed.get());
 
         self.accessed.set(true);
@@ -122,12 +113,11 @@ impl JsonCacheCell {
 
     pub fn get_or_insert_with(
         &self,
-        key: impl AsValueRef,
-        value: impl FnOnce(ValueRef) -> crate::Result<Jsonb>,
+        key: &Value,
+        value: impl Fn(&Value) -> crate::Result<Jsonb>,
     ) -> crate::Result<Jsonb> {
         assert!(!self.accessed.get());
 
-        let key = key.as_value_ref();
         self.accessed.set(true);
         let result = unsafe {
             let cache_ptr = self.inner.get();
@@ -183,7 +173,7 @@ mod tests {
     // Helper function to create test Value and Jsonb from JSON string
     fn create_test_pair(json_str: &str) -> (Value, Jsonb) {
         // Create Value as text representation of JSON
-        let key = Value::build_text(json_str.to_string());
+        let key = Value::build_text(json_str);
 
         // Create Jsonb from the same JSON string
         let value = Jsonb::from_str(json_str).unwrap();
@@ -364,7 +354,7 @@ mod tests {
         // Insert the value using get_or_insert_with
         let insert_result = cache_cell.get_or_insert_with(&key, |k| {
             // Verify that k is the same as our key
-            assert_eq!(k, key);
+            assert_eq!(k, &key);
             Ok(value.clone())
         });
 

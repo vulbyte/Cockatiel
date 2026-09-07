@@ -1,14 +1,6 @@
 use crate::{error::Error, token::TokenType, Result};
 use turso_macros::match_ignore_ascii_case;
 
-/// Returns true if the given identifier (case-insensitive) is a SQL keyword.
-/// This is used to determine whether an identifier needs to be quoted when
-/// rendered back to SQL text.
-pub fn is_quotable_keyword(input: &[u8]) -> bool {
-    let token = keyword_or_id_token(input);
-    token != TokenType::TK_ID && token != TokenType::TK_TYPE
-}
-
 fn keyword_or_id_token(input: &[u8]) -> TokenType {
     match_ignore_ascii_case!(match input {
         b"ABORT" => TokenType::TK_ABORT,
@@ -35,7 +27,6 @@ fn keyword_or_id_token(input: &[u8]) -> TokenType {
         b"COLLATE" => TokenType::TK_COLLATE,
         b"COLUMN" => TokenType::TK_COLUMNKW,
         b"COMMIT" => TokenType::TK_COMMIT,
-        b"CONCURRENT" => TokenType::TK_CONCURRENT,
         b"CONFLICT" => TokenType::TK_CONFLICT,
         b"CONSTRAINT" => TokenType::TK_CONSTRAINT,
         b"CREATE" => TokenType::TK_CREATE,
@@ -110,7 +101,6 @@ fn keyword_or_id_token(input: &[u8]) -> TokenType {
         b"ON" => TokenType::TK_ON,
         b"OR" => TokenType::TK_OR,
         b"ORDER" => TokenType::TK_ORDER,
-        b"OPTIMIZE" => TokenType::TK_OPTIMIZE,
         b"OTHERS" => TokenType::TK_OTHERS,
         b"OUTER" => TokenType::TK_JOIN_KW,
         b"OVER" => TokenType::TK_OVER,
@@ -146,7 +136,6 @@ fn keyword_or_id_token(input: &[u8]) -> TokenType {
         b"TO" => TokenType::TK_TO,
         b"TRANSACTION" => TokenType::TK_TRANSACTION,
         b"TRIGGER" => TokenType::TK_TRIGGER,
-        b"TYPE" => TokenType::TK_TYPE,
         b"UNBOUNDED" => TokenType::TK_UNBOUNDED,
         b"UNION" => TokenType::TK_UNION,
         b"UNIQUE" => TokenType::TK_UNIQUE,
@@ -160,19 +149,18 @@ fn keyword_or_id_token(input: &[u8]) -> TokenType {
         b"WHERE" => TokenType::TK_WHERE,
         b"WINDOW" => TokenType::TK_WINDOW,
         b"WITH" => TokenType::TK_WITH,
-        b"WITHIN" => TokenType::TK_WITHIN,
         b"WITHOUT" => TokenType::TK_WITHOUT,
         _ => TokenType::TK_ID,
     })
 }
 
 #[inline(always)]
-pub const fn is_identifier_start(b: u8) -> bool {
+pub fn is_identifier_start(b: u8) -> bool {
     b.is_ascii_uppercase() || b == b'_' || b.is_ascii_lowercase() || b > b'\x7F'
 }
 
 #[inline(always)]
-pub const fn is_identifier_continue(b: u8) -> bool {
+pub fn is_identifier_continue(b: u8) -> bool {
     b == b'$'
         || b.is_ascii_digit()
         || b.is_ascii_uppercase()
@@ -184,29 +172,7 @@ pub const fn is_identifier_continue(b: u8) -> bool {
 #[derive(Clone, PartialEq, Eq, Debug)] // do not derive Copy for Token, just use .clone() when needed
 pub struct Token<'a> {
     pub value: &'a [u8],
-    pub token_type: TokenType, // None means Token is whitespaces or comments
-}
-
-impl<'a> Token<'a> {
-    #[inline]
-    pub const fn new(value: &'a [u8], token_type: TokenType) -> Self {
-        Token { value, token_type }
-    }
-    #[inline]
-    pub fn to_utf8(&self) -> String {
-        String::from_utf8_lossy(self.as_bytes()).to_string()
-    }
-    /// # Safety
-    /// Same as `String::from_utf8_unchecked`,
-    /// the caller must ensure that token bytes are valid UTF-8.
-    #[inline]
-    pub unsafe fn to_utf8_unchecked(&self) -> String {
-        String::from_utf8_unchecked(self.as_bytes().to_vec())
-    }
-    #[inline]
-    pub const fn as_bytes(&self) -> &[u8] {
-        self.value
-    }
+    pub token_type: Option<TokenType>, // None means Token is whitespaces or comments
 }
 
 pub struct Lexer<'a> {
@@ -238,39 +204,13 @@ impl<'a> Iterator for Lexer<'a> {
                 b'!' => Some(self.mark(|l| l.eat_ne())),
                 b'|' => Some(Ok(self.eat_concat_or_bitor())),
                 b',' => Some(Ok(self.eat_one_token(TokenType::TK_COMMA))),
-                b'&' => Some(Ok(self.eat_overlap_or_bitand())),
+                b'&' => Some(Ok(self.eat_one_token(TokenType::TK_BITAND))),
                 b'~' => Some(Ok(self.eat_one_token(TokenType::TK_BITNOT))),
                 b'\'' | b'"' | b'`' => Some(self.mark(|l| l.eat_lit_or_id())),
                 b'.' => Some(self.mark(|l| l.eat_dot_or_frac(false))),
                 b'0'..=b'9' => Some(self.mark(|l| l.eat_number())),
-                b'[' => Some(Ok(self.eat_one_token(TokenType::TK_LBRACKET))),
-                b']' => Some(Ok(self.eat_one_token(TokenType::TK_RBRACKET))),
-                b'@' => {
-                    // @> is array contains operator; bare @ starts a variable
-                    if self.input.get(self.offset + 1) == Some(&b'>') {
-                        Some(Ok(self.eat_array_contains()))
-                    } else {
-                        Some(self.mark(|l| l.eat_var()))
-                    }
-                }
-                b'?' | b'$' => Some(self.mark(|l| l.eat_var())),
-                b'#' => {
-                    let start = self.offset;
-                    self.eat(); // consume '#'
-                    self.eat_while(is_identifier_continue);
-                    Some(Ok(Token::new(
-                        &self.input[start..self.offset],
-                        TokenType::TK_ILLEGAL,
-                    )))
-                }
-                b':' => {
-                    // `:name` is a named parameter, but `:` followed by a digit
-                    // or non-identifier char is a standalone colon (used in slice syntax).
-                    match self.input.get(self.offset + 1) {
-                        Some(&b) if is_identifier_start(b) => Some(self.mark(|l| l.eat_var())),
-                        _ => Some(Ok(self.eat_one_token(TokenType::TK_COLON))),
-                    }
-                }
+                b'[' => Some(self.mark(|l| l.eat_bracket())),
+                b'?' | b'$' | b'@' | b'#' | b':' => Some(self.mark(|l| l.eat_var())),
                 b if is_identifier_start(b) => Some(self.mark(|l| l.eat_blob_or_id())),
                 _ => Some(self.eat_unrecognized()),
             },
@@ -278,18 +218,15 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-#[cold]
-const fn cold() {}
-
 impl<'a> Lexer<'a> {
     #[inline(always)]
-    pub const fn new(input: &'a [u8]) -> Self {
+    pub fn new(input: &'a [u8]) -> Self {
         Lexer { input, offset: 0 }
     }
 
     #[inline(always)]
     pub fn remaining(&self) -> &'a [u8] {
-        self.input.get(self.offset..).unwrap_or(&[])
+        &self.input[self.offset..]
     }
 
     #[inline]
@@ -307,7 +244,7 @@ impl<'a> Lexer<'a> {
 
     /// Returns the current offset in the input without consuming.
     #[inline(always)]
-    pub const fn peek(&self) -> Option<u8> {
+    pub fn peek(&self) -> Option<u8> {
         if self.offset < self.input.len() {
             Some(self.input[self.offset])
         } else {
@@ -317,13 +254,13 @@ impl<'a> Lexer<'a> {
 
     /// Returns the current offset in the input and consumes it.
     #[inline(always)]
-    pub const fn eat(&mut self) -> Option<u8> {
-        if let Some(b) = self.peek() {
+    pub fn eat(&mut self) -> Option<u8> {
+        let result = self.peek();
+        if result.is_some() {
             self.offset += 1;
-            Some(b)
-        } else {
-            None
         }
+
+        result
     }
 
     #[inline(always)]
@@ -336,50 +273,12 @@ impl<'a> Lexer<'a> {
     }
 
     #[inline]
-    // Eats up to but not including the specified byte, returns true if found
-    fn eat_until(&mut self, byte: u8) -> bool {
-        match memchr::memchr(byte, self.remaining()) {
-            Some(pos) => {
-                self.offset += pos;
-                true
-            }
-            None => {
-                cold();
-                self.offset = self.input.len();
-                false
-            }
-        }
-    }
-
-    #[inline]
-    // Eats up to and including the specified byte, returns true if found
-    fn eat_past(&mut self, byte: u8) -> bool {
-        match memchr::memchr(byte, self.remaining()) {
-            Some(pos) => {
-                self.offset += pos + 1;
-                true
-            }
-            None => {
-                cold();
-                self.offset = self.input.len();
-                false
-            }
-        }
-    }
-
-    #[inline]
     fn eat_while<F>(&mut self, f: F)
     where
-        F: Fn(u8) -> bool,
+        F: Fn(Option<u8>) -> bool,
     {
         loop {
-            if let Some(b) = self.peek() {
-                if !f(b) {
-                    cold();
-                    return;
-                }
-            } else {
-                cold();
+            if !f(self.peek()) {
                 return;
             }
 
@@ -390,34 +289,21 @@ impl<'a> Lexer<'a> {
     fn eat_while_number_digit(&mut self) -> Result<()> {
         loop {
             let start = self.offset;
-            self.eat_while(|b| b.is_ascii_digit());
+            self.eat_while(|b| b.is_some() && b.unwrap().is_ascii_digit());
             match self.peek() {
                 Some(b'_') => {
                     self.eat_and_assert(|b| b == b'_');
 
                     if start == self.offset {
                         // before the underscore, there was no digit
-                        let token_text =
-                            String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                        return Err(Error::BadNumber {
-                            span: (start, self.offset - start).into(),
-                            token_text,
-                            offset: start,
-                        });
+                        return Err(Error::BadNumber((start, self.offset - start).into()));
                     }
 
                     match self.peek() {
                         Some(b) if b.is_ascii_digit() => continue, // Continue if next is a digit
                         _ => {
                             // after the underscore, there is no digit
-                            let token_text =
-                                String::from_utf8_lossy(&self.input[start..self.offset])
-                                    .to_string();
-                            return Err(Error::BadNumber {
-                                span: (start, self.offset - start).into(),
-                                token_text,
-                                offset: start,
-                            });
+                            return Err(Error::BadNumber((start, self.offset - start).into()));
                         }
                     }
                 }
@@ -429,18 +315,12 @@ impl<'a> Lexer<'a> {
     fn eat_while_number_hexdigit(&mut self) -> Result<()> {
         loop {
             let start = self.offset;
-            self.eat_while(|b| b.is_ascii_hexdigit());
+            self.eat_while(|b| b.is_some() && b.unwrap().is_ascii_hexdigit());
             match self.peek() {
                 Some(b'_') => {
                     if start == self.offset {
                         // before the underscore, there was no digit
-                        let token_text =
-                            String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                        return Err(Error::BadNumber {
-                            span: (start, self.offset - start).into(),
-                            token_text,
-                            offset: start,
-                        });
+                        return Err(Error::BadNumber((start, self.offset - start).into()));
                     }
 
                     self.eat_and_assert(|b| b == b'_');
@@ -448,14 +328,7 @@ impl<'a> Lexer<'a> {
                         Some(b) if b.is_ascii_hexdigit() => continue, // Continue if next is a digit
                         _ => {
                             // after the underscore, there is no digit
-                            let token_text =
-                                String::from_utf8_lossy(&self.input[start..self.offset])
-                                    .to_string();
-                            return Err(Error::BadNumber {
-                                span: (start, self.offset - start).into(),
-                                token_text,
-                                offset: start,
-                            });
+                            return Err(Error::BadNumber((start, self.offset - start).into()));
                         }
                     }
                 }
@@ -468,7 +341,10 @@ impl<'a> Lexer<'a> {
     fn eat_one_token(&mut self, typ: TokenType) -> Token<'a> {
         debug_assert!(!self.remaining().is_empty());
 
-        let tok = Token::new(self.remaining().get(..1).unwrap_or("".as_bytes()), typ);
+        let tok = Token {
+            value: &self.remaining()[..1],
+            token_type: Some(typ),
+        };
         self.offset += 1;
         tok
     }
@@ -477,9 +353,11 @@ impl<'a> Lexer<'a> {
     fn eat_white_space(&mut self) -> Token<'a> {
         let start = self.offset;
         self.eat_and_assert(|b| b.is_ascii_whitespace());
-        self.eat_while(|b| b.is_ascii_whitespace());
-        // This is whitespace
-        Token::new(&self.input[start..self.offset], TokenType::TK_NONE)
+        self.eat_while(|b| b.is_some() && b.unwrap().is_ascii_whitespace());
+        Token {
+            value: &self.input[start..self.offset],
+            token_type: None, // This is a whitespace
+        }
     }
 
     fn eat_minus_or_comment_or_ptr(&mut self) -> Token<'a> {
@@ -489,11 +367,15 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(b'-') => {
                 self.eat_and_assert(|b| b == b'-');
-                if self.eat_until(b'\n') {
+                self.eat_while(|b| b.is_some() && b.unwrap() != b'\n');
+                if self.peek() == Some(b'\n') {
                     self.eat_and_assert(|b| b == b'\n');
                 }
 
-                Token::new(&self.input[start..self.offset], TokenType::TK_NONE)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: None, // This is a comment
+                }
             }
             Some(b'>') => {
                 self.eat_and_assert(|b| b == b'>');
@@ -501,9 +383,15 @@ impl<'a> Lexer<'a> {
                     self.eat_and_assert(|b| b == b'>');
                 }
 
-                Token::new(&self.input[start..self.offset], TokenType::TK_PTR)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_PTR),
+                }
             }
-            _ => Token::new(b"-", TokenType::TK_MINUS),
+            _ => Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_MINUS),
+            },
         }
     }
 
@@ -511,33 +399,44 @@ impl<'a> Lexer<'a> {
         let start = self.offset;
         self.eat_and_assert(|b| b == b'/');
         match self.peek() {
-            // C-style comments begin with "/*" and extend up to and
-            // including the next "*/" character pair or until
-            // the end of input, whichever comes first.
             Some(b'*') => {
                 self.eat_and_assert(|b| b == b'*');
                 loop {
-                    if self.eat_past(b'*') {
-                        match self.peek() {
-                            Some(b'/') => {
-                                self.eat_and_assert(|b| b == b'/');
-                                break; // End of block comment
+                    self.eat_while(|b| b.is_some() && b.unwrap() != b'*');
+                    match self.peek() {
+                        Some(b'*') => {
+                            self.eat_and_assert(|b| b == b'*');
+                            match self.peek() {
+                                Some(b'/') => {
+                                    self.eat_and_assert(|b| b == b'/');
+                                    break; // End of block comment
+                                }
+                                None => {
+                                    return Err(Error::UnterminatedBlockComment(
+                                        (start, self.offset - start).into(),
+                                    ))
+                                }
+                                _ => {}
                             }
-                            None => break,
-                            _ => {}
                         }
-                    } else {
-                        cold();
-                        break;
+                        None => {
+                            return Err(Error::UnterminatedBlockComment(
+                                (start, self.offset - start).into(),
+                            ))
+                        }
+                        _ => unreachable!(), // We should not reach here
                     }
                 }
 
-                Ok(Token::new(
-                    &self.input[start..self.offset],
-                    TokenType::TK_NONE, // This is a comment
-                ))
+                Ok(Token {
+                    value: &self.input[start..self.offset],
+                    token_type: None, // This is a comment
+                })
             }
-            _ => Ok(Token::new(b"/", TokenType::TK_SLASH)),
+            _ => Ok(Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_SLASH),
+            }),
         }
     }
 
@@ -548,7 +447,10 @@ impl<'a> Lexer<'a> {
             self.eat_and_assert(|b| b == b'=');
         }
 
-        Token::new(&self.input[start..self.offset], TokenType::TK_EQ)
+        Token {
+            value: &self.input[start..self.offset],
+            token_type: Some(TokenType::TK_EQ),
+        }
     }
 
     fn eat_le_or_ne_or_lshift_or_lt(&mut self) -> Token<'a> {
@@ -557,17 +459,29 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(b'=') => {
                 self.eat_and_assert(|b| b == b'=');
-                Token::new(&self.input[start..self.offset], TokenType::TK_LE)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_LE),
+                }
             }
             Some(b'<') => {
                 self.eat_and_assert(|b| b == b'<');
-                Token::new(&self.input[start..self.offset], TokenType::TK_LSHIFT)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_LSHIFT),
+                }
             }
             Some(b'>') => {
                 self.eat_and_assert(|b| b == b'>');
-                Token::new(&self.input[start..self.offset], TokenType::TK_NE)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_NE),
+                }
             }
-            _ => Token::new(b"<", TokenType::TK_LT),
+            _ => Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_LT),
+            },
         }
     }
 
@@ -577,13 +491,22 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(b'=') => {
                 self.eat_and_assert(|b| b == b'=');
-                Token::new(&self.input[start..self.offset], TokenType::TK_GE)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_GE),
+                }
             }
             Some(b'>') => {
                 self.eat_and_assert(|b| b == b'>');
-                Token::new(&self.input[start..self.offset], TokenType::TK_RSHIFT)
+                Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_RSHIFT),
+                }
             }
-            _ => Token::new(b">", TokenType::TK_GT),
+            _ => Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_GT),
+            },
         }
     }
 
@@ -595,55 +518,33 @@ impl<'a> Lexer<'a> {
                 self.eat_and_assert(|b| b == b'=');
             }
             _ => {
-                let token_text =
-                    String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                return Err(Error::ExpectedEqualsSign {
-                    span: (start, self.offset - start).into(),
-                    token_text,
-                    offset: start,
-                });
+                return Err(Error::ExpectedEqualsSign(
+                    (start, self.offset - start).into(),
+                ))
             }
         }
 
-        Ok(Token::new(
-            &self.input[start..self.offset],
-            TokenType::TK_NE,
-        ))
+        Ok(Token {
+            value: &self.input[start..self.offset],
+            token_type: Some(TokenType::TK_NE),
+        })
     }
 
     fn eat_concat_or_bitor(&mut self) -> Token<'a> {
         let start = self.offset;
         self.eat_and_assert(|b| b == b'|');
-
         if self.peek() == Some(b'|') {
             self.eat_and_assert(|b| b == b'|');
-            return Token::new(&self.input[start..self.offset], TokenType::TK_CONCAT);
+            return Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_CONCAT),
+            };
         }
 
-        // Otherwise it is a bitwise OR operator
-        Token::new(&self.input[start..self.offset], TokenType::TK_BITOR)
-    }
-
-    /// Tokenize `&&` (array overlap) or single `&` (bitwise AND).
-    fn eat_overlap_or_bitand(&mut self) -> Token<'a> {
-        let start = self.offset;
-        self.eat_and_assert(|b| b == b'&');
-        if self.peek() == Some(b'&') {
-            self.eat_and_assert(|b| b == b'&');
-            return Token::new(&self.input[start..self.offset], TokenType::TK_ARRAY_OVERLAP);
+        Token {
+            value: &self.input[start..self.offset],
+            token_type: Some(TokenType::TK_BITOR),
         }
-        Token::new(&self.input[start..self.offset], TokenType::TK_BITAND)
-    }
-
-    /// Tokenize `@>` (array contains).
-    fn eat_array_contains(&mut self) -> Token<'a> {
-        let start = self.offset;
-        self.eat_and_assert(|b| b == b'@');
-        self.eat_and_assert(|b| b == b'>');
-        Token::new(
-            &self.input[start..self.offset],
-            TokenType::TK_ARRAY_CONTAINS,
-        )
     }
 
     fn eat_lit_or_id(&mut self) -> Result<Token<'a>> {
@@ -657,27 +558,31 @@ impl<'a> Lexer<'a> {
         };
 
         loop {
-            if self.eat_past(quote) {
-                match self.peek() {
-                    Some(b) if b == quote => {
-                        self.eat_and_assert(|b| b == quote);
-                        continue;
+            self.eat_while(|b| b.is_some() && b.unwrap() != quote);
+            match self.peek() {
+                Some(b) if b == quote => {
+                    self.eat_and_assert(|b| b == quote);
+                    match self.peek() {
+                        Some(b) if b == quote => {
+                            self.eat_and_assert(|b| b == quote);
+                            continue;
+                        }
+                        _ => break,
                     }
-                    _ => break,
                 }
-            } else {
-                cold();
-                let token_text =
-                    String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                return Err(Error::UnterminatedLiteral {
-                    span: (start, self.offset - start).into(),
-                    token_text,
-                    offset: start,
-                });
-            }
+                None => {
+                    return Err(Error::UnterminatedLiteral(
+                        (start, self.offset - start).into(),
+                    ))
+                }
+                _ => unreachable!(),
+            };
         }
 
-        Ok(Token::new(&self.input[start..self.offset], tt))
+        Ok(Token {
+            value: &self.input[start..self.offset],
+            token_type: Some(tt),
+        })
     }
 
     fn eat_dot_or_frac(&mut self, has_digit_prefix: bool) -> Result<Token<'a>> {
@@ -692,30 +597,24 @@ impl<'a> Lexer<'a> {
                 match self.peek() {
                     Some(b'e') | Some(b'E') => {
                         _ = self.eat_expo()?;
-                        Ok(Token::new(
-                            &self.input[start..self.offset],
-                            TokenType::TK_FLOAT,
-                        ))
-                    }
-                    Some(b) if is_identifier_start(b) => {
-                        let token_text =
-                            String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                        Err(Error::BadFractionalPart {
-                            span: (start, self.offset - start).into(),
-                            token_text,
-                            offset: start,
+                        Ok(Token {
+                            value: &self.input[start..self.offset],
+                            token_type: Some(TokenType::TK_FLOAT),
                         })
                     }
-                    _ => Ok(Token::new(
-                        &self.input[start..self.offset],
-                        TokenType::TK_FLOAT,
+                    Some(b) if is_identifier_start(b) => Err(Error::BadFractionalPart(
+                        (start, self.offset - start).into(),
                     )),
+                    _ => Ok(Token {
+                        value: &self.input[start..self.offset],
+                        token_type: Some(TokenType::TK_FLOAT),
+                    }),
                 }
             }
-            _ => Ok(Token::new(
-                &self.input[start..self.offset],
-                TokenType::TK_DOT,
-            )),
+            _ => Ok(Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_DOT),
+            }),
         }
     }
 
@@ -732,28 +631,17 @@ impl<'a> Lexer<'a> {
         let start_num = self.offset;
         self.eat_while_number_digit()?;
         if start_num == self.offset {
-            let token_text = String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-            return Err(Error::BadExponentPart {
-                span: (start, self.offset - start).into(),
-                token_text,
-                offset: start,
-            });
+            return Err(Error::BadExponentPart((start, self.offset - start).into()));
         }
 
         if self.peek().is_some() && is_identifier_start(self.peek().unwrap()) {
-            let token_text = String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-            return Err(Error::BadExponentPart {
-                span: (start, self.offset - start).into(),
-                token_text,
-                offset: start,
-            });
+            return Err(Error::BadExponentPart((start, self.offset - start).into()));
         }
 
-        // This is a number
-        Ok(Token::new(
-            &self.input[start..self.offset],
-            TokenType::TK_FLOAT,
-        ))
+        Ok(Token {
+            value: &self.input[start..self.offset],
+            token_type: Some(TokenType::TK_FLOAT), // This is a number
+        })
     }
 
     fn eat_number(&mut self) -> Result<Token<'a>> {
@@ -770,29 +658,19 @@ impl<'a> Lexer<'a> {
                     self.eat_while_number_hexdigit()?;
 
                     if start_hex == self.offset {
-                        let token_text =
-                            String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                        return Err(Error::MalformedHexInteger {
-                            span: (start, self.offset - start).into(),
-                            token_text,
-                            offset: start,
-                        });
+                        return Err(Error::MalformedHexInteger(
+                            (start, self.offset - start).into(),
+                        ));
                     }
 
                     if self.peek().is_some() && is_identifier_start(self.peek().unwrap()) {
-                        let token_text =
-                            String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                        return Err(Error::BadNumber {
-                            span: (start, self.offset - start).into(),
-                            token_text,
-                            offset: start,
-                        });
+                        return Err(Error::BadNumber((start, self.offset - start).into()));
                     }
 
-                    return Ok(Token::new(
-                        &self.input[start..self.offset],
-                        TokenType::TK_INTEGER,
-                    ));
+                    return Ok(Token {
+                        value: &self.input[start..self.offset],
+                        token_type: Some(TokenType::TK_INTEGER),
+                    });
                 }
                 _ => {}
             }
@@ -802,67 +680,74 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(b'.') => {
                 self.eat_dot_or_frac(true)?;
-                Ok(Token::new(
-                    &self.input[start..self.offset],
-                    TokenType::TK_FLOAT,
-                ))
+                Ok(Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_FLOAT),
+                })
             }
             Some(b'e') | Some(b'E') => {
                 self.eat_expo()?;
-                Ok(Token::new(
-                    &self.input[start..self.offset],
-                    TokenType::TK_FLOAT,
-                ))
-            }
-            Some(b) if is_identifier_start(b) => {
-                let token_text =
-                    String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                Err(Error::BadNumber {
-                    span: (start, self.offset - start).into(),
-                    token_text,
-                    offset: start,
+                Ok(Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_FLOAT),
                 })
             }
-            _ => Ok(Token::new(
-                &self.input[start..self.offset],
-                TokenType::TK_INTEGER,
+            Some(b) if is_identifier_start(b) => {
+                Err(Error::BadNumber((start, self.offset - start).into()))
+            }
+            _ => Ok(Token {
+                value: &self.input[start..self.offset],
+                token_type: Some(TokenType::TK_INTEGER),
+            }),
+        }
+    }
+
+    fn eat_bracket(&mut self) -> Result<Token<'a>> {
+        let start = self.offset;
+        self.eat_and_assert(|b| b == b'[');
+        self.eat_while(|b| b.is_some() && b.unwrap() != b']');
+        match self.peek() {
+            Some(b']') => {
+                self.eat_and_assert(|b| b == b']');
+                Ok(Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_ID),
+                })
+            }
+            None => Err(Error::UnterminatedBracket(
+                (start, self.offset - start).into(),
             )),
+            _ => unreachable!(), // We should not reach here
         }
     }
 
     fn eat_var(&mut self) -> Result<Token<'a>> {
         let start = self.offset;
         let tok = self.eat().unwrap();
-        debug_assert!(tok == b'?' || tok == b'$' || tok == b'@' || tok == b':');
+        debug_assert!(tok == b'?' || tok == b'$' || tok == b'@' || tok == b'#' || tok == b':');
 
         match tok {
             b'?' => {
-                self.eat_while(|b| b.is_ascii_digit());
+                self.eat_while(|b| b.is_some() && b.unwrap().is_ascii_digit());
 
-                Ok(Token::new(
-                    &self.input[start..self.offset],
-                    TokenType::TK_VARIABLE,
-                ))
+                Ok(Token {
+                    value: &self.input[start + 1..self.offset], // do not include '? in the value
+                    token_type: Some(TokenType::TK_VARIABLE),
+                })
             }
             _ => {
                 let start_id = self.offset;
-                self.eat_while(is_identifier_continue);
+                self.eat_while(|b| b.is_some() && is_identifier_continue(b.unwrap()));
 
                 // empty variable name
                 if start_id == self.offset {
-                    let token_text =
-                        String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                    return Err(Error::BadVariableName {
-                        span: (start, self.offset - start).into(),
-                        token_text,
-                        offset: start,
-                    });
+                    return Err(Error::BadVariableName((start, self.offset - start).into()));
                 }
 
-                Ok(Token::new(
-                    &self.input[start..self.offset],
-                    TokenType::TK_VARIABLE,
-                ))
+                Ok(Token {
+                    value: &self.input[start..self.offset],
+                    token_type: Some(TokenType::TK_VARIABLE),
+                })
             }
         }
     }
@@ -877,7 +762,7 @@ impl<'a> Lexer<'a> {
             b'x' | b'X' if self.peek() == Some(b'\'') => {
                 self.eat_and_assert(|b| b == b'\'');
                 let start_hex = self.offset;
-                self.eat_while(|b| b.is_ascii_hexdigit());
+                self.eat_while(|b| b.is_some() && b.unwrap().is_ascii_hexdigit());
 
                 match self.peek() {
                     Some(b'\'') => {
@@ -885,50 +770,39 @@ impl<'a> Lexer<'a> {
                         debug_assert!(end_hex >= start_hex);
                         self.eat_and_assert(|b| b == b'\'');
 
-                        if ((end_hex - start_hex) & 1) != 0 {
-                            let token_text =
-                                String::from_utf8_lossy(&self.input[start..self.offset])
-                                    .to_string();
-                            return Err(Error::UnrecognizedToken {
-                                span: (start, self.offset - start).into(),
-                                token_text,
-                                offset: start,
-                            });
+                        if (end_hex - start_hex) % 2 != 0 {
+                            return Err(Error::UnrecognizedToken(
+                                (start, self.offset - start).into(),
+                            ));
                         }
-                        // do not include 'x' or 'X' and the last '
-                        Ok(Token::new(
-                            &self.input[start + 2..self.offset - 1],
-                            TokenType::TK_BLOB,
-                        ))
-                    }
-                    _ => {
-                        let token_text =
-                            String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-                        Err(Error::UnterminatedLiteral {
-                            span: (start, self.offset - start).into(),
-                            token_text,
-                            offset: start,
+
+                        Ok(Token {
+                            value: &self.input[start + 2..self.offset - 1], // do not include 'x' or 'X' and the last '
+                            token_type: Some(TokenType::TK_BLOB),
                         })
                     }
+                    _ => Err(Error::UnterminatedLiteral(
+                        (start, self.offset - start).into(),
+                    )),
                 }
             }
             _ => {
-                self.eat_while(is_identifier_continue);
+                self.eat_while(|b| b.is_some() && is_identifier_continue(b.unwrap()));
                 let result = &self.input[start..self.offset];
-                Ok(Token::new(result, keyword_or_id_token(result)))
+                Ok(Token {
+                    value: result,
+                    token_type: Some(keyword_or_id_token(result)),
+                })
             }
         }
     }
 
     fn eat_unrecognized(&mut self) -> Result<Token<'a>> {
         let start = self.offset;
-        self.eat_while(|b| !b.is_ascii_whitespace());
-        let token_text = String::from_utf8_lossy(&self.input[start..self.offset]).to_string();
-        Err(Error::UnrecognizedToken {
-            span: (start, self.offset - start).into(),
-            token_text,
-            offset: start,
-        })
+        self.eat_while(|b| b.is_some() && !b.unwrap().is_ascii_whitespace());
+        Err(Error::UnrecognizedToken(
+            (start, self.offset - start).into(),
+        ))
     }
 }
 
@@ -940,164 +814,448 @@ mod tests {
     #[test]
     fn test_lexer_one_tok() {
         let test_cases = vec![
-            (b"    ".as_slice(), Token::new(b"    ", TokenType::TK_NONE)),
+            (
+                b"    ".as_slice(),
+                Token {
+                    value: b"    ".as_slice(),
+                    token_type: None,
+                },
+            ),
             (
                 b"-- This is a comment\n".as_slice(),
-                Token::new(b"-- This is a comment\n", TokenType::TK_NONE), // comment
+                Token {
+                    value: b"-- This is a comment\n".as_slice(),
+                    token_type: None, // This is a comment
+                },
             ),
-            (b"-".as_slice(), Token::new(b"-", TokenType::TK_MINUS)),
-            (b"->".as_slice(), Token::new(b"->", TokenType::TK_PTR)),
-            (b"->>".as_slice(), Token::new(b"->>", TokenType::TK_PTR)),
-            (b"(".as_slice(), Token::new(b"(", TokenType::TK_LP)),
-            (b")".as_slice(), Token::new(b")", TokenType::TK_RP)),
-            (b";".as_slice(), Token::new(b";", TokenType::TK_SEMI)),
-            (b"+".as_slice(), Token::new(b"+", TokenType::TK_PLUS)),
-            (b"*".as_slice(), Token::new(b"*", TokenType::TK_STAR)),
-            (b"/".as_slice(), Token::new(b"/", TokenType::TK_SLASH)),
+            (
+                b"-".as_slice(),
+                Token {
+                    value: b"-".as_slice(),
+                    token_type: Some(TokenType::TK_MINUS),
+                },
+            ),
+            (
+                b"->".as_slice(),
+                Token {
+                    value: b"->".as_slice(),
+                    token_type: Some(TokenType::TK_PTR),
+                },
+            ),
+            (
+                b"->>".as_slice(),
+                Token {
+                    value: b"->>".as_slice(),
+                    token_type: Some(TokenType::TK_PTR),
+                },
+            ),
+            (
+                b"(".as_slice(),
+                Token {
+                    value: b"(".as_slice(),
+                    token_type: Some(TokenType::TK_LP),
+                },
+            ),
+            (
+                b")".as_slice(),
+                Token {
+                    value: b")".as_slice(),
+                    token_type: Some(TokenType::TK_RP),
+                },
+            ),
+            (
+                b";".as_slice(),
+                Token {
+                    value: b";".as_slice(),
+                    token_type: Some(TokenType::TK_SEMI),
+                },
+            ),
+            (
+                b"+".as_slice(),
+                Token {
+                    value: b"+".as_slice(),
+                    token_type: Some(TokenType::TK_PLUS),
+                },
+            ),
+            (
+                b"*".as_slice(),
+                Token {
+                    value: b"*".as_slice(),
+                    token_type: Some(TokenType::TK_STAR),
+                },
+            ),
+            (
+                b"/".as_slice(),
+                Token {
+                    value: b"/".as_slice(),
+                    token_type: Some(TokenType::TK_SLASH),
+                },
+            ),
             (
                 b"/* This is a block comment */".as_slice(),
-                Token::new(b"/* This is a block comment */", TokenType::TK_NONE), // comment
+                Token {
+                    value: b"/* This is a block comment */".as_slice(),
+                    token_type: None, // This is a comment
+                },
             ),
             (
                 b"/* This is a\n\n block comment */".as_slice(),
-                Token::new(b"/* This is a\n\n block comment */", TokenType::TK_NONE), // comment
+                Token {
+                    value: b"/* This is a\n\n block comment */".as_slice(),
+                    token_type: None, // This is a comment
+                },
             ),
             (
                 b"/* This is a** block* comment */".as_slice(),
-                Token::new(b"/* This is a** block* comment */", TokenType::TK_NONE), // comment
+                Token {
+                    value: b"/* This is a** block* comment */".as_slice(),
+                    token_type: None, // This is a comment
+                },
             ),
-            (b"=".as_slice(), Token::new(b"=", TokenType::TK_EQ)),
-            (b"==".as_slice(), Token::new(b"==", TokenType::TK_EQ)),
-            (b"<".as_slice(), Token::new(b"<", TokenType::TK_LT)),
-            (b"<>".as_slice(), Token::new(b"<>", TokenType::TK_NE)),
-            (b"<=".as_slice(), Token::new(b"<=", TokenType::TK_LE)),
-            (b"<<".as_slice(), Token::new(b"<<", TokenType::TK_LSHIFT)),
-            (b">".as_slice(), Token::new(b">", TokenType::TK_GT)),
-            (b">=".as_slice(), Token::new(b">=", TokenType::TK_GE)),
-            (b">>".as_slice(), Token::new(b">>", TokenType::TK_RSHIFT)),
-            (b"!=".as_slice(), Token::new(b"!=", TokenType::TK_NE)),
-            (b"|".as_slice(), Token::new(b"|", TokenType::TK_BITOR)),
-            (b"||".as_slice(), Token::new(b"||", TokenType::TK_CONCAT)),
-            (b",".as_slice(), Token::new(b",", TokenType::TK_COMMA)),
-            (b"&".as_slice(), Token::new(b"&", TokenType::TK_BITAND)),
-            (b"~".as_slice(), Token::new(b"~", TokenType::TK_BITNOT)),
+            (
+                b"=".as_slice(),
+                Token {
+                    value: b"=".as_slice(),
+                    token_type: Some(TokenType::TK_EQ),
+                },
+            ),
+            (
+                b"==".as_slice(),
+                Token {
+                    value: b"==".as_slice(),
+                    token_type: Some(TokenType::TK_EQ),
+                },
+            ),
+            (
+                b"<".as_slice(),
+                Token {
+                    value: b"<".as_slice(),
+                    token_type: Some(TokenType::TK_LT),
+                },
+            ),
+            (
+                b"<>".as_slice(),
+                Token {
+                    value: b"<>".as_slice(),
+                    token_type: Some(TokenType::TK_NE),
+                },
+            ),
+            (
+                b"<=".as_slice(),
+                Token {
+                    value: b"<=".as_slice(),
+                    token_type: Some(TokenType::TK_LE),
+                },
+            ),
+            (
+                b"<<".as_slice(),
+                Token {
+                    value: b"<<".as_slice(),
+                    token_type: Some(TokenType::TK_LSHIFT),
+                },
+            ),
+            (
+                b">".as_slice(),
+                Token {
+                    value: b">".as_slice(),
+                    token_type: Some(TokenType::TK_GT),
+                },
+            ),
+            (
+                b">=".as_slice(),
+                Token {
+                    value: b">=".as_slice(),
+                    token_type: Some(TokenType::TK_GE),
+                },
+            ),
+            (
+                b">>".as_slice(),
+                Token {
+                    value: b">>".as_slice(),
+                    token_type: Some(TokenType::TK_RSHIFT),
+                },
+            ),
+            (
+                b"!=".as_slice(),
+                Token {
+                    value: b"!=".as_slice(),
+                    token_type: Some(TokenType::TK_NE),
+                },
+            ),
+            (
+                b"|".as_slice(),
+                Token {
+                    value: b"|".as_slice(),
+                    token_type: Some(TokenType::TK_BITOR),
+                },
+            ),
+            (
+                b"||".as_slice(),
+                Token {
+                    value: b"||".as_slice(),
+                    token_type: Some(TokenType::TK_CONCAT),
+                },
+            ),
+            (
+                b",".as_slice(),
+                Token {
+                    value: b",".as_slice(),
+                    token_type: Some(TokenType::TK_COMMA),
+                },
+            ),
+            (
+                b"&".as_slice(),
+                Token {
+                    value: b"&".as_slice(),
+                    token_type: Some(TokenType::TK_BITAND),
+                },
+            ),
+            (
+                b"~".as_slice(),
+                Token {
+                    value: b"~".as_slice(),
+                    token_type: Some(TokenType::TK_BITNOT),
+                },
+            ),
             (
                 b"'string'".as_slice(),
-                Token::new(b"'string'", TokenType::TK_STRING),
+                Token {
+                    value: b"'string'".as_slice(),
+                    token_type: Some(TokenType::TK_STRING),
+                },
             ),
             (
                 b"`identifier`".as_slice(),
-                Token::new(b"`identifier`", TokenType::TK_ID),
+                Token {
+                    value: b"`identifier`".as_slice(),
+                    token_type: Some(TokenType::TK_ID),
+                },
             ),
             (
                 b"\"quoted string\"".as_slice(),
-                Token::new(b"\"quoted string\"", TokenType::TK_ID),
+                Token {
+                    value: b"\"quoted string\"".as_slice(),
+                    token_type: Some(TokenType::TK_ID),
+                },
             ),
             (
                 b"\"\"\"triple \"\"quoted string\"\"\"".as_slice(),
-                Token::new(b"\"\"\"triple \"\"quoted string\"\"\"", TokenType::TK_ID),
+                Token {
+                    value: b"\"\"\"triple \"\"quoted string\"\"\"".as_slice(),
+                    token_type: Some(TokenType::TK_ID),
+                },
             ),
             (
                 b"```triple ``quoted string```".as_slice(),
-                Token::new(b"```triple ``quoted string```", TokenType::TK_ID),
+                Token {
+                    value: b"```triple ``quoted string```".as_slice(),
+                    token_type: Some(TokenType::TK_ID),
+                },
             ),
             (
                 b"'''triple ''quoted string'''".as_slice(),
-                Token::new(b"'''triple ''quoted string'''", TokenType::TK_STRING),
+                Token {
+                    value: b"'''triple ''quoted string'''".as_slice(),
+                    token_type: Some(TokenType::TK_STRING),
+                },
             ),
-            (b".".as_slice(), Token::new(b".", TokenType::TK_DOT)),
-            (b".123".as_slice(), Token::new(b".123", TokenType::TK_FLOAT)),
-            (b".456".as_slice(), Token::new(b".456", TokenType::TK_FLOAT)),
+            (
+                b".".as_slice(),
+                Token {
+                    value: b".".as_slice(),
+                    token_type: Some(TokenType::TK_DOT),
+                },
+            ),
+            (
+                b".123".as_slice(),
+                Token {
+                    value: b".123".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
+            ),
+            (
+                b".456".as_slice(),
+                Token {
+                    value: b".456".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
+            ),
             (
                 b".456e789".as_slice(),
-                Token::new(b".456e789", TokenType::TK_FLOAT),
+                Token {
+                    value: b".456e789".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
             ),
             (
                 b".456E-789".as_slice(),
-                Token::new(b".456E-789", TokenType::TK_FLOAT),
+                Token {
+                    value: b".456E-789".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
             ),
-            (b"123".as_slice(), Token::new(b"123", TokenType::TK_INTEGER)),
+            (
+                b"123".as_slice(),
+                Token {
+                    value: b"123".as_slice(),
+                    token_type: Some(TokenType::TK_INTEGER),
+                },
+            ),
             (
                 b"9_223_372_036_854_775_807".as_slice(),
-                Token::new(b"9_223_372_036_854_775_807", TokenType::TK_INTEGER),
+                Token {
+                    value: b"9_223_372_036_854_775_807".as_slice(),
+                    token_type: Some(TokenType::TK_INTEGER),
+                },
             ),
             (
                 b"123.456".as_slice(),
-                Token::new(b"123.456", TokenType::TK_FLOAT),
+                Token {
+                    value: b"123.456".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
             ),
             (
                 b"123e456".as_slice(),
-                Token::new(b"123e456", TokenType::TK_FLOAT),
+                Token {
+                    value: b"123e456".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
             ),
             (
                 b"123E-456".as_slice(),
-                Token::new(b"123E-456", TokenType::TK_FLOAT),
+                Token {
+                    value: b"123E-456".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
             ),
             (
                 b"0x1A3F".as_slice(),
-                Token::new(b"0x1A3F", TokenType::TK_INTEGER),
+                Token {
+                    value: b"0x1A3F".as_slice(),
+                    token_type: Some(TokenType::TK_INTEGER),
+                },
             ),
             (
                 b"0x1A3F_5678".as_slice(),
-                Token::new(b"0x1A3F_5678", TokenType::TK_INTEGER),
+                Token {
+                    value: b"0x1A3F_5678".as_slice(),
+                    token_type: Some(TokenType::TK_INTEGER),
+                },
             ),
             (
                 b"0x1A3F_5678e9".as_slice(),
-                Token::new(b"0x1A3F_5678e9", TokenType::TK_INTEGER),
+                Token {
+                    value: b"0x1A3F_5678e9".as_slice(),
+                    token_type: Some(TokenType::TK_INTEGER),
+                },
             ),
-            (b"[".as_slice(), Token::new(b"[", TokenType::TK_LBRACKET)),
-            (b"]".as_slice(), Token::new(b"]", TokenType::TK_RBRACKET)),
+            (
+                b"[identifier]".as_slice(),
+                Token {
+                    value: b"[identifier]".as_slice(),
+                    token_type: Some(TokenType::TK_ID),
+                },
+            ),
             (
                 b"?123".as_slice(),
-                Token::new(b"?123", TokenType::TK_VARIABLE),
+                Token {
+                    value: b"123".as_slice(), // '?' is not included in the value
+                    token_type: Some(TokenType::TK_VARIABLE),
+                },
             ),
-            (b"?".as_slice(), Token::new(b"?", TokenType::TK_VARIABLE)),
             (
                 b"$var_name".as_slice(),
-                Token::new(b"$var_name", TokenType::TK_VARIABLE),
+                Token {
+                    value: b"$var_name".as_slice(),
+                    token_type: Some(TokenType::TK_VARIABLE),
+                },
             ),
             (
                 b"@param".as_slice(),
-                Token::new(b"@param", TokenType::TK_VARIABLE),
+                Token {
+                    value: b"@param".as_slice(),
+                    token_type: Some(TokenType::TK_VARIABLE),
+                },
+            ),
+            (
+                b"#comment".as_slice(),
+                Token {
+                    value: b"#comment".as_slice(),
+                    token_type: Some(TokenType::TK_VARIABLE),
+                },
             ),
             (
                 b":named_param".as_slice(),
-                Token::new(b":named_param", TokenType::TK_VARIABLE),
+                Token {
+                    value: b":named_param".as_slice(),
+                    token_type: Some(TokenType::TK_VARIABLE),
+                },
             ),
             (
                 b"x'1234567890abcdef'".as_slice(),
-                Token::new(b"1234567890abcdef", TokenType::TK_BLOB), // hex payload only
+                Token {
+                    value: b"1234567890abcdef".as_slice(), // 'x' is not included in the value
+                    token_type: Some(TokenType::TK_BLOB),
+                },
             ),
             (
                 b"X'1234567890abcdef'".as_slice(),
-                Token::new(b"1234567890abcdef", TokenType::TK_BLOB), // hex payload only
+                Token {
+                    value: b"1234567890abcdef".as_slice(), // 'X' is not included in the value
+                    token_type: Some(TokenType::TK_BLOB),
+                },
             ),
-            (b"x''".as_slice(), Token::new(b"", TokenType::TK_BLOB)),
-            (b"X''".as_slice(), Token::new(b"", TokenType::TK_BLOB)),
+            (
+                b"x''".as_slice(),
+                Token {
+                    value: b"".as_slice(), // 'x' is not included in the value
+                    token_type: Some(TokenType::TK_BLOB),
+                },
+            ),
+            (
+                b"X''".as_slice(),
+                Token {
+                    value: b"".as_slice(), // 'X' is not included in the value
+                    token_type: Some(TokenType::TK_BLOB),
+                },
+            ),
             (
                 b"wHeRe".as_slice(),
-                Token::new(b"wHeRe", TokenType::TK_WHERE),
+                Token {
+                    value: b"wHeRe".as_slice(), // 'X' is not included in the value
+                    token_type: Some(TokenType::TK_WHERE),
+                },
             ),
             (
                 b"wHeRe123".as_slice(),
-                Token::new(b"wHeRe123", TokenType::TK_ID),
+                Token {
+                    value: b"wHeRe123".as_slice(), // 'X' is not included in the value
+                    token_type: Some(TokenType::TK_ID),
+                },
             ),
             (
                 b"wHeRe_123".as_slice(),
-                Token::new(b"wHeRe_123", TokenType::TK_ID),
+                Token {
+                    value: b"wHeRe_123".as_slice(), // 'X' is not included in the value
+                    token_type: Some(TokenType::TK_ID),
+                },
             ),
             // issue 2933
-            (b"1.e5".as_slice(), Token::new(b"1.e5", TokenType::TK_FLOAT)),
-            // issue 3425
-            (b"/*".as_slice(), Token::new(b"/*", TokenType::TK_NONE)),
-            (b"/**".as_slice(), Token::new(b"/**", TokenType::TK_NONE)),
+            (
+                b"1.e5".as_slice(),
+                Token {
+                    value: b"1.e5".as_slice(),
+                    token_type: Some(TokenType::TK_FLOAT),
+                },
+            ),
         ];
 
         for (input, expected) in test_cases {
             let mut lexer = Lexer::new(input);
             let token = lexer.next().unwrap().unwrap();
-            let expect_value = unsafe { expected.to_utf8_unchecked() };
-            let got_value = unsafe { token.to_utf8_unchecked() };
+            let expect_value = unsafe { String::from_utf8_unchecked(expected.value.to_vec()) };
+            let got_value = unsafe { String::from_utf8_unchecked(token.value.to_vec()) };
             println!("Input: {input:?}, Expected: {expect_value:?}, Got: {got_value:?}");
             assert_eq!(got_value, expect_value);
             assert_eq!(token.token_type, expected.token_type);
@@ -1131,7 +1289,6 @@ mod tests {
             ("COLLATE", TokenType::TK_COLLATE),
             ("COLUMN", TokenType::TK_COLUMNKW),
             ("COMMIT", TokenType::TK_COMMIT),
-            ("CONCURRENT", TokenType::TK_CONCURRENT),
             ("CONFLICT", TokenType::TK_CONFLICT),
             ("CONSTRAINT", TokenType::TK_CONSTRAINT),
             ("CREATE", TokenType::TK_CREATE),
@@ -1206,7 +1363,6 @@ mod tests {
             ("ON", TokenType::TK_ON),
             ("OR", TokenType::TK_OR),
             ("ORDER", TokenType::TK_ORDER),
-            ("OPTIMIZE", TokenType::TK_OPTIMIZE),
             ("OTHERS", TokenType::TK_OTHERS),
             ("OUTER", TokenType::TK_JOIN_KW),
             ("OVER", TokenType::TK_OVER),
@@ -1255,7 +1411,6 @@ mod tests {
             ("WHERE", TokenType::TK_WHERE),
             ("WINDOW", TokenType::TK_WINDOW),
             ("WITH", TokenType::TK_WITH),
-            ("WITHIN", TokenType::TK_WITHIN),
             ("WITHOUT", TokenType::TK_WITHOUT),
         ]);
 
@@ -1285,39 +1440,105 @@ mod tests {
             (
                 b"    SELECT 1".as_slice(),
                 vec![
-                    Token::new(b"    ", TokenType::TK_NONE),
-                    Token::new(b"SELECT", TokenType::TK_SELECT),
-                    Token::new(b" ", TokenType::TK_NONE),
-                    Token::new(b"1", TokenType::TK_INTEGER),
+                    Token {
+                        value: b"    ".as_slice(),
+                        token_type: None,
+                    },
+                    Token {
+                        value: b"SELECT".as_slice(),
+                        token_type: Some(TokenType::TK_SELECT),
+                    },
+                    Token {
+                        value: b" ".as_slice(),
+                        token_type: None,
+                    },
+                    Token {
+                        value: b"1".as_slice(),
+                        token_type: Some(TokenType::TK_INTEGER),
+                    },
                 ],
             ),
             (
                 b"INSERT INTO users VALUES (1,2,3)".as_slice(),
                 vec![
-                    Token::new(b"INSERT", TokenType::TK_INSERT),
-                    Token::new(b" ", TokenType::TK_NONE),
-                    Token::new(b"INTO", TokenType::TK_INTO),
-                    Token::new(b" ", TokenType::TK_NONE),
-                    Token::new(b"users", TokenType::TK_ID),
-                    Token::new(b" ", TokenType::TK_NONE),
-                    Token::new(b"VALUES", TokenType::TK_VALUES),
-                    Token::new(b" ", TokenType::TK_NONE),
-                    Token::new(b"(", TokenType::TK_LP),
-                    Token::new(b"1", TokenType::TK_INTEGER),
-                    Token::new(b",", TokenType::TK_COMMA),
-                    Token::new(b"2", TokenType::TK_INTEGER),
-                    Token::new(b",", TokenType::TK_COMMA),
-                    Token::new(b"3", TokenType::TK_INTEGER),
-                    Token::new(b")", TokenType::TK_RP),
+                    Token {
+                        value: b"INSERT".as_slice(),
+                        token_type: Some(TokenType::TK_INSERT),
+                    },
+                    Token {
+                        value: b" ".as_slice(),
+                        token_type: None,
+                    },
+                    Token {
+                        value: b"INTO".as_slice(),
+                        token_type: Some(TokenType::TK_INTO),
+                    },
+                    Token {
+                        value: b" ".as_slice(),
+                        token_type: None,
+                    },
+                    Token {
+                        value: b"users".as_slice(),
+                        token_type: Some(TokenType::TK_ID),
+                    },
+                    Token {
+                        value: b" ".as_slice(),
+                        token_type: None,
+                    },
+                    Token {
+                        value: b"VALUES".as_slice(),
+                        token_type: Some(TokenType::TK_VALUES),
+                    },
+                    Token {
+                        value: b" ".as_slice(),
+                        token_type: None,
+                    },
+                    Token {
+                        value: b"(".as_slice(),
+                        token_type: Some(TokenType::TK_LP),
+                    },
+                    Token {
+                        value: b"1".as_slice(),
+                        token_type: Some(TokenType::TK_INTEGER),
+                    },
+                    Token {
+                        value: b",".as_slice(),
+                        token_type: Some(TokenType::TK_COMMA),
+                    },
+                    Token {
+                        value: b"2".as_slice(),
+                        token_type: Some(TokenType::TK_INTEGER),
+                    },
+                    Token {
+                        value: b",".as_slice(),
+                        token_type: Some(TokenType::TK_COMMA),
+                    },
+                    Token {
+                        value: b"3".as_slice(),
+                        token_type: Some(TokenType::TK_INTEGER),
+                    },
+                    Token {
+                        value: b")".as_slice(),
+                        token_type: Some(TokenType::TK_RP),
+                    },
                 ],
             ),
             // issue 2933
             (
                 b"u.email".as_slice(),
                 vec![
-                    Token::new(b"u", TokenType::TK_ID),
-                    Token::new(b".", TokenType::TK_DOT),
-                    Token::new(b"email", TokenType::TK_ID),
+                    Token {
+                        value: b"u".as_slice(),
+                        token_type: Some(TokenType::TK_ID),
+                    },
+                    Token {
+                        value: b".".as_slice(),
+                        token_type: Some(TokenType::TK_DOT),
+                    },
+                    Token {
+                        value: b"email".as_slice(),
+                        token_type: Some(TokenType::TK_ID),
+                    },
                 ],
             ),
         ];

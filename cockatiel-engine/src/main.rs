@@ -17,13 +17,17 @@ use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
 
 use uuid::Uuid;
 
+use module_registry::ModuleRegistry;
+
+mod keymap;
+mod module_auto_registry;
 mod tui;
 
 pub mod cockatiel_protobuf {
     include!(concat!(env!("OUT_DIR"), "/cockatiel_protobuf.rs"));
 }
 
-use cockatiel_protobuf::{container::Payload, Container};
+use cockatiel_protobuf::{Container, container::Payload};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModuleEntry {
@@ -129,6 +133,27 @@ fn log_event(state: &Arc<Mutex<EngineState>>, text: impl Into<String>) {
     if state.timeline.len() > 100 {
         state.timeline.remove(0);
     }
+}
+
+fn module_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(custom) = env::var("COCKATIEL_MODULE_PATHS") {
+        paths.extend(env::split_paths(&custom));
+    }
+
+    paths.push(PathBuf::from("./modules"));
+    paths.push(PathBuf::from("./cockatiel-engine/modules"));
+
+    if let Ok(current) = env::current_dir() {
+        paths.push(current.join("modules"));
+        paths.push(current.join("cockatiel-engine/modules"));
+    }
+
+    paths.sort();
+    paths.dedup();
+
+    paths
 }
 
 fn get_file(path: &str) -> Result<String, String> {
@@ -302,7 +327,7 @@ async fn broadcast_stage(
 
         modules
             .values()
-            .filter(|module| module.state == ModuleState::Running && names.contains(&module.name))
+            .filter(|module| module.state == ModuleState::Running)
             .filter_map(|module| module.sender.clone())
             .collect::<Vec<_>>()
     };
@@ -400,12 +425,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         r#"
                          X
-                 XXXXXXXXX     XXX
-              XXXXXXXXXXXXXXXXX
-             XX    XXXXXXXXXXXX
-         XXXX      XXXXXXXXXXXXXX
-        XXXXXX    XXXXXXXXXXX
-         XXXXXXXXXXXXXXXXX
+              XXXXXXXXXXXX  XXX
+            XXXXXXXXXXXXXXXXX
+           XXX    XXXXXXXXXXX
+        XXXXX      XXXXXXXXXXXXXX
+       XXXXXXX    XXXXXXXXXXX
+        XXXXXXXXXXXXXXXXXX
            XXXXXXXXXXXXXXX
            XXX XXXXXXX XXX
            XX    XXXX    XX
@@ -413,6 +438,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
               -by vulbyte
 "#
     );
+
+    let mut module_registry = ModuleRegistry::new();
+
+    let search_paths = module_search_paths();
+
+    log_event(&ui_state, "Searching for Cockatiel modules...");
+
+    match module_registry.discover(&search_paths) {
+        Ok(()) => {}
+
+        Err(errors) => {
+            for error in errors {
+                log_event(&ui_state, format!("Module discovery: {}", error));
+            }
+        }
+    }
+
+    for module in module_registry.values() {
+        log_event(
+            &ui_state,
+            format!(
+                "Found module {} v{} at {}",
+                module.manifest.name,
+                module.manifest.version,
+                module.directory.display()
+            ),
+        );
+    }
 
     let (config_string, config_path) = verify_config().await?;
 

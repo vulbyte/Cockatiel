@@ -1,20 +1,20 @@
-use super::{Buffer, Completion, File, FileSyncType, OpenFlags, IO};
+use super::{Buffer, Completion, File, OpenFlags, IO};
 use crate::ext::VfsMod;
-use crate::io::clock::{Clock, DefaultClock, MonotonicInstant, WallClockInstant};
+use crate::io::clock::{Clock, Instant};
 use crate::io::CompletionInner;
-use crate::sync::Arc;
 use crate::{LimboError, Result};
 use std::ffi::{c_void, CString};
 use std::ptr::NonNull;
+use std::sync::Arc;
 use turso_ext::{BufferRef, IOCallback, SendPtr, VfsFileImpl, VfsImpl};
 
 impl Clock for VfsMod {
-    fn current_time_monotonic(&self) -> MonotonicInstant {
-        DefaultClock.current_time_monotonic()
-    }
-
-    fn current_time_wall_clock(&self) -> WallClockInstant {
-        DefaultClock.current_time_wall_clock()
+    fn now(&self) -> Instant {
+        let now = chrono::Local::now();
+        Instant {
+            secs: now.timestamp(),
+            micros: now.timestamp_subsec_micros(),
+        }
     }
 }
 
@@ -45,7 +45,7 @@ impl IO for VfsMod {
         Ok(())
     }
 
-    fn step(&self) -> Result<()> {
+    fn run_once(&self) -> Result<()> {
         if self.ctx.is_null() {
             return Err(LimboError::ExtensionError("VFS is null".to_string()));
         }
@@ -86,14 +86,14 @@ impl VfsMod {
 /// that the into_raw/from_raw contract will hold
 unsafe extern "C" fn callback_fn(result: i32, ctx: SendPtr) {
     let completion = Completion {
-        inner: (Some(Arc::from_raw(ctx.inner().as_ptr() as *mut CompletionInner))),
+        inner: (Arc::from_raw(ctx.inner().as_ptr() as *mut CompletionInner)),
     };
     completion.complete(result);
 }
 
 fn to_callback(c: Completion) -> IOCallback {
     IOCallback::new(callback_fn, unsafe {
-        NonNull::new_unchecked(Arc::into_raw(c.get_inner().clone()) as *mut c_void)
+        NonNull::new_unchecked(Arc::into_raw(c.inner) as *mut c_void)
     })
 }
 
@@ -150,11 +150,12 @@ impl File for VfsFileImpl {
         }
         let vfs = unsafe { &*self.vfs };
         let res = unsafe {
-            let len = buffer.len();
+            let buf = buffer.clone();
+            let len = buf.len();
             let cb = to_callback(c.clone());
             (vfs.write)(
                 self.file,
-                BufferRef::new(buffer.as_ptr() as *mut u8, len),
+                BufferRef::new(buf.as_ptr() as *mut u8, len),
                 pos as i64,
                 cb,
             )
@@ -162,13 +163,10 @@ impl File for VfsFileImpl {
         if res.is_error() {
             return Err(LimboError::ExtensionError("pwrite failed".to_string()));
         }
-        // Keep the buffer alive until the VFS completion fires — the extension
-        // may process the write asynchronously after this function returns.
-        c.keep_write_buffer_alive(buffer);
         Ok(c)
     }
 
-    fn sync(&self, c: Completion, _sync_type: FileSyncType) -> Result<Completion> {
+    fn sync(&self, c: Completion) -> Result<Completion> {
         if self.vfs.is_null() {
             c.complete(-1);
             return Err(LimboError::ExtensionError("VFS is null".to_string()));

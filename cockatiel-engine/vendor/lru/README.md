@@ -1,6 +1,7 @@
 # LRU Cache
 
 [![Build Badge]][build status]
+[![Codecov Badge]][coverage status]
 [![crates.io Badge]][crates.io package]
 [![docs.rs Badge]][docs.rs documentation]
 [![License Badge]][license]
@@ -11,7 +12,7 @@ An implementation of a LRU cache. The cache supports `put`, `get`, `get_mut` and
 all of which are O(1). This crate was heavily influenced by the [LRU Cache implementation in an
 earlier version of Rust's std::collections crate].
 
-The MSRV for this crate is 1.70.0.
+The MSRV for this crate is 1.64.0.
 
 ## Example
 
@@ -50,6 +51,8 @@ fn main() {
 
 [build badge]: https://github.com/jeromefroe/lru-rs/actions/workflows/main.yml/badge.svg
 [build status]: https://github.com/jeromefroe/lru-rs/actions/workflows/main.yml
+[codecov badge]: https://codecov.io/gh/jeromefroe/lru-rs/branch/master/graph/badge.svg
+[coverage status]: https://codecov.io/gh/jeromefroe/lru-rs
 [crates.io badge]: https://img.shields.io/crates/v/lru.svg
 [crates.io package]: https://crates.io/crates/lru/
 [documentation]: https://docs.rs/lru/

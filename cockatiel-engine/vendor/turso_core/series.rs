@@ -1,4 +1,4 @@
-use crate::sync::Arc;
+use std::sync::Arc;
 
 use turso_ext::{
     Connection, ConstraintInfo, ConstraintOp, ConstraintUsage, ExtensionApi, IndexInfo,
@@ -13,8 +13,11 @@ pub fn register_extension(ext_api: &mut ExtensionApi) {
 }
 
 macro_rules! extract_arg_integer {
-    ($args:expr, $idx:expr) => {
-        $args.get($idx).and_then(|v| v.to_integer())
+    ($args:expr, $idx:expr, $unknown_type_default:expr) => {
+        $args
+            .get($idx)
+            .map(|v| v.to_integer().unwrap_or($unknown_type_default))
+            .unwrap_or(-1)
     };
 }
 
@@ -164,24 +167,20 @@ impl VTabCursor for GenerateSeriesCursor {
     type Error = ResultCode;
 
     fn filter(&mut self, args: &[Value], idx_info: Option<(&str, i32)>) -> ResultCode {
-        let mut start: Option<i64> = None;
-        let mut stop: Option<i64> = None;
+        let mut start = -1;
+        let mut stop = -1;
         let mut step = 1;
-        // SQLite default for stop when it is omitted
-        const DEFAULT_STOP_OMITTED: Option<i64> = Some(u32::MAX as i64);
 
         if let Some((_, idx_num)) = idx_info {
             let mut arg_idx = 0;
             // For the semantics of `idx_num`, see the comment in the `best_index` method.
             if idx_num & 1 != 0 {
-                start = extract_arg_integer!(args, arg_idx);
+                start = extract_arg_integer!(args, arg_idx, -1);
                 arg_idx += 1;
             }
             if idx_num & 2 != 0 {
-                stop = extract_arg_integer!(args, arg_idx);
+                stop = extract_arg_integer!(args, arg_idx, i64::MAX);
                 arg_idx += 1;
-            } else {
-                stop = DEFAULT_STOP_OMITTED;
             }
             if idx_num & 4 != 0 {
                 step = args
@@ -191,10 +190,10 @@ impl VTabCursor for GenerateSeriesCursor {
             }
         }
 
-        if start.is_none() {
+        if start == -1 {
             return ResultCode::InvalidArgs;
         }
-        if stop.is_none() {
+        if stop == -1 {
             return ResultCode::EOF; // Sqlite returns an empty series for wacky args
         }
 
@@ -203,16 +202,16 @@ impl VTabCursor for GenerateSeriesCursor {
             step = 1;
         }
 
-        self.start = start.unwrap();
+        self.start = start;
         self.step = step;
-        self.stop = stop.unwrap();
+        self.stop = stop;
 
         // Set initial value based on range validity
         // For invalid input SQLite returns an empty series
         self.current = if self.is_invalid_range() {
             return ResultCode::EOF;
         } else {
-            self.start
+            start
         };
 
         ResultCode::OK

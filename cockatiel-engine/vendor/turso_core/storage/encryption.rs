@@ -1,5 +1,4 @@
 #![allow(unused_variables, dead_code)]
-use crate::turso_assert;
 use crate::{LimboError, Result};
 use aegis::aegis128l::Aegis128L;
 use aegis::aegis128x2::Aegis128X2;
@@ -8,70 +7,10 @@ use aegis::aegis256::Aegis256;
 use aegis::aegis256x2::Aegis256X2;
 use aegis::aegis256x4::Aegis256X4;
 use aes_gcm::{
-    aead::{Aead, AeadCore, AeadInPlace, KeyInit, OsRng},
+    aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes128Gcm, Aes256Gcm, Key, Nonce,
 };
-use turso_macros::{match_ignore_ascii_case, AtomicEnum};
-
-/// Encryption Scheme
-/// We support two major algorithms: AEGIS, AES GCM. These algorithms picked so that they also do
-/// verification of the ciphertext, so we don't need to implement. That is if the page is corrupted
-/// (or tampered), then we will know if we got garbage bytes post decryption.
-///
-/// We perform encryption at the page level, i.e., each page is encrypted and decrypted individually.
-/// We store the nonce and tag (or the verification bits) in the page itself.  We also generate a
-/// random nonce every time we encrypt a page.
-///
-/// Example: Assume the page size is 4096 bytes and we use AEGIS 256. So we reserve the last 48 bytes
-/// for the nonce (32 bytes) and tag (16 bytes).
-///
-/// ```ignore
-///             Unencrypted Page              Encrypted Page
-///             ┌───────────────┐            ┌───────────────┐
-///             │               │            │               │
-///             │ Page Content  │            │   Encrypted   │
-///             │ (4048 bytes)  │  ────────► │    Content    │
-///             │               │            │ (4048 bytes)  │
-///             ├───────────────┤            ├───────────────┤
-///             │   Reserved    │            │    Tag (16)   │
-///             │  (48 bytes)   │            ├───────────────┤
-///             │   [empty]     │            │   Nonce (32)  │
-///             └───────────────┘            └───────────────┘
-///                4096 bytes                   4096 bytes
-/// ```
-///
-/// The above applies to all the pages except Page 1. The page 1 contains the SQLite header (the
-/// first 100 bytes). Specifically, the bytes 16 to 24 contain metadata which is required to
-/// initialise the connection, which happens before we can setup the encryption context. So, we
-/// don't encrypt the header but instead use the header data as additional data (AD) for the
-/// encryption of the rest of the page. This provides us protection against tampering and
-/// corruption for the unencrypted portion.
-///
-/// On disk, the encrypted page 1 contains special bytes replacing the SQLite's magic bytes (the
-/// first 16 bytes):
-///
-/// ```ignore
-///                    Turso Header (16 bytes)
-///        ┌─────────┬───────┬────────┬──────────────────┐
-///        │         │       │        │                  │
-///        │  Turso  │Version│ Cipher │     Unused       │
-///        │  (5)    │ (1)   │  (1)   │    (9 bytes)     │
-///        │         │       │        │                  │
-///        └─────────┴───────┴────────┴──────────────────┘
-///         0-4      5       6        7-15
-///
-///        Standard SQLite Header: "SQLite format 3\0" (16 bytes)
-///                            ↓
-///        Turso Encrypted Header: "Turso" + Version + Cipher ID + Unused
-/// ```
-///
-/// constants used for the Turso page header in the encrypted dbs.
-pub const TURSO_HEADER_PREFIX: &[u8] = b"Turso";
-pub const SQLITE_HEADER: &[u8] = b"SQLite format 3\0";
-const TURSO_VERSION: u8 = 0x00;
-const VERSION_OFFSET: usize = 5;
-const CIPHER_OFFSET: usize = 6;
-const TURSO_HEADER_SIZE: usize = 16;
+use turso_macros::match_ignore_ascii_case;
 
 #[derive(Clone)]
 pub enum EncryptionKey {
@@ -200,18 +139,6 @@ macro_rules! define_aegis_cipher {
             }
 
             fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; $nonce_size], ad: &[u8]) -> Result<Vec<u8>> {
-                let mut out = Vec::with_capacity(ciphertext.len().saturating_sub(Self::TAG_SIZE));
-                self.decrypt_into(ciphertext, nonce, ad, &mut out)?;
-                Ok(out)
-            }
-
-            fn decrypt_into(
-                &self,
-                ciphertext: &[u8],
-                nonce: &[u8; $nonce_size],
-                ad: &[u8],
-                out: &mut Vec<u8>,
-            ) -> Result<()> {
                 if ciphertext.len() < Self::TAG_SIZE {
                     return Err(LimboError::from(CipherError::CiphertextTooShort { cipher: $name }));
                 }
@@ -220,10 +147,8 @@ macro_rules! define_aegis_cipher {
 
                 let key_bytes = self.key.$key_method()
                     .ok_or_else(|| -> LimboError { CipherError::InvalidKeySize { cipher: $name, expected: $key_size }.into() })?;
-                out.clear();
-                out.extend_from_slice(ct);
                 <$cipher_type>::new(key_bytes, nonce)
-                    .decrypt_in_place(out.as_mut_slice(), &tag_array, ad)
+                    .decrypt(ct, &tag_array, ad)
                     .map_err(|_| -> LimboError { CipherError::DecryptionFailed { cipher: $name }.into() })
             }
         }
@@ -264,12 +189,9 @@ macro_rules! define_aes_gcm_cipher {
                 })
             }
 
-            fn encrypt(&self, plaintext: &[u8], ad: &[u8]) -> Result<(Vec<u8>, [u8; 12])> {
+            fn encrypt(&self, plaintext: &[u8], _ad: &[u8]) -> Result<(Vec<u8>, [u8; 12])> {
                 let nonce = <$cipher_type>::generate_nonce(&mut OsRng);
-                let ciphertext = self.cipher.encrypt(&nonce, aes_gcm::aead::Payload {
-                    msg: plaintext,
-                    aad: ad,
-                }).map_err(|e| {
+                let ciphertext = self.cipher.encrypt(&nonce, plaintext).map_err(|e| {
                     LimboError::InternalError(format!("{} encryption failed: {e:?}", $name))
                 })?;
                 let mut nonce_array = [0u8; 12];
@@ -277,24 +199,10 @@ macro_rules! define_aes_gcm_cipher {
                 Ok((ciphertext, nonce_array))
             }
 
-            fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; 12], ad: &[u8]) -> Result<Vec<u8>> {
-                let mut out = Vec::with_capacity(ciphertext.len().saturating_sub(Self::TAG_SIZE));
-                self.decrypt_into(ciphertext, nonce, ad, &mut out)?;
-                Ok(out)
-            }
-
-            fn decrypt_into(
-                &self,
-                ciphertext: &[u8],
-                nonce: &[u8; 12],
-                ad: &[u8],
-                out: &mut Vec<u8>,
-            ) -> Result<()> {
+            fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; 12], _ad: &[u8]) -> Result<Vec<u8>> {
                 let nonce = Nonce::from_slice(nonce);
-                out.clear();
-                out.extend_from_slice(ciphertext);
                 self.cipher
-                    .decrypt_in_place(nonce, ad, out)
+                    .decrypt(nonce, ciphertext)
                     .map_err(|_| -> LimboError { CipherError::DecryptionFailed { cipher: $name }.into() })
             }
         }
@@ -345,9 +253,8 @@ define_aegis_cipher!(
     "AEGIS-128X4"
 );
 
-#[derive(Debug, AtomicEnum, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CipherMode {
-    None,
     Aes128Gcm,
     Aes256Gcm,
     Aegis256,
@@ -390,7 +297,6 @@ impl std::fmt::Display for CipherMode {
             CipherMode::Aegis128X4 => write!(f, "aegis128x4"),
             CipherMode::Aegis256X2 => write!(f, "aegis256x2"),
             CipherMode::Aegis256X4 => write!(f, "aegis256x4"),
-            CipherMode::None => write!(f, "None"),
         }
     }
 }
@@ -408,7 +314,6 @@ impl CipherMode {
             CipherMode::Aegis128L => 16,
             CipherMode::Aegis128X2 => 16,
             CipherMode::Aegis128X4 => 16,
-            CipherMode::None => 0,
         }
     }
 
@@ -423,7 +328,6 @@ impl CipherMode {
             CipherMode::Aegis128L => 16,
             CipherMode::Aegis128X2 => 16,
             CipherMode::Aegis128X4 => 16,
-            CipherMode::None => 0,
         }
     }
 
@@ -438,45 +342,12 @@ impl CipherMode {
             CipherMode::Aegis128L => 16,
             CipherMode::Aegis128X2 => 16,
             CipherMode::Aegis128X4 => 16,
-            CipherMode::None => 0,
         }
     }
 
     /// Returns the total metadata size (nonce + tag) for this cipher mode.
     pub fn metadata_size(&self) -> usize {
         self.nonce_size() + self.tag_size()
-    }
-
-    /// Returns the cipher identifier byte for Turso header
-    pub fn cipher_id(&self) -> u8 {
-        match self {
-            CipherMode::Aes128Gcm => 1,
-            CipherMode::Aes256Gcm => 2,
-            CipherMode::Aegis256 => 3,
-            CipherMode::Aegis256X2 => 4,
-            CipherMode::Aegis256X4 => 5,
-            CipherMode::Aegis128L => 6,
-            CipherMode::Aegis128X2 => 7,
-            CipherMode::Aegis128X4 => 8,
-            CipherMode::None => 0,
-        }
-    }
-
-    /// Creates a CipherMode from cipher identifier byte. This is used when read from Turso header.
-    pub fn from_cipher_id(id: u8) -> Result<Self> {
-        match id {
-            1 => Ok(CipherMode::Aes128Gcm),
-            2 => Ok(CipherMode::Aes256Gcm),
-            3 => Ok(CipherMode::Aegis256),
-            4 => Ok(CipherMode::Aegis256X2),
-            5 => Ok(CipherMode::Aegis256X4),
-            6 => Ok(CipherMode::Aegis128L),
-            7 => Ok(CipherMode::Aegis128X2),
-            8 => Ok(CipherMode::Aegis128X4),
-            _ => Err(LimboError::InvalidArgument(format!(
-                "Unknown cipher ID: {id}"
-            ))),
-        }
     }
 }
 
@@ -507,7 +378,7 @@ impl std::fmt::Debug for Cipher {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EncryptionContext {
     cipher_mode: CipherMode,
     cipher: Cipher,
@@ -535,11 +406,6 @@ impl EncryptionContext {
             CipherMode::Aegis128L => Cipher::Aegis128L(Box::new(Aegis128LCipher::new(key))),
             CipherMode::Aegis128X2 => Cipher::Aegis128X2(Box::new(Aegis128X2Cipher::new(key))),
             CipherMode::Aegis128X4 => Cipher::Aegis128X4(Box::new(Aegis128X4Cipher::new(key))),
-            CipherMode::None => {
-                return Err(LimboError::InvalidArgument(
-                    "must select valid CipherMode".into(),
-                ))
-            }
         };
         Ok(Self {
             cipher_mode,
@@ -557,98 +423,11 @@ impl EncryptionContext {
         self.cipher_mode.metadata_size() as u8
     }
 
-    pub fn encrypt_chunk(&self, plaintext: &[u8], aad: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
-        self.encrypt_raw_with_ad(plaintext, aad)
-    }
-
-    pub fn decrypt_chunk(&self, ciphertext: &[u8], nonce: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-        self.decrypt_raw_with_ad(ciphertext, nonce, aad)
-    }
-
-    pub fn decrypt_chunk_into(
-        &self,
-        ciphertext: &[u8],
-        nonce: &[u8],
-        aad: &[u8],
-        out: &mut Vec<u8>,
-    ) -> Result<()> {
-        self.decrypt_raw_with_ad_into(ciphertext, nonce, aad, out)
-    }
-
-    pub fn nonce_size(&self) -> usize {
-        self.cipher_mode.nonce_size()
-    }
-
-    pub fn tag_size(&self) -> usize {
-        self.cipher_mode.tag_size()
-    }
-
-    /// Creates Turso header for encrypted page 1
-    fn create_turso_header(&self) -> [u8; TURSO_HEADER_SIZE] {
-        let mut header = [0u8; TURSO_HEADER_SIZE];
-
-        // "Turso" prefix (5 bytes)
-        header[..TURSO_HEADER_PREFIX.len()].copy_from_slice(TURSO_HEADER_PREFIX);
-
-        // version byte (1 byte)
-        header[VERSION_OFFSET] = TURSO_VERSION;
-
-        // cipher identifier (1 byte)
-        header[CIPHER_OFFSET] = self.cipher_mode.cipher_id();
-
-        // remaining unused 9 bytes
-        header
-    }
-
-    /// Validates and extracts cipher mode from Turso header
-    fn validate_turso_header(&self, header: &[u8]) -> Result<()> {
-        if header.len() < TURSO_HEADER_SIZE {
-            return Err(LimboError::InternalError(
-                "Header too short for encrypted Turso db".into(),
-            ));
-        }
-
-        if &header[..TURSO_HEADER_PREFIX.len()] != TURSO_HEADER_PREFIX {
-            return Err(LimboError::InternalError(
-                "Invalid Turso header: prefix mismatch".into(),
-            ));
-        }
-
-        let version = header[VERSION_OFFSET];
-        if version != TURSO_VERSION {
-            return Err(LimboError::InternalError(format!(
-                "Unsupported Turso header version: expected {TURSO_VERSION}, got {version}"
-            )));
-        }
-
-        let cipher_id = header[CIPHER_OFFSET];
-        let header_cipher = CipherMode::from_cipher_id(cipher_id)?;
-        if header_cipher != self.cipher_mode {
-            return Err(LimboError::InternalError(format!(
-                "Cipher mode mismatch: expected {:?} (ID {}), got {:?} (ID {})",
-                self.cipher_mode,
-                self.cipher_mode.cipher_id(),
-                header_cipher,
-                cipher_id
-            )));
-        }
-
-        if header[CIPHER_OFFSET + 1..TURSO_HEADER_SIZE]
-            .iter()
-            .any(|&b| b != 0)
-        {
-            return Err(LimboError::InternalError(
-                "Invalid Turso header: unused bytes must be zero".into(),
-            ));
-        }
-        Ok(())
-    }
-
     #[cfg(feature = "encryption")]
     pub fn encrypt_page(&self, page: &[u8], page_id: usize) -> Result<Vec<u8>> {
-        use crate::storage::sqlite3_ondisk::DatabaseHeader;
-        if page_id == DatabaseHeader::PAGE_ID {
-            return self.encrypt_page_1(page);
+        if page_id == 1 {
+            tracing::debug!("skipping encryption for page 1 (database header)");
+            return Ok(page.to_vec());
         }
         tracing::debug!("encrypting page {}", page_id);
         assert_eq!(
@@ -660,15 +439,11 @@ impl EncryptionContext {
 
         let metadata_size = self.cipher_mode.metadata_size();
         let reserved_bytes = &page[self.page_size - metadata_size..];
-
-        #[cfg(debug_assertions)]
-        {
-            let reserved_bytes_zeroed = reserved_bytes.iter().all(|&b| b == 0);
-            turso_assert!(
-                reserved_bytes_zeroed,
-                "last reserved bytes must be empty/zero, but found non-zero bytes"
-            );
-        }
+        let reserved_bytes_zeroed = reserved_bytes.iter().all(|&b| b == 0);
+        assert!(
+            reserved_bytes_zeroed,
+            "last reserved bytes must be empty/zero, but found non-zero bytes"
+        );
 
         let payload = &page[..self.page_size - metadata_size];
         let (encrypted, nonce) = self.encrypt_raw(payload)?;
@@ -695,9 +470,9 @@ impl EncryptionContext {
 
     #[cfg(feature = "encryption")]
     pub fn decrypt_page(&self, encrypted_page: &[u8], page_id: usize) -> Result<Vec<u8>> {
-        use crate::storage::sqlite3_ondisk::DatabaseHeader;
-        if page_id == DatabaseHeader::PAGE_ID {
-            return self.decrypt_page_1(encrypted_page);
+        if page_id == 1 {
+            tracing::debug!("skipping decryption for page 1 (database header)");
+            return Ok(encrypted_page.to_vec());
         }
         tracing::debug!("decrypting page {}", page_id);
         assert_eq!(
@@ -708,11 +483,12 @@ impl EncryptionContext {
         );
 
         let nonce_size = self.cipher_mode.nonce_size();
-        let nonce_offset = encrypted_page.len() - nonce_size;
-        let payload = &encrypted_page[..nonce_offset];
-        let nonce = &encrypted_page[nonce_offset..];
+        let nonce_start = encrypted_page.len() - nonce_size;
+        let payload = &encrypted_page[..nonce_start];
+        let nonce = &encrypted_page[nonce_start..];
 
         let decrypted_data = self.decrypt_raw(payload, nonce)?;
+
         let metadata_size = self.cipher_mode.metadata_size();
         assert_eq!(
             decrypted_data.len(),
@@ -724,128 +500,6 @@ impl EncryptionContext {
         let mut result = Vec::with_capacity(self.page_size);
         result.extend_from_slice(&decrypted_data);
         result.resize(self.page_size, 0);
-
-        assert_eq!(
-            result.len(),
-            self.page_size,
-            "Decrypted page data must be exactly {} bytes",
-            self.page_size
-        );
-        Ok(result)
-    }
-
-    #[cfg(feature = "encryption")]
-    fn encrypt_page_1(&self, page: &[u8]) -> Result<Vec<u8>> {
-        use crate::storage::sqlite3_ondisk::DatabaseHeader;
-
-        tracing::debug!("encrypting page 1");
-        assert_eq!(
-            page.len(),
-            self.page_size,
-            "Page data must be exactly {} bytes",
-            self.page_size
-        );
-
-        // since this is page 1, this must have header
-        turso_assert!(
-            page.starts_with(SQLITE_HEADER),
-            "Page 1 must start with SQLite header"
-        );
-
-        let metadata_size = self.cipher_mode.metadata_size();
-        let reserved_bytes = &page[self.page_size - metadata_size..];
-
-        #[cfg(debug_assertions)]
-        {
-            // In debug builds, ensure that the reserved bytes are zeroed out. So even when we are
-            // reusing a page from buffer pool, we zero out in debug build so that we can be
-            // sure that b tree layer is not writing any data into the reserved space.
-            // We avoid calling `memset` in release builds for performance reasons.
-            let reserved_bytes_zeroed = reserved_bytes.iter().all(|&b| b == 0);
-            turso_assert!(
-                reserved_bytes_zeroed,
-                "last reserved bytes must be empty/zero, but found non-zero bytes"
-            );
-        }
-
-        // page 1 encryption:
-        // 1. First 16 bytes are replaced with Turso magic bytes
-        // 2. Next 84 bytes (16-100) are kept as-is (not encrypted)
-        // 3. Remaining bytes (100-end) are encrypted
-        // 4. The header (the first 100 bytes) as associated data
-        let turso_header = self.create_turso_header();
-        let mut new_header = Vec::with_capacity(DatabaseHeader::SIZE);
-        new_header.extend_from_slice(&turso_header);
-        new_header.extend_from_slice(&page[TURSO_HEADER_SIZE..DatabaseHeader::SIZE]);
-
-        let payload = &page[DatabaseHeader::SIZE..self.page_size - metadata_size];
-        let (encrypted, nonce) = self.encrypt_raw_with_ad(payload, &new_header)?;
-
-        let nonce_size = self.cipher_mode.nonce_size();
-        assert_eq!(
-            encrypted.len(),
-            self.page_size - nonce_size - DatabaseHeader::SIZE,
-            "Encrypted page must be exactly {} bytes",
-            self.page_size - nonce_size - DatabaseHeader::SIZE
-        );
-
-        let mut result = Vec::with_capacity(self.page_size);
-
-        // 1. copy the header
-        result.append(&mut new_header);
-        // 2. copy the encrypted payload
-        result.extend_from_slice(&encrypted);
-        // 3. now add the nonce
-        result.extend_from_slice(&nonce);
-
-        assert_eq!(
-            result.len(),
-            self.page_size,
-            "Encrypted page must be exactly {} bytes",
-            self.page_size
-        );
-        Ok(result)
-    }
-
-    #[cfg(feature = "encryption")]
-    fn decrypt_page_1(&self, encrypted_page: &[u8]) -> Result<Vec<u8>> {
-        use crate::storage::sqlite3_ondisk::DatabaseHeader;
-
-        tracing::debug!("decrypting page 1");
-        assert_eq!(
-            encrypted_page.len(),
-            self.page_size,
-            "Encrypted page data must be exactly {} bytes",
-            self.page_size
-        );
-
-        self.validate_turso_header(&encrypted_page[..TURSO_HEADER_SIZE])?;
-
-        let nonce_size = self.cipher_mode.nonce_size();
-        let nonce_offset = encrypted_page.len() - nonce_size;
-        let payload = &encrypted_page[DatabaseHeader::SIZE..nonce_offset];
-        let nonce = &encrypted_page[nonce_offset..];
-
-        // it's important to use the header on disk (with Turso magic bytes) as associated data
-        // for protection against tampering the header
-        let header = &encrypted_page[..DatabaseHeader::SIZE];
-        let decrypted_data = self.decrypt_raw_with_ad(payload, nonce, header)?;
-
-        let metadata_size = self.cipher_mode.metadata_size();
-        assert_eq!(
-            decrypted_data.len(),
-            self.page_size - metadata_size - DatabaseHeader::SIZE,
-            "Decrypted page data must be exactly {} bytes",
-            self.page_size - metadata_size - DatabaseHeader::SIZE
-        );
-
-        // reconstruct the page with the appropriate SQLite header
-        let mut result = Vec::with_capacity(self.page_size);
-        result.extend_from_slice(SQLITE_HEADER);
-        result.extend_from_slice(&encrypted_page[TURSO_HEADER_SIZE..DatabaseHeader::SIZE]);
-        result.extend_from_slice(&decrypted_data);
-        result.resize(self.page_size, 0);
-
         assert_eq!(
             result.len(),
             self.page_size,
@@ -858,14 +512,10 @@ impl EncryptionContext {
     /// encrypts raw data using the configured cipher, returns ciphertext and nonce
     fn encrypt_raw(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         const AD: &[u8] = b"";
-        self.encrypt_raw_with_ad(plaintext, AD)
-    }
 
-    /// encrypts raw data with associated data using the configured cipher
-    fn encrypt_raw_with_ad(&self, plaintext: &[u8], ad: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         macro_rules! encrypt_cipher {
             ($cipher:expr) => {{
-                let (ciphertext, nonce) = $cipher.encrypt(plaintext, ad)?;
+                let (ciphertext, nonce) = $cipher.encrypt(plaintext, AD)?;
                 Ok((ciphertext, nonce.to_vec()))
             }};
         }
@@ -884,22 +534,7 @@ impl EncryptionContext {
 
     fn decrypt_raw(&self, ciphertext: &[u8], nonce: &[u8]) -> Result<Vec<u8>> {
         const AD: &[u8] = b"";
-        self.decrypt_raw_with_ad(ciphertext, nonce, AD)
-    }
 
-    fn decrypt_raw_with_ad(&self, ciphertext: &[u8], nonce: &[u8], ad: &[u8]) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(ciphertext.len().saturating_sub(self.tag_size()));
-        self.decrypt_raw_with_ad_into(ciphertext, nonce, ad, &mut out)?;
-        Ok(out)
-    }
-
-    fn decrypt_raw_with_ad_into(
-        &self,
-        ciphertext: &[u8],
-        nonce: &[u8],
-        ad: &[u8],
-        out: &mut Vec<u8>,
-    ) -> Result<()> {
         macro_rules! decrypt_with_nonce {
             ($cipher:expr, $nonce_size:literal, $name:literal) => {{
                 let nonce_array: [u8; $nonce_size] = nonce.try_into().map_err(|_| {
@@ -910,7 +545,7 @@ impl EncryptionContext {
                         nonce.len()
                     ))
                 })?;
-                $cipher.decrypt_into(ciphertext, &nonce_array, ad, out)
+                $cipher.decrypt(ciphertext, &nonce_array, AD)
             }};
         }
 
@@ -985,10 +620,7 @@ impl From<CipherError> for LimboError {
 }
 
 #[cfg(test)]
-#[cfg(feature = "encryption")]
 mod tests {
-    use crate::storage::sqlite3_ondisk::DatabaseHeader;
-
     use super::*;
     use rand::Rng;
     const DEFAULT_ENCRYPTED_PAGE_SIZE: usize = 4096;
@@ -996,6 +628,7 @@ mod tests {
     macro_rules! test_cipher_wrapper {
         ($test_name:ident, $cipher_type:ty, $key_gen:expr, $nonce_size:literal, $message:literal) => {
             #[test]
+            #[cfg(feature = "encryption")]
             fn $test_name() {
                 let key = EncryptionKey::from_hex_string(&$key_gen()).unwrap();
                 let cipher = <$cipher_type>::new(&key);
@@ -1016,6 +649,7 @@ mod tests {
     macro_rules! test_aes_cipher_wrapper {
         ($test_name:ident, $cipher_type:ty, $key_gen:expr, $nonce_size:literal, $message:literal) => {
             #[test]
+            #[cfg(feature = "encryption")]
             fn $test_name() {
                 let key = EncryptionKey::from_hex_string(&$key_gen()).unwrap();
                 let cipher = <$cipher_type>::new(&key).unwrap();
@@ -1036,6 +670,7 @@ mod tests {
     macro_rules! test_raw_encryption {
         ($test_name:ident, $cipher_mode:expr, $key_gen:expr, $nonce_size:literal, $message:literal) => {
             #[test]
+            #[cfg(feature = "encryption")]
             fn $test_name() {
                 let key = EncryptionKey::from_hex_string(&$key_gen()).unwrap();
                 let ctx = EncryptionContext::new($cipher_mode, &key, DEFAULT_ENCRYPTED_PAGE_SIZE)
@@ -1054,26 +689,17 @@ mod tests {
     }
 
     fn generate_random_hex_key() -> String {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
         hex::encode(bytes)
     }
 
     fn generate_random_hex_key_128() -> String {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let mut bytes = [0u8; 16];
         rng.fill(&mut bytes);
         hex::encode(bytes)
-    }
-
-    fn create_test_page_1() -> Vec<u8> {
-        let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
-        page[..SQLITE_HEADER.len()].copy_from_slice(SQLITE_HEADER);
-        let mut rng = rand::rng();
-        // 48 is the max reserved bytes we might need for metadata with any cipher
-        rng.fill(&mut page[SQLITE_HEADER.len()..DEFAULT_ENCRYPTED_PAGE_SIZE - 48]);
-        page
     }
 
     test_aes_cipher_wrapper!(
@@ -1093,129 +719,9 @@ mod tests {
     );
 
     #[test]
-    fn test_page_1_encrypt_decrypt_round_trip_with_ad() {
-        let key = EncryptionKey::from_hex_string(&generate_random_hex_key()).unwrap();
-        let ctx = EncryptionContext::new(CipherMode::Aegis256, &key, DEFAULT_ENCRYPTED_PAGE_SIZE)
-            .unwrap();
-
-        let page_data = create_test_page_1();
-        let encrypted = ctx.encrypt_page(&page_data, 1).unwrap();
-        assert_ne!(
-            &page_data[0..DatabaseHeader::SIZE],
-            &encrypted[0..DatabaseHeader::SIZE],
-            "Encrypted data should be different from the page data"
-        );
-        assert_eq!(encrypted.len(), DEFAULT_ENCRYPTED_PAGE_SIZE);
-
-        // check that header is readable directly from disk (not encrypted)
-        assert_eq!(&encrypted[..5], b"Turso");
-        assert_eq!(encrypted[5], TURSO_VERSION);
-        assert_eq!(encrypted[6], CipherMode::Aegis256.cipher_id());
-
-        // header should be unencrypted, but data after DatabaseHeader::SIZE should be different
-        assert_eq!(&encrypted[16..100], &page_data[16..100]); // header portion
-        assert_ne!(&encrypted[100..200], &page_data[100..200]); // some encrypted portion
-
-        // decrypt page 1
-        let decrypted = ctx.decrypt_page(&encrypted, 1).unwrap();
-        assert_eq!(decrypted.len(), DEFAULT_ENCRYPTED_PAGE_SIZE);
-
-        // check that SQLite header was restored
-        assert_eq!(&decrypted[..SQLITE_HEADER.len()], SQLITE_HEADER);
-        assert_eq!(decrypted, page_data);
-    }
-
-    #[test]
-    fn test_turso_header_validation() {
-        let key = EncryptionKey::from_hex_string(&generate_random_hex_key()).unwrap();
-        let ctx = EncryptionContext::new(CipherMode::Aegis256, &key, DEFAULT_ENCRYPTED_PAGE_SIZE)
-            .unwrap();
-
-        // test cipher_id conversion
-        assert_eq!(CipherMode::Aes128Gcm.cipher_id(), 1);
-        assert_eq!(CipherMode::Aes256Gcm.cipher_id(), 2);
-        assert_eq!(CipherMode::Aegis256.cipher_id(), 3);
-        assert_eq!(CipherMode::Aegis128L.cipher_id(), 6);
-
-        // test from_cipher_id conversion
-        assert_eq!(
-            CipherMode::from_cipher_id(1).unwrap(),
-            CipherMode::Aes128Gcm
-        );
-        assert_eq!(CipherMode::from_cipher_id(3).unwrap(), CipherMode::Aegis256);
-        assert!(CipherMode::from_cipher_id(99).is_err());
-
-        // test header creation
-        let header = ctx.create_turso_header();
-        assert_eq!(&header[..5], b"Turso");
-        assert_eq!(header[5], TURSO_VERSION);
-        assert_eq!(header[6], 3); // AEGIS-256
-        assert_eq!(&header[7..], &[0u8; 9]); // unused bytes are zero
-    }
-
-    #[test]
-    fn test_invalid_turso_header_fails_decrypt() {
-        let key = EncryptionKey::from_hex_string(&generate_random_hex_key()).unwrap();
-        let ctx = EncryptionContext::new(CipherMode::Aegis256, &key, DEFAULT_ENCRYPTED_PAGE_SIZE)
-            .unwrap();
-
-        let page_data = create_test_page_1();
-        let encrypted = ctx.encrypt_page(&page_data, 1).unwrap();
-
-        // corrupt the header prefix
-        let mut corrupted = encrypted.clone();
-        corrupted[0] = b'V'; // make `Turso` to `Vurso`
-        assert!(ctx.decrypt_page(&corrupted, 1).is_err());
-
-        // test with wrong cipher ID
-        let mut wrong_cipher = encrypted;
-        wrong_cipher[6] = 99; // invalid cipher ID
-        assert!(ctx.decrypt_page(&wrong_cipher, 1).is_err());
-    }
-
-    #[test]
-    fn test_associated_data_validation() {
-        let key = EncryptionKey::from_hex_string(&generate_random_hex_key()).unwrap();
-        let ctx = EncryptionContext::new(CipherMode::Aegis256, &key, DEFAULT_ENCRYPTED_PAGE_SIZE)
-            .unwrap();
-
-        let page_data = create_test_page_1();
-        let encrypted = ctx.encrypt_page(&page_data, 1).unwrap();
-
-        // modify a byte in the preserved header portion (bytes 16-100)
-        let mut corrupted_ad = encrypted;
-        corrupted_ad[50] ^= 1; // flip one bit in the associated data portion
-
-        // this should fail decryption because associated data doesn't match
-        let decrypt_result = ctx.decrypt_page(&corrupted_ad, 1);
-        assert!(
-            decrypt_result.is_err(),
-            "Decryption should fail with corrupted associated data"
-        );
-    }
-
-    #[test]
-    fn test_turso_header_corruption_detection() {
-        let key = EncryptionKey::from_hex_string(&generate_random_hex_key()).unwrap();
-        let ctx = EncryptionContext::new(CipherMode::Aegis256, &key, DEFAULT_ENCRYPTED_PAGE_SIZE)
-            .unwrap();
-
-        let page_data = create_test_page_1();
-        let encrypted = ctx.encrypt_page(&page_data, 1).unwrap();
-
-        let mut corrupted_turso_header = encrypted;
-        corrupted_turso_header[7] ^= 1;
-
-        let decrypt_result = ctx.decrypt_page(&corrupted_turso_header, 1);
-        assert!(
-            decrypt_result.is_err(),
-            "Decryption should fail with corrupted Turso header"
-        );
-    }
-
-    #[test]
+    #[cfg(feature = "encryption")]
     fn test_aes128gcm_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aes128Gcm;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1224,7 +730,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1244,8 +750,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aes_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aes256Gcm;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1254,7 +761,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1290,8 +797,9 @@ mod tests {
     );
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aegis256_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aegis256;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1300,7 +808,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1335,8 +843,9 @@ mod tests {
     );
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aegis128x2_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aegis128X2;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1345,7 +854,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1380,8 +889,9 @@ mod tests {
     );
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aegis128l_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aegis128L;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1390,7 +900,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1425,8 +935,9 @@ mod tests {
     );
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aegis128x4_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aegis128X4;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1435,7 +946,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1470,8 +981,9 @@ mod tests {
     );
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aegis256x2_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aegis256X2;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1480,7 +992,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 
@@ -1515,8 +1027,9 @@ mod tests {
     );
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_aegis256x4_encrypt_decrypt_round_trip() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let cipher_mode = CipherMode::Aegis256X4;
         let metadata_size = cipher_mode.metadata_size();
         let data_size = DEFAULT_ENCRYPTED_PAGE_SIZE - metadata_size;
@@ -1525,7 +1038,7 @@ mod tests {
             let mut page = vec![0u8; DEFAULT_ENCRYPTED_PAGE_SIZE];
             page.iter_mut()
                 .take(data_size)
-                .for_each(|byte| *byte = rng.random());
+                .for_each(|byte| *byte = rng.gen());
             page
         };
 

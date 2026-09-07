@@ -1,34 +1,28 @@
-#[cfg(not(feature = "codspeed"))]
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-#[cfg(not(feature = "codspeed"))]
 use pprof::{
     criterion::{Output, PProfProfiler},
     flamegraph::Options,
 };
-
-#[cfg(feature = "codspeed")]
-use codspeed_criterion_compat::{black_box, criterion_group, criterion_main, Criterion};
 use std::sync::Arc;
 use turso_core::{Database, PlatformIO};
 
 // Title: JSONB Function Benchmarking
 
 fn rusqlite_open() -> rusqlite::Connection {
-    let sqlite_conn = rusqlite::Connection::open("../testing/system/testing.db").unwrap();
+    let sqlite_conn = rusqlite::Connection::open("../testing/testing.db").unwrap();
     sqlite_conn
         .pragma_update(None, "locking_mode", "EXCLUSIVE")
         .unwrap();
     sqlite_conn
 }
 
-#[turso_macros::codspeed_criterion_benchmark]
 fn bench(criterion: &mut Criterion) {
     // Flag to disable rusqlite benchmarks if needed
     let enable_rusqlite = std::env::var("DISABLE_RUSQLITE_BENCHMARK").is_err();
 
     #[allow(clippy::arc_with_non_send_sync)]
     let io = Arc::new(PlatformIO::new().unwrap());
-    let db = Database::open_file(io, "../testing/system/testing.db").unwrap();
+    let db = Database::open_file(io.clone(), "../testing/testing.db", false, false).unwrap();
     let limbo_conn = db.connect().unwrap();
 
     // Benchmark JSONB with different payload sizes
@@ -457,8 +451,8 @@ fn bench(criterion: &mut Criterion) {
                 loop {
                     match stmt.step().unwrap() {
                         turso_core::StepResult::Row => {}
-                        turso_core::StepResult::IO | turso_core::StepResult::Yield => {
-                            db.io.step().unwrap();
+                        turso_core::StepResult::IO => {
+                            stmt.run_once().unwrap();
                         }
                         turso_core::StepResult::Done => {
                             break;
@@ -468,7 +462,7 @@ fn bench(criterion: &mut Criterion) {
                         }
                     }
                 }
-                stmt.reset().unwrap();
+                stmt.reset();
             });
         });
 
@@ -490,14 +484,13 @@ fn bench(criterion: &mut Criterion) {
     }
 }
 
-#[turso_macros::codspeed_criterion_benchmark]
 fn bench_sequential_jsonb(criterion: &mut Criterion) {
     // Flag to disable rusqlite benchmarks if needed
     let enable_rusqlite = std::env::var("DISABLE_RUSQLITE_BENCHMARK").is_err();
 
     #[allow(clippy::arc_with_non_send_sync)]
     let io = Arc::new(PlatformIO::new().unwrap());
-    let db = Database::open_file(io, "../testing/system/testing.db").unwrap();
+    let db = Database::open_file(io.clone(), "../testing/testing.db", false, false).unwrap();
     let limbo_conn = db.connect().unwrap();
 
     // Select a subset of JSON payloads to use in the sequential test
@@ -616,8 +609,8 @@ fn bench_sequential_jsonb(criterion: &mut Criterion) {
             loop {
                 match stmt.step().unwrap() {
                     turso_core::StepResult::Row => {}
-                    turso_core::StepResult::IO | turso_core::StepResult::Yield => {
-                        db.io.step().unwrap();
+                    turso_core::StepResult::IO => {
+                        stmt.run_once().unwrap();
                     }
                     turso_core::StepResult::Done => {
                         break;
@@ -627,7 +620,7 @@ fn bench_sequential_jsonb(criterion: &mut Criterion) {
                     }
                 }
             }
-            stmt.reset().unwrap();
+            stmt.reset();
         });
     });
 
@@ -648,13 +641,12 @@ fn bench_sequential_jsonb(criterion: &mut Criterion) {
     group.finish();
 }
 
-#[turso_macros::codspeed_criterion_benchmark]
 fn bench_json_patch(criterion: &mut Criterion) {
     let enable_rusqlite = std::env::var("DISABLE_RUSQLITE_BENCHMARK").is_err();
 
     #[allow(clippy::arc_with_non_send_sync)]
     let io = Arc::new(PlatformIO::new().unwrap());
-    let db = Database::open_file(io, "../testing/system/testing.db").unwrap();
+    let db = Database::open_file(io.clone(), "../testing/testing.db", false, false).unwrap();
     let limbo_conn = db.connect().unwrap();
 
     let json_patch_cases = [
@@ -909,8 +901,8 @@ fn bench_json_patch(criterion: &mut Criterion) {
                 loop {
                     match stmt.step().unwrap() {
                         turso_core::StepResult::Row => {}
-                        turso_core::StepResult::IO | turso_core::StepResult::Yield => {
-                            db.io.step().unwrap();
+                        turso_core::StepResult::IO => {
+                            stmt.run_once().unwrap();
                         }
                         turso_core::StepResult::Done => {
                             break;
@@ -920,7 +912,7 @@ fn bench_json_patch(criterion: &mut Criterion) {
                         }
                     }
                 }
-                stmt.reset().unwrap();
+                stmt.reset();
             });
         });
 
@@ -942,17 +934,9 @@ fn bench_json_patch(criterion: &mut Criterion) {
     }
 }
 
-#[cfg(not(feature = "codspeed"))]
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(Some(Options::default()))));
-    targets = bench, bench_sequential_jsonb, bench_json_patch
-}
-
-#[cfg(feature = "codspeed")]
-criterion_group! {
-    name = benches;
-    config = Criterion::default();
     targets = bench, bench_sequential_jsonb, bench_json_patch
 }
 

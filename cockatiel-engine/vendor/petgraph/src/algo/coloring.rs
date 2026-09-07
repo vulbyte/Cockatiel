@@ -1,32 +1,19 @@
-use alloc::{collections::BinaryHeap, vec};
-use core::hash::Hash;
-
-use hashbrown::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::hash::Hash;
 
 use crate::scored::MaxScored;
 use crate::visit::{IntoEdges, IntoNodeIdentifiers, NodeIndexable, VisitMap, Visitable};
 
-/// [DStatur algorithm][1] to properly color a non weighted undirected graph.
-///
+/// \[Generic\] DStatur algorithm to properly color a non weighted undirected graph.
+/// https://en.wikipedia.org/wiki/DSatur
 ///
 /// This is a heuristic. So, it does not necessarily return a minimum coloring.
+///
 /// The graph must be undirected. It should not contain loops.
+/// It must implement `IntoEdges`, `IntoNodeIdentifiers` and `Visitable`
+/// Returns a tuple composed of a HashMap that associates to each `NodeId` its color and the number of used colors.
 ///
-/// # Arguments
-/// * `graph`: undirected graph without loops.
-///
-/// # Returns
-/// Returns a tuple of:
-/// * [`struct@hashbrown::HashMap`] that associates to each `NodeId` its color.
-/// * `usize`: the number of used colors.
-///
-/// # Complexity
-/// * Time complexity: **O((|V| + |E|)log(|V|)**.
-/// * Auxiliary space: **O(|V| + |E|)**.
-///
-/// where **|V|** is the number of nodes and **|E|** is the number of edges.
-///
-/// [1]: https://en.wikipedia.org/wiki/DSatur
+/// Computes in **O((|V| + |E|)*log(|V|)** time
 ///
 /// # Example
 /// ```rust
@@ -60,6 +47,7 @@ use crate::visit::{IntoEdges, IntoNodeIdentifiers, NodeIndexable, VisitMap, Visi
 /// assert_eq!(nb_colors, 2);
 /// assert_ne!(coloring[&a], coloring[&b]);
 /// ```
+
 pub fn dsatur_coloring<G>(graph: G) -> (HashMap<G::NodeId, usize>, usize)
 where
     G: IntoEdges + IntoNodeIdentifiers + Visitable + NodeIndexable,

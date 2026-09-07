@@ -1,7 +1,7 @@
-use alloc::{collections::VecDeque, vec::Vec};
-use core::ops::{Index, IndexMut};
-
-use hashbrown::HashMap;
+use std::{
+    collections::{HashMap, VecDeque},
+    ops::{Index, IndexMut},
+};
 
 use crate::{
     graph::{GraphIndex, NodeIndex},
@@ -11,27 +11,16 @@ use crate::{
 
 use self::linked_list::{LinkedList, LinkedListEntry};
 
-/// Finds a [feedback arc set]: a set of edges in the given directed graph, which when
+/// \[Generic\] Finds a [feedback arc set]: a set of edges in the given directed graph, which when
 /// removed, make the graph acyclic.
 ///
 /// Uses a [greedy heuristic algorithm] to select a small number of edges, but does not necessarily
-/// find the minimum feedback arc set.
+/// find the minimum feedback arc set. Time complexity is roughly **O(|E|)** for an input graph with
+/// edges **E**.
 ///
 /// Does not consider edge/node weights when selecting edges for the feedback arc set.
 ///
 /// Loops (edges to and from the same node) are always included in the returned set.
-///
-/// # Arguments
-/// * `g`: a directed graph.
-///
-/// # Returns
-/// * `impl Iterator`:  the iterator of edge references `G::EdgeRef` in the feedback arc set.
-///
-/// # Complexity
-/// * Time complexity: **O(|V| + |E|)**.
-/// * Auxiliary space: **O(|V| + |E|)**.
-///
-/// where **|V|** is the number of nodes and **|E|** is the number of edges.
 ///
 /// # Example
 ///
@@ -340,8 +329,7 @@ impl Buckets {
 }
 
 mod linked_list {
-    use alloc::vec::Vec;
-    use core::{marker::PhantomData, ops::IndexMut};
+    use std::{marker::PhantomData, ops::IndexMut};
 
     #[derive(PartialEq, Debug)]
     pub struct LinkedList<Data, Container, Ix> {

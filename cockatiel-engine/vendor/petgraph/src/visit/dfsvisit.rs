@@ -96,10 +96,17 @@ impl<B> ControlFlow for Control<B> {
         Control::Continue
     }
     fn should_break(&self) -> bool {
-        matches!(*self, Control::Break(_))
+        if let Control::Break(_) = *self {
+            true
+        } else {
+            false
+        }
     }
     fn should_prune(&self) -> bool {
-        matches!(*self, Control::Prune)
+        match *self {
+            Control::Prune => true,
+            Control::Continue | Control::Break(_) => false,
+        }
     }
 }
 
@@ -133,9 +140,9 @@ impl<B> Default for Control<B> {
 /// A recursive depth first search.
 ///
 /// Starting points are the nodes in the iterator `starts` (specify just one
-/// start node *x* by using `Some(x)`).
+/// start vertex *x* by using `Some(x)`).
 ///
-/// The traversal emits discovery and finish events for each reachable node,
+/// The traversal emits discovery and finish events for each reachable vertex,
 /// and edge classification of each reachable edge. `visitor` is called for each
 /// event, see [`DfsEvent`][de] for possible values.
 ///
@@ -151,14 +158,14 @@ impl<B> Default for Control<B> {
 /// `C: ControlFlow`. The implementation for `()` will continue until finished.
 /// For `Result`, upon encountering an `E` it will break, otherwise acting the same as `C`.
 ///
-/// **Panics** if you attempt to prune a node from its `Finish` event.
+/// ***Panics** if you attempt to prune a node from its `Finish` event.
 ///
 /// [de]: enum.DfsEvent.html
 ///
 /// # Example returning `Control`.
 ///
-/// Find a path from node 0 to 5, and exit the visit as soon as we reach
-/// the goal node.
+/// Find a path from vertex 0 to 5, and exit the visit as soon as we reach
+/// the goal vertex.
 ///
 /// ```
 /// use petgraph::prelude::*;
@@ -237,7 +244,6 @@ impl<B> Default for Control<B> {
 /// println!("number of backedges encountered: {}", back_edges);
 /// println!("back edge: {:?}", result);
 /// ```
-#[track_caller]
 pub fn depth_first_search<G, I, F, C>(graph: G, starts: I, mut visitor: F) -> C
 where
     G: IntoNeighbors + Visitable,

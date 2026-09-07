@@ -5,27 +5,29 @@ use std::time::Duration;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
-    Terminal,
 };
 
 use crate::{EngineCommand, EngineState, ModuleState};
 
 pub struct Tui {
-    pub terminal: Terminal<CrosstermBackend<io::Stdout>>,
-    pub list_state: ListState,
-    pub selected: usize,
-    pub should_quit: bool,
-    pub timeline: Vec<crate::cockatiel_protobuf::TimelineEvent>,
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+    selected: usize,
+    should_quit: bool,
+
+    keymap: Keymap,
 }
+
+let keymap = Keymap::load("keymap.json");
 
 impl Tui {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {

@@ -11,13 +11,14 @@
 
 [package]
 edition = "2018"
-rust-version = "1.51"
+rust-version = "1.63"
 name = "tungstenite"
-version = "0.21.0"
+version = "0.24.0"
 authors = [
     "Alexey Galakhov",
     "Daniel Abramov",
 ]
+build = false
 include = [
     "benches/**/*",
     "src/**/*",
@@ -26,9 +27,13 @@ include = [
     "README.md",
     "CHANGELOG.md",
 ]
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "Lightweight stream-based WebSocket implementation"
 homepage = "https://github.com/snapview/tungstenite-rs"
-documentation = "https://docs.rs/tungstenite/0.21.0"
+documentation = "https://docs.rs/tungstenite/0.24.0"
 readme = "README.md"
 keywords = [
     "websocket",
@@ -45,36 +50,48 @@ repository = "https://github.com/snapview/tungstenite-rs"
 [package.metadata.docs.rs]
 all-features = true
 
-[[example]]
-name = "client"
-required-features = ["handshake"]
-
-[[example]]
-name = "server"
-required-features = ["handshake"]
+[lib]
+name = "tungstenite"
+path = "src/lib.rs"
 
 [[example]]
 name = "autobahn-client"
+path = "examples/autobahn-client.rs"
 required-features = ["handshake"]
 
 [[example]]
 name = "autobahn-server"
+path = "examples/autobahn-server.rs"
 required-features = ["handshake"]
 
 [[example]]
 name = "callback-error"
+path = "examples/callback-error.rs"
+required-features = ["handshake"]
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
+required-features = ["handshake"]
+
+[[example]]
+name = "server"
+path = "examples/server.rs"
 required-features = ["handshake"]
 
 [[example]]
 name = "srv_accept_unmasked_frames"
+path = "examples/srv_accept_unmasked_frames.rs"
 required-features = ["handshake"]
 
 [[bench]]
 name = "buffer"
+path = "benches/buffer.rs"
 harness = false
 
 [[bench]]
 name = "write"
+path = "benches/write.rs"
 harness = false
 
 [dependencies.byteorder]
@@ -107,8 +124,10 @@ package = "native-tls"
 version = "0.8.0"
 
 [dependencies.rustls]
-version = "0.22.0"
+version = "0.23.0"
+features = ["std"]
 optional = true
+default-features = false
 
 [dependencies.rustls-native-certs]
 version = "0.7.0"
@@ -162,7 +181,6 @@ handshake = [
     "http",
     "httparse",
     "sha1",
-    "url",
 ]
 native-tls = ["native-tls-crate"]
 native-tls-vendored = [
@@ -177,3 +195,4 @@ rustls-tls-webpki-roots = [
     "__rustls-tls",
     "webpki-roots",
 ]
+url = ["dep:url"]
