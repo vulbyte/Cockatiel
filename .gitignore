@@ -1,0 +1,194 @@
+# ==========================================
+# Operating Systems & System Artifacts
+# ==========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs.org
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.trash
+
+# ==========================================
+# Editors & IDEs
+# ==========================================
+# Neovim / Vim / Emacs
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+.*.swp
+.netrwhist
+*~
+\#*\#
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains / IntelliJ / Rider
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Visual Studio
+.vs/
+*.user
+*.userossc
+*.sln.docstates
+
+# ==========================================
+# Rust
+# ==========================================
+/target/
+**/*.rs.bk
+Cargo.lock.install
+*.rlib
+
+# ==========================================
+# JavaScript / TypeScript / Node.js
+# ==========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.nx/cache/
+dist/
+build/
+.next/
+.nuxt/
+.svelte-kit/
+.astro/
+*.tsbuildinfo
+
+# ==========================================
+# Python
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.eggs/
+
+# ==========================================
+# C# / .NET
+# ==========================================
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.userossc
+*.sln.docstates
+*.userprefs
+*.mono/
+*.suo
+
+# ==========================================
+# C / C++
+# ==========================================
+# Compiled binaries & libraries
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.out
+*.app
+
+# Build systems (CMake, Ninja, Make)
+CMakeFiles/
+CMakeCache.txt
+CMakeUsers.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+ninja.build
+.ninja_*
+vcpkg_installed/
+.conan/
+
+# ==========================================
+# Java
+# ==========================================
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+
+# Build tools (Gradle, Maven)
+.gradle/
+build/
+target/
+.mvn/
+!.mvn/wrapper/maven-wrapper.jar
+
+# ==========================================
+# Additional Language Support
+# ==========================================
+# Go
+/bin/
+/pkg/
+*.exe
+
+# Lua
+*.luac
+
+# GDScript / Godot Engine
+.godot/
+*.translation
+*.import
+
+# ==========================================
+# Miscellaneous / Environment
+# ==========================================
+.env
+.env.local
+.env.*.local
+*.log
+*.tmp
+*.bak
